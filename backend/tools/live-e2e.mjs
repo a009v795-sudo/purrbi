@@ -293,8 +293,9 @@ try {
         const bytes = Buffer.from(await img.arrayBuffer());
         const up = await uploadPhoto(a, s.id, bytes, 'image/jpeg');
         const photoId = newId();
-        const doc = up.status === 200 ? await create(a, `${s.path}/photos/${photoId}`, { purpose: 'label', imageUrl: up.url, status: 'uploaded' }) : { status: up.status };
-        const photo = doc.status === 200 ? await waitScan(a, `${s.path}/photos/${photoId}`, (d) => !['uploaded', 'processing'].includes(d.status), 120000) : null;
+        const photoDoc = `users/${a.uid}/photos/${photoId}`;
+        const doc = up.status === 200 ? await create(a, photoDoc, { scanId: s.id, purpose: 'label', imageUrl: up.url, status: 'uploaded' }) : { status: up.status };
+        const photo = doc.status === 200 ? await waitScan(a, photoDoc, (d) => !['uploaded', 'processing'].includes(d.status), 120000) : null;
         pr.uploads.push({ image: url.replace(/^.*\/products\//, 'opff:'), storageUpload: up.status, photoRequest: doc.status, photoStatus: photo?.d?.status, fieldsFound: photo?.d?.fieldsFound });
         const now = await waitScan(a, s.path);
         if (now.d?.status === 'complete') break;
@@ -370,7 +371,8 @@ try {
     iso.storageOwnFolder = (await uploadPhoto(a, 'isolation-check', tiny, 'image/jpeg')).status;
     iso.storageOtherFolder = (await call('POST', `https://firebasestorage.googleapis.com/v0/b/${cfg.bucket}/o?uploadType=media&name=${encodeURIComponent(`users/${b.uid}/x.jpg`)}`, { raw: true, body: tiny, headers: { Authorization: `Firebase ${a.token}`, 'Content-Type': 'image/jpeg' } })).status;
     iso.storageNotImage = (await call('POST', `https://firebasestorage.googleapis.com/v0/b/${cfg.bucket}/o?uploadType=media&name=${encodeURIComponent(`users/${a.uid}/x.txt`)}`, { raw: true, body: Buffer.from('not an image'), headers: { Authorization: `Firebase ${a.token}`, 'Content-Type': 'text/plain' } })).status;
-    iso.photoPointingElsewhere = (await create(a, `${first.path}/photos/${newId()}`, { purpose: 'label', imageUrl: `https://firebasestorage.googleapis.com/v0/b/${cfg.bucket}/o/users%2F${b.uid}%2Fx.jpg`, status: 'uploaded' })).status;
+    iso.photoPointingElsewhere = (await create(a, `users/${a.uid}/photos/${newId()}`, { scanId: first.id, purpose: 'label', imageUrl: `https://firebasestorage.googleapis.com/v0/b/${cfg.bucket}/o/users%2F${b.uid}%2Fx.jpg`, status: 'uploaded' })).status;
+    iso.photoForOtherUsersScan = (await create(b, `users/${b.uid}/photos/${newId()}`, { scanId: first.id, purpose: 'label', imageUrl: `https://firebasestorage.googleapis.com/v0/b/${cfg.bucket}/o/users%2F${b.uid}%2Fx.jpg`, status: 'uploaded' })).status;
     const allowed = new Set(['ownerRead', 'productRead', 'storageOwnFolder']);
     iso.verdict = Object.entries(iso).every(([k, v]) => (allowed.has(k) ? v === 200 : v === 403 || v === 401)) ? 'all expected' : 'UNEXPECTED — see values';
     report.checks.isolation = iso;

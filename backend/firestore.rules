@@ -85,20 +85,23 @@ service cloud.firestore {
                 && resource.data.status in ['complete', 'needs_photos'])
         );
         allow delete: if isOwner(uid);
+      }
 
-        match /photos/{photoId} {
-          allow read: if isOwner(uid);
-          allow create: if isOwner(uid)
-            && onlyKeys(['purpose', 'imageUrl', 'status', 'createdAt'])
-            && data().purpose in ['front', 'ingredients', 'nutrition', 'label']
-            && data().status == 'uploaded'
-            && data().createdAt == request.time
-            && data().imageUrl is string && data().imageUrl.size() <= 2000
-            && data().imageUrl.matches('^https://firebasestorage[.]googleapis[.]com/v0/b/[^/]+/o/users%2F' + uid + '%2F[^?#]+([?].*)?$')
-            && get(/databases/$(database)/documents/users/$(uid)/scans/$(scanId)).data.status in ['needs_photos', 'complete'];
-          allow update: if false;
-          allow delete: if isOwner(uid);
-        }
+      // Label photo requests: the owner adds one for a scan that is waiting for photos (or complete);
+      // only the backend updates it. The image must be in the owner's own Storage folder.
+      match /photos/{photoId} {
+        allow read: if isOwner(uid);
+        allow create: if isOwner(uid)
+          && onlyKeys(['scanId', 'purpose', 'imageUrl', 'status', 'createdAt'])
+          && data().scanId is string && data().scanId.size() >= 1 && data().scanId.size() <= 128
+          && data().purpose in ['front', 'ingredients', 'nutrition', 'label']
+          && data().status == 'uploaded'
+          && data().createdAt == request.time
+          && data().imageUrl is string && data().imageUrl.size() <= 2000
+          && data().imageUrl.matches('^https://firebasestorage[.]googleapis[.]com/v0/b/[^/]+/o/users%2F' + uid + '%2F[^?#]+([?].*)?$')
+          && get(/databases/$(database)/documents/users/$(uid)/scans/$(data().scanId)).data.status in ['needs_photos', 'complete'];
+        allow update: if false;
+        allow delete: if isOwner(uid);
       }
 
       // Text read from the owner's label photos: private, written only by the backend.

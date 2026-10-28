@@ -74,14 +74,17 @@ describe('scan requests', () => {
 
 describe('label photos', () => {
   it('accepts a photo from the owner’s own storage folder while photos are needed', async () => {
-    await assertSucceeds(alice().collection('users/alice/scans/waiting/photos').add({ purpose: 'nutrition', imageUrl: ALICE_URL, status: 'uploaded', createdAt: ts() }));
+    await assertSucceeds(alice().collection('users/alice/photos').add({ scanId: 'waiting', purpose: 'nutrition', imageUrl: ALICE_URL, status: 'uploaded', createdAt: ts() }));
   });
   it('rejects other folders, other owners, server fields and edits', async () => {
-    await assertFails(alice().collection('users/alice/scans/waiting/photos').add({ purpose: 'nutrition', imageUrl: BOB_URL, status: 'uploaded', createdAt: ts() }));
-    await assertFails(alice().collection('users/alice/scans/waiting/photos').add({ purpose: 'nutrition', imageUrl: 'https://evil.example/x.jpg', status: 'uploaded', createdAt: ts() }));
-    await assertFails(alice().collection('users/alice/scans/waiting/photos').add({ purpose: 'nutrition', imageUrl: ALICE_URL, status: 'processed', createdAt: ts() }));
-    await assertFails(bob().collection('users/alice/scans/waiting/photos').add({ purpose: 'nutrition', imageUrl: ALICE_URL, status: 'uploaded', createdAt: ts() }));
-    const ref = await alice().collection('users/alice/scans/waiting/photos').add({ purpose: 'front', imageUrl: ALICE_URL, status: 'uploaded', createdAt: ts() });
+    await assertFails(alice().collection('users/alice/photos').add({ scanId: 'waiting', purpose: 'nutrition', imageUrl: BOB_URL, status: 'uploaded', createdAt: ts() }));
+    await assertFails(alice().collection('users/alice/photos').add({ scanId: 'waiting', purpose: 'nutrition', imageUrl: 'https://evil.example/x.jpg', status: 'uploaded', createdAt: ts() }));
+    await assertFails(alice().collection('users/alice/photos').add({ scanId: 'waiting', purpose: 'nutrition', imageUrl: ALICE_URL, status: 'processed', createdAt: ts() }));
+    await assertFails(bob().collection('users/alice/photos').add({ scanId: 'waiting', purpose: 'nutrition', imageUrl: ALICE_URL, status: 'uploaded', createdAt: ts() }));
+    await assertFails(alice().collection('users/alice/photos').add({ scanId: 'no-such-scan', purpose: 'front', imageUrl: ALICE_URL, status: 'uploaded', createdAt: ts() }));
+    await assertFails(alice().collection('users/alice/photos').add({ purpose: 'front', imageUrl: ALICE_URL, status: 'uploaded', createdAt: ts() }));
+    await assertFails(bob().collection('users/bob/photos').add({ scanId: 'waiting', purpose: 'front', imageUrl: ALICE_URL, status: 'uploaded', createdAt: ts() }));
+    const ref = await alice().collection('users/alice/photos').add({ scanId: 'waiting', purpose: 'front', imageUrl: ALICE_URL, status: 'uploaded', createdAt: ts() });
     await assertFails(ref.update({ status: 'processed' }));
   });
 });

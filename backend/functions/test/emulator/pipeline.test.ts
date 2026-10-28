@@ -211,8 +211,8 @@ describe('path B: missing label information', () => {
     expect(s.scoreAvailable).toBe(false);
     expect(s.personalFindings.some((f: { rule: string }) => f.rule === 'P-ALLERGEN')).toBe(true); // partial personal findings kept
 
-    const photo = await ref.collection('photos').add({ purpose: 'nutrition', imageUrl: 'https://firebasestorage.googleapis.com/v0/b/x/o/users%2Fu1%2Fuploads%2F1.jpg', status: 'uploaded', createdAt: Timestamp.fromDate(NOW) });
-    await processPhoto(deps(), 'u1', ref.id, photo.id);
+    const photo = await db.collection('users/u1/photos').add({ scanId: ref.id, purpose: 'nutrition', imageUrl: 'https://firebasestorage.googleapis.com/v0/b/x/o/users%2Fu1%2Fuploads%2F1.jpg', status: 'uploaded', createdAt: Timestamp.fromDate(NOW) });
+    await processPhoto(deps(), 'u1', photo.id);
     s = await read(ref);
     const p = await read(photo);
     expect(p.status).toBe('processed');
@@ -231,8 +231,8 @@ describe('path B: missing label information', () => {
   it('does not ask again for photos already processed (reuse on rescan)', async () => {
     const a = await newScan('u1', BC.food);
     await processScan(deps(), 'u1', a.id);
-    const photo = await a.collection('photos').add({ purpose: 'nutrition', imageUrl: 'https://firebasestorage.googleapis.com/v0/b/x/o/users%2Fu1%2Fuploads%2F1.jpg', status: 'uploaded', createdAt: Timestamp.fromDate(NOW) });
-    await processPhoto(deps(), 'u1', a.id, photo.id);
+    const photo = await db.collection('users/u1/photos').add({ scanId: a.id, purpose: 'nutrition', imageUrl: 'https://firebasestorage.googleapis.com/v0/b/x/o/users%2Fu1%2Fuploads%2F1.jpg', status: 'uploaded', createdAt: Timestamp.fromDate(NOW) });
+    await processPhoto(deps(), 'u1', photo.id);
     const b = await newScan('u1', BC.food);
     await processScan(deps(), 'u1', b.id);
     const s = await read(b);
@@ -243,8 +243,8 @@ describe('path B: missing label information', () => {
   it('rejects a photo of a different product and keeps waiting', async () => {
     const ref = await newScan('u1', BC.food);
     await processScan(deps(), 'u1', ref.id);
-    const photo = await ref.collection('photos').add({ purpose: 'front', imageUrl: 'https://firebasestorage.googleapis.com/v0/b/x/o/users%2Fu1%2Fuploads%2F2.jpg', status: 'uploaded', createdAt: Timestamp.fromDate(NOW) });
-    await processPhoto(deps(), 'u1', ref.id, photo.id);
+    const photo = await db.collection('users/u1/photos').add({ scanId: ref.id, purpose: 'front', imageUrl: 'https://firebasestorage.googleapis.com/v0/b/x/o/users%2Fu1%2Fuploads%2F2.jpg', status: 'uploaded', createdAt: Timestamp.fromDate(NOW) });
+    await processPhoto(deps(), 'u1', photo.id);
     expect((await read(photo)).status).toBe('different_product');
     expect((await read(ref)).status).toBe('needs_photos');
   });
@@ -327,8 +327,8 @@ describe('personal refresh', () => {
   it('switching pets changes the personal fit but not the general assessment', async () => {
     const ref = await newScan('u1', BC.food, 'cat2');
     await processScan(deps(), 'u1', ref.id);
-    const photo = await ref.collection('photos').add({ purpose: 'nutrition', imageUrl: 'https://firebasestorage.googleapis.com/v0/b/x/o/users%2Fu1%2Fuploads%2F1.jpg', status: 'uploaded', createdAt: Timestamp.fromDate(NOW) });
-    await processPhoto(deps(), 'u1', ref.id, photo.id);
+    const photo = await db.collection('users/u1/photos').add({ scanId: ref.id, purpose: 'nutrition', imageUrl: 'https://firebasestorage.googleapis.com/v0/b/x/o/users%2Fu1%2Fuploads%2F1.jpg', status: 'uploaded', createdAt: Timestamp.fromDate(NOW) });
+    await processPhoto(deps(), 'u1', photo.id);
     const first = await read(ref);
     expect(first.personalState).toBe('fits');
     await ref.update({ refreshPersonalRequested: true, petId: 'cat1' });

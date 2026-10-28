@@ -42,7 +42,7 @@ Every scan has a `traceId` (12 hex chars) used in all backend logs and evidence 
 | `users/{uid}` | owner (FlutterFlow auth fields + `activePetId`, `onboardingComplete`, `consentVersion`, `consentAcceptedAt`, `unitsPreference`) | owner | |
 | `users/{uid}/pets/{petId}` | owner (validated) | owner, backend | §4 |
 | `users/{uid}/scans/{scanId}` | owner: request + flags only; backend: everything else | owner | §3 |
-| `users/{uid}/scans/{scanId}/photos/{photoId}` | owner creates; backend updates | owner | |
+| `users/{uid}/photos/{photoId}` | owner creates (`scanId`, `purpose`, `imageUrl`, `status: uploaded`, `createdAt`) for a scan that is waiting for photos or complete; backend updates | owner | one level below `users` because FlutterFlow does not support collections nested under subcollections |
 | `users/{uid}/labelFacts/{gtin14}` | backend | owner | private label text read from the owner's photos; never copied to `products` |
 | `products/{gtin14}` | backend | any signed-in user | public-source facts only (database / verified web), `factsVersion`, `factsHash`, `recall`, `recallCheckedAt` |
 | `products/{gtin14}/evidence/{sourceId}` | backend | signed-in | `sourceType`, `sourceName`, `url`, `retrievedAt`, `matchConfidence`, `license`, `fieldsSupported[]`, `traceId` |

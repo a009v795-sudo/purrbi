@@ -80,8 +80,8 @@ export const processScanJob = onDocumentCreated({ document: 'users/{uid}/scans/{
   await processScan(deps(), event.params.uid, event.params.scanId);
 });
 
-export const processScanPhoto = onDocumentCreated({ document: 'users/{uid}/scans/{scanId}/photos/{photoId}', ...jobOptions }, async (event) => {
-  await processPhoto(deps(), event.params.uid, event.params.scanId, event.params.photoId);
+export const processScanPhoto = onDocumentCreated({ document: 'users/{uid}/photos/{photoId}', ...jobOptions }, async (event) => {
+  await processPhoto(deps(), event.params.uid, event.params.photoId);
 });
 
 export const onScanRequestUpdated = onDocumentUpdated({ document: 'users/{uid}/scans/{scanId}', ...jobOptions }, async (event) => {
@@ -94,7 +94,7 @@ export const onScanRequestUpdated = onDocumentUpdated({ document: 'users/{uid}/s
 /** Deleting a scan removes its photos, their files and the label text read from them. */
 export const onScanDeleted = onDocumentDeleted({ document: 'users/{uid}/scans/{scanId}', region: REGION }, async (event) => {
   const { uid, scanId } = event.params;
-  const photos = await db.collection(`users/${uid}/scans/${scanId}/photos`).get();
+  const photos = await db.collection(`users/${uid}/photos`).where('scanId', '==', scanId).get();
   const bucket = getStorage().bucket();
   for (const p of photos.docs) {
     const m = STORAGE_URL.exec(String(p.get('imageUrl') ?? ''));

@@ -518,15 +518,20 @@ async function cachedExplanations(deps: Deps, general: GeneralAssessment, scope:
 
 // ---------------------------------------------------------------------------------------------
 
-/** A label photo was added under users/{uid}/scans/{scanId}/photos/{photoId}. */
-export function processPhoto(deps: Deps, uid: string, scanId: string, photoId: string): Promise<void> {
-  return runWithCallLog(() => photoJob(deps, uid, scanId, photoId));
+export const photoPath = (uid: string, photoId: string) => `users/${uid}/photos/${photoId}`;
+
+/** A label photo request was added at users/{uid}/photos/{photoId} with the scan it belongs to (`scanId`). */
+export function processPhoto(deps: Deps, uid: string, photoId: string): Promise<void> {
+  return runWithCallLog(() => photoJob(deps, uid, photoId));
 }
 
-async function photoJob(deps: Deps, uid: string, scanId: string, photoId: string): Promise<void> {
+async function photoJob(deps: Deps, uid: string, photoId: string): Promise<void> {
   const { db, config } = deps;
+  const photoRef = db.doc(photoPath(uid, photoId));
+  const first = await photoRef.get();
+  const scanId = first.get('scanId');
+  if (typeof scanId !== 'string' || !scanId || scanId.includes('/')) return;
   const scanRef = db.doc(scanPath(uid, scanId));
-  const photoRef = scanRef.collection('photos').doc(photoId);
   const now = deps.now();
   const claimed = await db.runTransaction(async (tx) => {
     const [scan, photo] = await Promise.all([tx.get(scanRef), tx.get(photoRef)]);
@@ -548,7 +553,7 @@ async function photoJob(deps: Deps, uid: string, scanId: string, photoId: string
     if (!config.aiEnabled) {
       await photoFail('failed', 'Label reading is not switched on yet.');
     } else {
-      const count = (await scanRef.collection('photos').count().get()).data().count;
+      const count = (await db.collection(`users/${uid}/photos`).where('scanId', '==', scanId).count().get()).data().count;
       if (count > config.limits.maxPhotosPerScan) {
         // count includes this photo
         await photoFail('rejected', `A scan can have up to ${config.limits.maxPhotosPerScan} photos.`);
