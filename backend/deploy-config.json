@@ -1,6 +1,6 @@
 {
   "projectId": "purrbi-49c21",
-  "projectNumber": "",
+  "projectNumber": "1078394588658",
   "region": "us-central1",
   "firestoreLocation": "us-central1",
   "workloadIdentityProvider": "projects/{projectNumber}/locations/global/workloadIdentityPools/github/providers/purrbi-github",
