@@ -1,8 +1,0 @@
-{
-  "ranAt": "2026-10-28T20:47:35.300Z",
-  "userAgent": "Purrbi/0.1 (development build; contract test)",
-  "search_v2_error_cat-food": "SourceError: OPFF search: fetch failed",
-  "search_v2_error_dog-food": "SourceError: OPFF search: fetch failed",
-  "search_v2_error_dog-treats": "SourceError: OPFF search: fetch failed",
-  "search_v2_error_cat-treats": "SourceError: OPFF search: fetch failed"
-}
