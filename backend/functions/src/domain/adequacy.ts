@@ -16,9 +16,13 @@ const COMPLETE =
 const FEEDING_TRIAL = /\b(animal feeding tests|feeding (trials?|tests|protocols))\b/;
 const FORMULATION = /\b(formulated to meet|nutrient profiles|nutritional levels established)\b/;
 
+// English plus the label languages most common in Open Pet Food Facts (fr, de, es, it, nl, pt).
+const DOG_WORDS = /\b(dogs?|canine|pupp(y|ies)|chiens?|chiots?|hunde?|welpen?|perros?|cachorros?|hond(en)?|cani)\b/;
+const CAT_WORDS = /\b(cats?|feline|kittens?|chats?|chatons?|katzen?|katzchen|gatos?|gatitos?|gatti|gatto|katten)\b/;
+
 export function detectSpecies(t: string): ProductSpecies {
-  const dog = /\b(dogs?|canine|pupp(y|ies))\b/.test(t);
-  const cat = /\b(cats?|feline|kittens?)\b/.test(t);
+  const dog = DOG_WORDS.test(t);
+  const cat = CAT_WORDS.test(t);
   if (dog && cat) return 'cat_and_dog';
   if (dog) return 'dog';
   if (cat) return 'cat';

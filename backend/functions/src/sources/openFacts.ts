@@ -99,43 +99,53 @@ export async function lookupOpenFacts(db: OpenFactsDb, barcode: NormalizedBarcod
   return { found: false, db, tried };
 }
 
-const NUTRIMENT_IDS: Record<string, string> = {
-  proteins: 'Crude protein',
-  fat: 'Crude fat',
-  fiber: 'Crude fiber',
-  moisture: 'Moisture',
-  water: 'Moisture',
-  ash: 'Crude ash',
-  calcium: 'Calcium',
-  phosphorus: 'Phosphorus',
-  sodium: 'Sodium',
-  magnesium: 'Magnesium',
-  taurine: 'Taurine',
-  'omega-3-fat': 'Omega-3 fatty acids',
-  'omega-6-fat': 'Omega-6 fatty acids',
-  'docosahexaenoic-acid': 'DHA',
-  'eicosapentaenoic-acid': 'EPA',
-  carbohydrates: 'Carbohydrates',
-};
+// Pet-food keys first (crude-*), then the generic ones some records use; the first one found per
+// nutrient wins.
+const NUTRIMENT_IDS: [string, string][] = [
+  ['crude-protein', 'Crude protein'],
+  ['proteins', 'Crude protein'],
+  ['crude-fat', 'Crude fat'],
+  ['fat', 'Crude fat'],
+  ['crude-fibre', 'Crude fiber'],
+  ['crude-fiber', 'Crude fiber'],
+  ['fiber', 'Crude fiber'],
+  ['moisture', 'Moisture'],
+  ['water', 'Moisture'],
+  ['crude-ash', 'Crude ash'],
+  ['ash', 'Crude ash'],
+  ['calcium', 'Calcium'],
+  ['phosphorus', 'Phosphorus'],
+  ['sodium', 'Sodium'],
+  ['magnesium', 'Magnesium'],
+  ['taurine', 'Taurine'],
+  ['omega-3-fat', 'Omega-3 fatty acids'],
+  ['omega-6-fat', 'Omega-6 fatty acids'],
+  ['docosahexaenoic-acid', 'DHA'],
+  ['eicosapentaenoic-acid', 'EPA'],
+  ['carbohydrates', 'Carbohydrates'],
+];
 
 /** Maps Product Opener nutriments (values per 100 g, mass nutrients in grams) to guarantees. */
 export function nutrimentsToGuarantees(nutriments: Record<string, unknown> | undefined): GuaranteedAnalysisEntry[] {
   if (!nutriments) return [];
   const out: GuaranteedAnalysisEntry[] = [];
-  for (const [id, label] of Object.entries(NUTRIMENT_IDS)) {
+  for (const [id, label] of NUTRIMENT_IDS) {
     const v = nutriments[`${id}_100g`];
     if (typeof v !== 'number' || !Number.isFinite(v)) continue;
+    const nutrient = nutrientKeyFromLabel(label);
+    if (out.some((e) => e.nutrient === nutrient)) continue;
     const unit = String(nutriments[`${id}_unit`] ?? 'g').toLowerCase();
     // _100g values are grams per 100 g for mass units, i.e. percent.
     if (!['g', 'mg', 'µg', 'mcg', '%'].includes(unit)) continue;
-    out.push({ nutrient: nutrientKeyFromLabel(label), label, qualifier: qualifierFrom(String(nutriments[`${id}_modifier`] ?? '')), value: Math.round(v * 1000) / 1000, unit: '%' });
+    out.push({ nutrient, label, qualifier: qualifierFrom(String(nutriments[`${id}_modifier`] ?? '')), value: Math.round(v * 1000) / 1000, unit: '%' });
   }
   return validateGuaranteedAnalysis(out).valid;
 }
 
 export function nutrimentsToCalories(nutriments: Record<string, unknown> | undefined): CalorieStatement[] {
   const v = nutriments?.['energy-kcal_100g'];
-  if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0 || v > 950) return [];
+  // Below 30 kcal per 100 g is not plausible for a pet food or treat (a data-entry error or a per-serving value).
+  if (typeof v !== 'number' || !Number.isFinite(v) || v < 30 || v > 950) return [];
   return [{ kcal: Math.round(v * 10), per: 'kg', text: `${v} kcal per 100 g (database value, converted to per kg)` }];
 }
 

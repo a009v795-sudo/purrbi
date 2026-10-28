@@ -39,8 +39,17 @@ const COMPLEMENTARY = /\b(toppers?|mixers?|meal enhancers?|broths?|bone broth|gr
 const COMPLETE_FOOD =
   /\b(kibble|dry (dog |cat )?food|wet (dog |cat )?food|complete (pet |dry |wet )?(food|feed)|dinner|entree|pate|recipe|formula|chunks in gravy|loaf|stew|canned (dog |cat )?food|dog food|cat food|pet food)\b/;
 
+// Open Pet Food Facts files every pet food under generic parent categories such as
+// "en:dog-and-cat-food"; they say nothing about which species a product is for.
+const GENERIC_TAGS = /^(dog-and-cat-food|cat-and-dog-food|dogs-and-cats-food|pet-food|pet-foods|pets|animal-food|open-pet-food-facts|open-pet-food|pet-food-products|dry-pet-food|wet-pet-food|pet-treats)$/;
+
 function tagsText(tags: string[]): string {
-  return norm(tags.map((t) => t.replace(/^[a-z]{2}:/, '')).join(' | '));
+  return norm(
+    tags
+      .map((t) => t.replace(/^[a-z]{2}:/, '').toLowerCase())
+      .filter((t) => !GENERIC_TAGS.test(t))
+      .join(' | '),
+  );
 }
 
 function speciesFrom(text: string, adequacy?: AdequacyStatement | null): ProductSpecies {

@@ -165,3 +165,20 @@ describe('call diagnostics', () => {
     expect(sanitizeUrl('not a url')).toEqual({ host: 'invalid-url', path: '' });
   });
 });
+
+describe('fixes found by the live contract run', () => {
+  it('ignores Open Pet Food Facts’ generic "dog and cat food" parent category when reading species', async () => {
+    const { classifyScope } = await import('../../src/domain/scope');
+    expect(classifyScope({ origin: 'opff', categoriesTags: ['en:dog-and-cat-food', 'en:cat-food', 'en:cat-treats'], texts: ['Temptations Salmon 60g'] })).toMatchObject({ species: 'cat', category: 'treat' });
+    expect(classifyScope({ origin: 'opff', categoriesTags: ['en:dog-and-cat-food', 'en:pet-food'], texts: ['Picnic Festival'] }).species).toBe('unknown');
+    expect(classifyScope({ origin: 'opff', categoriesTags: ['fr:aliment-chat'], texts: ['Bouchées pour chats'] }).species).toBe('cat');
+    expect(classifyScope({ origin: 'opff', categoriesTags: ['en:dog-and-cat-food', 'en:dog-food', 'en:cat-food'], texts: [''] }).species).toBe('cat_and_dog');
+  });
+  it('reads the pet-food crude-* nutrient keys before the generic ones and rejects implausible calories', async () => {
+    const { nutrimentsToCalories, nutrimentsToGuarantees } = await import('../../src/sources/openFacts');
+    const ga = nutrimentsToGuarantees({ 'crude-protein_100g': 32, proteins_100g: 3.1, 'crude-fat_100g': 14, 'crude-fibre_100g': 2.5, 'crude-ash_100g': 7, moisture_100g: 8 });
+    expect(ga.map((e) => `${e.nutrient}:${e.value}`)).toEqual(['crude_protein:32', 'crude_fat:14', 'crude_fiber:2.5', 'moisture:8', 'ash:7']);
+    expect(nutrimentsToCalories({ 'energy-kcal_100g': 5 })).toEqual([]);
+    expect(nutrimentsToCalories({ 'energy-kcal_100g': 380 })[0].kcal).toBe(3800);
+  });
+});
