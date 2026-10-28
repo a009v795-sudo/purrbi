@@ -1,0 +1,124 @@
+rules_version = '2';
+
+// Purrbi Firestore rules. Source of truth is this file (deployed with the Firebase CLI).
+// Do NOT use FlutterFlow's "Deploy rules" button: it would replace these rules.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+    function data() { return request.resource.data; }
+    function onlyKeys(allowed) { return data().keys().hasOnly(allowed); }
+    function changedOnly(allowed) { return data().diff(resource.data).affectedKeys().hasOnly(allowed); }
+    function optStr(d, k, max) { return !(k in d) || d[k] == null || (d[k] is string && d[k].size() <= max); }
+    function optIn(d, k, values) { return !(k in d) || d[k] == null || d[k] in values; }
+    function optList(d, k, max) { return !(k in d) || d[k] == null || (d[k] is list && d[k].size() <= max); }
+    function optNum(d, k, lo, hi) { return !(k in d) || d[k] == null || (d[k] is number && d[k] >= lo && d[k] <= hi); }
+    function optBool(d, k) { return !(k in d) || d[k] == null || d[k] is bool; }
+    function optTime(d, k) { return !(k in d) || d[k] == null || d[k] is timestamp; }
+
+    // ---- account document (FlutterFlow auth creates it on sign-up) ----
+    function validUser(d, uid) {
+      return d.keys().hasOnly(['email', 'display_name', 'photo_url', 'uid', 'created_time', 'phone_number',
+                               'activePetId', 'onboardingComplete', 'consentVersion', 'consentAcceptedAt', 'unitsPreference'])
+        && (!('uid' in d) || d.uid == uid)
+        && optStr(d, 'display_name', 80) && optStr(d, 'activePetId', 128) && optStr(d, 'consentVersion', 20)
+        && optIn(d, 'unitsPreference', ['kg', 'lb']) && optBool(d, 'onboardingComplete') && optTime(d, 'consentAcceptedAt');
+    }
+
+    // ---- pet profile ----
+    function validPet(d) {
+      return d.keys().hasOnly(['name', 'species', 'breed', 'breedType', 'birthDate', 'approxAgeMonths', 'ageCapturedAt',
+                               'weightKg', 'weightValue', 'weightUnit', 'sex', 'neutered', 'reproductiveStatus', 'expectedAdultSize',
+                               'allergiesStatus', 'allergies', 'sensitivitiesStatus', 'sensitivities', 'vetDietStatus', 'vetDietNotes',
+                               'conditionsStatus', 'conditions', 'medicationsStatus', 'avoidIngredients', 'goals', 'preferences',
+                               'photoUrl', 'avatarColor', 'profileVersion', 'onboardingStep', 'onboardingComplete', 'createdAt', 'updatedAt'])
+        && d.species in ['cat', 'dog']
+        && d.name is string && d.name.size() >= 1 && d.name.size() <= 40
+        && optStr(d, 'breed', 60) && optIn(d, 'breedType', ['known', 'mixed', 'unknown'])
+        && optTime(d, 'birthDate') && optNum(d, 'approxAgeMonths', 0, 360) && optTime(d, 'ageCapturedAt')
+        && optNum(d, 'weightKg', 0.1, 120) && optNum(d, 'weightValue', 0.1, 265) && optIn(d, 'weightUnit', ['kg', 'lb'])
+        && optIn(d, 'sex', ['female', 'male', 'unknown'])
+        && optIn(d, 'neutered', ['yes', 'no', 'unknown'])
+        && optIn(d, 'reproductiveStatus', ['none', 'pregnant', 'lactating', 'not_provided'])
+        && optIn(d, 'expectedAdultSize', ['small', 'medium', 'large', 'xlarge', 'unknown'])
+        && optIn(d, 'allergiesStatus', ['none_reported', 'not_sure', 'not_provided', 'reported'])
+        && optIn(d, 'sensitivitiesStatus', ['none_reported', 'not_sure', 'not_provided', 'reported'])
+        && optIn(d, 'vetDietStatus', ['none_reported', 'not_sure', 'not_provided', 'reported'])
+        && optIn(d, 'conditionsStatus', ['none_reported', 'not_sure', 'not_provided', 'reported'])
+        && optIn(d, 'medicationsStatus', ['none_reported', 'not_sure', 'not_provided', 'reported'])
+        && optList(d, 'allergies', 30) && optList(d, 'sensitivities', 30) && optList(d, 'conditions', 20)
+        && optList(d, 'avoidIngredients', 30) && optList(d, 'goals', 10) && optList(d, 'preferences', 10)
+        && optStr(d, 'vetDietNotes', 500) && optStr(d, 'photoUrl', 2000) && optStr(d, 'avatarColor', 20)
+        && optNum(d, 'profileVersion', 0, 100000) && optNum(d, 'onboardingStep', 0, 10) && optBool(d, 'onboardingComplete');
+    }
+
+    match /users/{uid} {
+      allow read: if isOwner(uid);
+      allow create, update: if isOwner(uid) && validUser(data(), uid);
+      allow delete: if isOwner(uid);
+
+      match /pets/{petId} {
+        allow read: if isOwner(uid);
+        allow create, update: if isOwner(uid) && validPet(data());
+        allow delete: if isOwner(uid);
+      }
+
+      // Scan jobs: the owner creates a request; only the backend writes results.
+      match /scans/{scanId} {
+        allow read: if isOwner(uid);
+        allow create: if isOwner(uid)
+          && onlyKeys(['barcode', 'petId', 'source', 'status', 'createdAt', 'clientVersion'])
+          && data().status == 'queued'
+          && data().barcode is string && data().barcode.matches('^[0-9]{8,14}$')
+          && optStr(data(), 'petId', 128)
+          && optIn(data(), 'source', ['camera', 'manual'])
+          && optStr(data(), 'clientVersion', 40)
+          && data().createdAt == request.time;
+        allow update: if isOwner(uid) && (
+             (changedOnly(['favorite']) && data().favorite is bool)
+          || (changedOnly(['skipPhotos']) && data().skipPhotos == true && resource.data.status == 'needs_photos')
+          || (changedOnly(['retryRequested']) && data().retryRequested == true
+                && resource.data.status == 'failed' && resource.data.errorRetryable == true)
+          || (changedOnly(['refreshPersonalRequested', 'petId']) && data().refreshPersonalRequested == true
+                && data().petId is string && data().petId.size() <= 128
+                && resource.data.status in ['complete', 'needs_photos'])
+        );
+        allow delete: if isOwner(uid);
+
+        match /photos/{photoId} {
+          allow read: if isOwner(uid);
+          allow create: if isOwner(uid)
+            && onlyKeys(['purpose', 'imageUrl', 'status', 'createdAt'])
+            && data().purpose in ['front', 'ingredients', 'nutrition', 'label']
+            && data().status == 'uploaded'
+            && data().createdAt == request.time
+            && data().imageUrl is string && data().imageUrl.size() <= 2000
+            && data().imageUrl.matches('^https://firebasestorage[.]googleapis[.]com/v0/b/[^/]+/o/users%2F' + uid + '%2F[^?#]+([?].*)?$')
+            && get(/databases/$(database)/documents/users/$(uid)/scans/$(scanId)).data.status in ['needs_photos', 'complete'];
+          allow update: if false;
+          allow delete: if isOwner(uid);
+        }
+      }
+
+      // Text read from the owner's label photos: private, written only by the backend.
+      match /labelFacts/{gtin} {
+        allow read: if isOwner(uid);
+        allow write: if false;
+      }
+    }
+
+    // Reusable product facts from public sources: readable when signed in, written only by the backend.
+    match /products/{gtin} {
+      allow read: if signedIn();
+      allow write: if false;
+      match /evidence/{evidenceId} {
+        allow read: if signedIn();
+        allow write: if false;
+      }
+    }
+
+    match /usage/{id} { allow read, write: if false; }
+    match /system/{id} { allow read, write: if false; }
+  }
+}

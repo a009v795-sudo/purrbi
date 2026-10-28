@@ -1,0 +1,41 @@
+name: live-e2e
+# Exercises the DEPLOYED backend with real products: temporary test accounts are created, real
+# pet products (discovered from Open Pet Food Facts search) are scanned, results recorded, and the
+# test accounts deleted. Needs FIREBASE_SERVICE_ACCOUNT_PURRBI_DEV; FIREBASE_WEB_API_KEY (public web
+# config key) enables the account-isolation check through the real security rules.
+on:
+  workflow_dispatch:
+    inputs:
+      project:
+        description: Firebase project id
+        required: true
+        default: purrbi-dev
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend/functions
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/functions/package-lock.json
+      - run: npm ci
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_PURRBI_DEV }}
+      - name: Live end-to-end
+        env:
+          FIREBASE_PROJECT: ${{ inputs.project }}
+          FIREBASE_WEB_API_KEY: ${{ secrets.FIREBASE_WEB_API_KEY }}
+          LIVE_REPORT_PATH: ${{ runner.temp }}/live-e2e-report.json
+        run: node ../tools/live-e2e.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-e2e-report
+          path: ${{ runner.temp }}/live-e2e-report.json

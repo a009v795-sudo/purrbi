@@ -1,0 +1,4 @@
+# Credentials, sync state and the machine's fft launcher.
+.flutterflow/
+.fft/
+fft

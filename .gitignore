@@ -1,0 +1,13 @@
+node_modules/
+backend/functions/lib/
+*.log
+.env
+.env.*
+service-account*.json
+*-sa-key*.json
+.firebase/
+firebase-debug.log*
+firestore-debug.log*
+ui-debug.log*
+.secret.local
+.env.local

@@ -1,0 +1,46 @@
+name: android-apk
+# Builds an installable Android APK from the FlutterFlow code export committed under app/.
+# The release build is signed with the debug key (fine for testing, not for Play Store upload).
+on:
+  workflow_dispatch:
+    inputs:
+      build_number:
+        description: Build number (versionCode)
+        required: true
+        default: '1'
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter --version
+      - run: flutter pub get
+      - run: flutter build apk --release --build-number=${{ inputs.build_number }}
+      - name: Checksum and metadata
+        run: |
+          APK=build/app/outputs/flutter-apk/app-release.apk
+          sha256sum "$APK" | tee "$APK.sha256"
+          grep -E '^version:' pubspec.yaml | tee build-info.txt
+          grep -E 'applicationId' android/app/build.gradle | tee -a build-info.txt
+          echo "commit: $GITHUB_SHA" | tee -a build-info.txt
+          flutter --version --machine > flutter-version.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: purrbi-android-apk-${{ inputs.build_number }}
+          path: |
+            app/build/app/outputs/flutter-apk/app-release.apk
+            app/build/app/outputs/flutter-apk/app-release.apk.sha256
+            app/build-info.txt
+            app/flutter-version.json

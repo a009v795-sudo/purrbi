@@ -1,0 +1,38 @@
+name: live-contract
+# Live checks against the real public services (Open Pet Food Facts, Open Food Facts, openFDA,
+# knowledge-base citation URLs). No mocks; products are discovered from the databases' own search.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 6 * * 1'
+  push:
+    branches: [main]
+    paths:
+      - 'backend/functions/src/sources/**'
+      - 'backend/functions/src/domain/kb.ts'
+      - 'backend/functions/test/live/**'
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend/functions
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/functions/package-lock.json
+      - run: npm ci
+      - name: Live contract tests
+        env:
+          LIVE_REPORT_PATH: ${{ runner.temp }}/live-contract-report.json
+          SOURCE_USER_AGENT: ${{ vars.SOURCE_USER_AGENT || 'Purrbi/0.1 (development build; contract test)' }}
+        run: npx vitest run test/live
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-contract-report
+          path: ${{ runner.temp }}/live-contract-report.json

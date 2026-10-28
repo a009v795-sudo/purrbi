@@ -1,0 +1,40 @@
+name: backend-ci
+on:
+  push:
+    paths: ['backend/**', '.github/workflows/backend-ci.yml']
+  pull_request:
+    paths: ['backend/**']
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend/functions
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/functions/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npm ci
+      - run: npm run build
+      - run: npx tsc -p tsconfig.test.json
+      - name: Unit tests (domain logic, mocked inputs)
+        run: npm test
+      - run: npm install -g firebase-tools@15.34.1
+      - name: Emulator tests (security rules + scan job, mocked sources)
+        working-directory: backend
+        run: firebase emulators:exec --only firestore,storage --project demo-purrbi "cd functions && npx vitest run test/emulator"
+      - name: Trigger end-to-end (real function code, real sources)
+        working-directory: backend
+        run: |
+          printf 'OPENAI_API_KEY=emulator-placeholder-not-a-real-key\n' > functions/.secret.local
+          printf 'AI_ENABLED=false\n' > functions/.env.local
+          firebase emulators:exec --only auth,firestore,functions,storage --project demo-purrbi "cd functions && npx vitest run test/e2e"
