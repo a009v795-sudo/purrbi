@@ -23,6 +23,7 @@ export type OutOfScopeKind =
 
 export type SourceType =
   | 'database' // e.g. Open Pet Food Facts
+  | 'database_image' // a label image published in the database, read by AI
   | 'manufacturer' // manufacturer web page
   | 'retailer_or_web' // other web page found by research
   | 'official_notice' // FDA / openFDA
@@ -73,6 +74,14 @@ export interface GuaranteedAnalysisEntry {
 
 export type CaloriePer = 'kg' | 'cup' | 'can' | 'treat' | 'piece' | 'pouch' | 'tray' | 'chew' | 'g' | '100g' | 'other';
 
+/** A supplement's active ingredient as printed (amounts are per serving as stated). */
+export interface ActiveIngredient {
+  name: string;
+  amount: number | null;
+  unit: string | null;
+  per: string | null; // "chew", "tablet", "scoop", "ml"...
+}
+
 export interface CalorieStatement {
   kcal: number;
   per: CaloriePer;
@@ -114,6 +123,7 @@ export interface ProductFacts {
   calories?: Fact<CalorieStatement[]>;
   adequacy?: Fact<AdequacyStatement>;
   feedingDirections?: Fact<string>;
+  activeIngredients?: Fact<ActiveIngredient[]>; // supplements: "active ingredients per chew"
   /** raw classification inputs from sources (categories, labels, names) */
   classificationSignals: { text: string; source: string }[];
   sources: SourceRef[];
@@ -174,9 +184,45 @@ export interface ScoreComponent {
 export interface IngredientNote {
   name: string;
   position: number; // 1-based label order
+  /** From Purrbi's curated list only (deterministic; the score uses it). */
   status: 'positive' | 'caution' | 'concern' | 'unknown' | 'info';
   note: string;
   sourceUrl?: string;
+  sourceTitle?: string;
+  /** Plain-language explanation: curated, or an AI summary of a cited page Purrbi verified. Never affects the score. */
+  explanation?: string;
+  explanationKind: 'curated' | 'cited_ai' | 'none';
+  explanationSourceTitle?: string;
+  explanationSourceUrl?: string;
+  explanationQuote?: string;
+}
+
+export interface NutritionNote {
+  nutrient: NutrientKey;
+  label: string;
+  meaning: string; // what the line means
+  context: string; // comparison or calculation, '' when none
+  contextSource: string;
+}
+
+export interface SupplementActiveNote {
+  name: string;
+  amountText: string; // "500 mg per chew" or "amount not stated"
+  evidence: 'cited' | 'not_reviewed';
+  note: string;
+  sourceTitle: string;
+  sourceUrl: string;
+  quote: string;
+}
+
+export interface SupplementAssessment {
+  purposes: { key: string; label: string; evidence: string }[];
+  actives: SupplementActiveNote[];
+  activesSource: string;
+  warnings: Finding[];
+  limitations: string[];
+  qualitySignals: string[];
+  summary: string;
 }
 
 export interface GeneralAssessment {
@@ -192,6 +238,9 @@ export interface GeneralAssessment {
   components: ScoreComponent[];
   findings: Finding[];
   ingredientNotes: IngredientNote[];
+  nutritionNotes: NutritionNote[];
+  nutritionContext: string[];
+  supplement: SupplementAssessment | null;
   missingForScore: string[];
 }
 

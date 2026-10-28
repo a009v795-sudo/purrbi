@@ -6,7 +6,8 @@ import { getFirestore, Timestamp, type Firestore } from 'firebase-admin/firestor
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { ValidatedLabel } from '../../src/ai/labelExtract';
 import { gs1CheckDigit, type NormalizedBarcode } from '../../src/domain/barcode';
-import type { RecallCheck } from '../../src/domain/types';
+import type { ProductFacts, RecallCheck } from '../../src/domain/types';
+import { explanationKey } from '../../src/knowledge/explain';
 import { DEFAULT_LIMITS, type RuntimeConfig } from '../../src/pipeline/config';
 import { handleScanUpdate, processPhoto, processScan, type Deps, type Sources } from '../../src/pipeline/scanJob';
 import type { OpenFactsDb, OpenFactsLookup } from '../../src/sources/openFacts';
@@ -19,6 +20,9 @@ const BC = {
   human: withCheck('400638133393'),
   down: withCheck('9638507'),
   unknown: withCheck('761234567890'),
+  supplement: withCheck('501234567892'),
+  imageOnly: withCheck('501234567893'),
+  webOnly: withCheck('501234567894'),
 };
 
 let db: Firestore;
@@ -45,6 +49,24 @@ const sources: Sources = {
         ingredients_text: 'Chicken, chicken meal, brown rice, chicken fat, taurine',
       } };
     }
+    if (dbName === 'opff' && barcode.digits === BC.supplement) {
+      return { found: true, db: dbName, code: barcode.digits, source: src(dbName, barcode.digits), product: {
+        product_name: 'TEST FIXTURE Hip & Joint Chews for Dogs', brands: 'TESTBRAND', categories_tags: ['en:dog-supplements'],
+        ingredients_text: 'Active Ingredients per Chew: Glucosamine HCl 500 mg, MSM 250 mg, Chondroitin Sulfate 100 mg. Inactive Ingredients: Brewers Dried Yeast, Chicken Liver Flavor, Glycerin',
+      } };
+    }
+    if (dbName === 'opff' && barcode.digits === BC.imageOnly) {
+      return { found: true, db: dbName, code: barcode.digits, source: src(dbName, barcode.digits), product: {
+        product_name: 'TEST FIXTURE Turkey Dry Dog Food', brands: 'TESTBRAND', categories_tags: ['en:dog-food', 'en:dry-dog-food'],
+        ingredients_text: 'Turkey, oatmeal, barley, turkey fat',
+        image_nutrition_url: 'https://images.openpetfoodfacts.org/images/products/501/234/567/8935/nutrition_en.3.400.jpg',
+      } };
+    }
+    if (dbName === 'opff' && barcode.digits === BC.webOnly) {
+      return { found: true, db: dbName, code: barcode.digits, source: src(dbName, barcode.digits), product: {
+        product_name: 'TEST FIXTURE Lamb Dry Dog Food', brands: 'TESTBRAND', categories_tags: ['en:dog-food'],
+      } };
+    }
     if (dbName === 'off' && barcode.digits === BC.human) {
       return { found: true, db: dbName, code: barcode.digits, source: src(dbName, barcode.digits), product: { product_name: 'TEST FIXTURE Hazelnut Spread', brands: 'TESTFOODS', categories_tags: ['en:spreads', 'en:sweet-spreads'] } };
     }
@@ -54,14 +76,54 @@ const sources: Sources = {
     calls.recall = (calls.recall ?? 0) + 1;
     return { status: 'none_found', summary: 'No FDA enforcement record found (mocked).', checkedAt: NOW.toISOString(), source: null, records: [] };
   },
-  async research() {
+  async research(o) {
     calls.research = (calls.research ?? 0) + 1;
-    return { facts: null, sources: [], discarded: [], model: 'mock' };
+    if (o.barcode !== BC.webOnly) return { facts: null, sources: [], discarded: ['model reported no matching product'], model: 'mock' };
+    const source = { sourceId: `web:testbrand.example:${o.gtin14}`, sourceType: 'manufacturer' as const, sourceName: 'testbrand.example', url: 'https://testbrand.example/lamb', retrievedAt: NOW.toISOString(), matchConfidence: 'brand_and_product' as const };
+    const facts: Partial<ProductFacts> = {
+      ingredientsText: { value: 'Lamb, brown rice, lamb meal, chicken fat', source },
+      ingredients: { value: ['Lamb', 'brown rice', 'lamb meal', 'chicken fat'], source },
+      guaranteedAnalysis: { value: [
+        { nutrient: 'crude_protein', label: 'Crude Protein', qualifier: 'min', value: 24, unit: '%' },
+        { nutrient: 'crude_fat', label: 'Crude Fat', qualifier: 'min', value: 14, unit: '%' },
+        { nutrient: 'crude_fiber', label: 'Crude Fiber', qualifier: 'max', value: 4, unit: '%' },
+        { nutrient: 'moisture', label: 'Moisture', qualifier: 'max', value: 10, unit: '%' },
+      ], source },
+      adequacy: { value: { text: 'TEST FIXTURE is formulated to meet the nutritional levels established by the AAFCO Dog Food Nutrient Profiles for adult maintenance.', type: 'complete', species: 'dog', lifeStages: ['adult_maintenance'], method: 'formulation', largeSizeGrowth: null, style: 'aafco' }, source },
+      classificationSignals: [],
+    };
+    return { facts, sources: [source], discarded: [], model: 'mock' };
+  },
+  async databaseImages(o) {
+    calls.dbImages = (calls.dbImages ?? 0) + 1;
+    if (!o.product.image_nutrition_url) return { facts: [], read: [], skipped: ['no image'] };
+    await o.beforeAiCall();
+    const source = { sourceId: `opff-image:${o.code}:nutrition`, sourceType: 'database_image' as const, sourceName: 'Open Pet Food Facts label image', url: o.product.image_nutrition_url, retrievedAt: NOW.toISOString(), matchConfidence: 'exact_barcode' as const };
+    return { read: ['nutrition'], skipped: [], facts: [{
+      sources: [source], classificationSignals: [],
+      guaranteedAnalysis: { value: [
+        { nutrient: 'crude_protein', label: 'Crude Protein', qualifier: 'min', value: 26, unit: '%' },
+        { nutrient: 'crude_fat', label: 'Crude Fat', qualifier: 'min', value: 15, unit: '%' },
+        { nutrient: 'crude_fiber', label: 'Crude Fiber', qualifier: 'max', value: 4, unit: '%' },
+        { nutrient: 'moisture', label: 'Moisture', qualifier: 'max', value: 10, unit: '%' },
+      ], source },
+      adequacy: { value: { text: 'TEST FIXTURE is formulated to meet the nutritional levels established by the AAFCO Dog Food Nutrient Profiles for all life stages.', type: 'complete', species: 'dog', lifeStages: ['all_life_stages'], method: 'formulation', largeSizeGrowth: null, style: 'aafco' }, source },
+      calories: { value: [{ kcal: 3700, per: 'kg' }], source },
+    }] };
+  },
+  async explain(o) {
+    calls.explain = (calls.explain ?? 0) + 1;
+    calls.explainTerms = (calls.explainTerms ?? 0) + o.terms.length;
+    return o.terms.map((t) => ({
+      key: explanationKey(o.species, t.kind, t.term), term: t.term, kind: t.kind, species: o.species, status: 'verified' as const,
+      summary: `TEST FIXTURE explanation of ${t.term}.`, role: 'test role', sourceTitle: 'TEST FIXTURE source', sourceUrl: 'https://www.fda.gov/test-fixture',
+      quote: 'TEST FIXTURE quote copied from the cited page.', reason: '', checkedAt: NOW.toISOString(), model: 'mock', version: 'test',
+    }));
   },
   async extractLabel(o): Promise<ValidatedLabel> {
     calls.extract = (calls.extract ?? 0) + 1;
     if (o.purpose.includes('front')) {
-      return { status: 'different_product', reason: 'barcode mismatch (mocked)', panels: ['front', 'barcode'], productName: null, brand: null, species: 'unknown', productTypeClaim: null, ingredientsText: null, ingredients: [], guaranteedAnalysis: [], calories: [], adequacy: null, feedingDirections: null, uncertainFields: [], rejected: [], model: 'mock' };
+      return { status: 'different_product', reason: 'barcode mismatch (mocked)', panels: ['front', 'barcode'], productName: null, brand: null, species: 'unknown', productTypeClaim: null, ingredientsText: null, ingredients: [], guaranteedAnalysis: [], calories: [], adequacy: null, feedingDirections: null, activeIngredients: [], uncertainFields: [], rejected: [], model: 'mock' };
     }
     return {
       status: 'processed', reason: '', panels: ['guaranteed_analysis', 'adequacy_statement', 'calorie_statement'], productName: null, brand: null, species: 'cat', productTypeClaim: null,
@@ -74,13 +136,17 @@ const sources: Sources = {
       ],
       calories: [{ kcal: 3900, per: 'kg' }],
       adequacy: { text: 'TEST FIXTURE is formulated to meet the nutritional levels established by the AAFCO Cat Food Nutrient Profiles for adult maintenance.', type: 'complete', species: 'cat', lifeStages: ['adult_maintenance'], method: 'formulation', largeSizeGrowth: null, style: 'aafco' },
-      feedingDirections: null, uncertainFields: [], rejected: [], model: 'mock',
+      feedingDirections: null, activeIngredients: [], uncertainFields: [], rejected: [], model: 'mock',
     };
   },
 };
 
 function deps(over: Partial<RuntimeConfig> = {}): Deps {
-  const config: RuntimeConfig = { userAgent: 'test', openaiApiKey: () => 'test-key', visionModel: 'mock', researchModel: 'mock', aiEnabled: true, researchEnabled: false, productFreshDays: 30, recallFreshHours: 12, limits: DEFAULT_LIMITS, ...over };
+  const config: RuntimeConfig = {
+    userAgent: 'test', openaiApiKey: () => 'test-key', visionModel: 'mock', researchModel: 'mock', explainModel: 'mock',
+    aiEnabled: true, researchEnabled: false, databaseImagesEnabled: true, explanationsEnabled: true,
+    productFreshDays: 30, recallFreshHours: 12, limits: DEFAULT_LIMITS, ...over,
+  };
   const silent = { info: () => undefined, warn: () => undefined, error: () => undefined };
   return { db, config, sources, now: () => NOW, log: silent, readImage: async () => ({ base64: 'AAAA', mimeType: 'image/jpeg', bytes: 3 }) };
 }
@@ -250,6 +316,10 @@ describe('failures stay specific', () => {
     const ref = await newScan('u1', BC.treat);
     await Promise.all([processScan(deps(), 'u1', ref.id), processScan(deps(), 'u1', ref.id)]);
     expect(calls['lookup:opff']).toBe(1);
+    expect(calls.explain).toBe(1);
+    const s = await read(ref);
+    expect(s.claimCount).toBe(1);
+    expect(s.duplicateDeliveries).toBe(1);
   });
 });
 
@@ -270,5 +340,89 @@ describe('personal refresh', () => {
     expect(second.scoreComponents).toEqual(first.scoreComponents);
     expect(second.evidenceRevision).toBe(first.evidenceRevision);
     expect(second.refreshPersonalRequested).toBe(false);
+  });
+});
+
+describe('evidence-backed explanations and reuse', () => {
+  it('explains unfamiliar ingredients once with cited sources, then reuses them without any AI call', async () => {
+    const a = await newScan('u1', BC.treat, 'cat2');
+    await processScan(deps(), 'u1', a.id);
+    const first = await read(a);
+    expect(first.explanationsStatus).toBe('ready');
+    const rice = first.ingredientNotes.find((n: { name: string }) => n.name === 'rice flour');
+    expect(rice).toMatchObject({ explanationKind: 'cited_ai', explanationSourceUrl: 'https://www.fda.gov/test-fixture' });
+    expect(rice.status).toBe('unknown'); // explanations never change the curated status or the score
+    expect(first.ingredientNotes.find((n: { name: string }) => n.name === 'mixed tocopherols').explanationKind).toBe('curated');
+    expect(first.lastJob).toMatchObject({ kind: 'scan', productCache: 'miss', recallCache: 'miss', explanationsNew: 2 });
+    expect(calls.explain).toBe(1);
+
+    const b = await newScan('u1', BC.treat, 'cat2');
+    await processScan(deps(), 'u1', b.id);
+    const second = await read(b);
+    expect(calls.explain).toBe(1); // no new AI call
+    expect(calls['lookup:opff']).toBe(1); // no new database call
+    expect(second.lastJob).toMatchObject({ productCache: 'hit', recallCache: 'hit', explanationsCached: 2, explanationsNew: 0, aiCalls: 0 });
+    expect(second.explanationsStatus).toBe('ready');
+    expect(second.score).toBe(first.score);
+    expect(second.evidenceNotes.join(' ')).toMatch(/reused/);
+  });
+});
+
+describe('supplements', () => {
+  it('get an evidence-backed informational assessment, never an empty screen or a number', async () => {
+    const ref = await newScan('u1', BC.supplement);
+    await processScan(deps(), 'u1', ref.id);
+    const s = await read(ref);
+    expect(s.status).toBe('complete');
+    expect(s.productCategory).toBe('supplement');
+    expect(s.scoreAvailable).toBe(false);
+    expect(s.supplementPurposes.map((p: { key: string }) => p.key)).toContain('joint');
+    expect(s.supplementActives.map((a: { name: string; amountText: string }) => `${a.name}: ${a.amountText}`)).toEqual([
+      'Glucosamine HCl: 500 mg per chew', 'MSM: 250 mg per chew', 'Chondroitin Sulfate: 100 mg per chew',
+    ]);
+    expect(s.supplementActives.every((a: { evidence: string; sourceUrl: string }) => a.evidence === 'cited' && a.sourceUrl)).toBe(true);
+    expect(s.supplementLimitations.length).toBeGreaterThan(0);
+    expect(s.supplementSummary).toMatch(/joint/);
+  });
+});
+
+describe('fallbacks before asking the owner for photos', () => {
+  it('reads a label image published in the database to fill a missing nutrition panel', async () => {
+    const ref = await newScan('u1', BC.imageOnly);
+    await processScan(deps(), 'u1', ref.id);
+    const s = await read(ref);
+    expect(calls.dbImages).toBe(1);
+    expect(s.status).toBe('complete');
+    expect(s.missingInfo).toEqual([]);
+    expect(s.scoreAvailable).toBe(true);
+    expect(s.nutritionSource).toMatch(/label image/);
+    expect(s.generalFindings.some((f: { rule: string }) => f.rule === 'G-DBIMAGE')).toBe(true);
+    expect(s.nutrition.find((n: { label: string }) => n.label === 'Crude Protein').context).toMatch(/AAFCO/);
+    const product = (await db.doc(`products/${s.gtin}`).get()).data()!;
+    expect(product.verification).toBe('database_and_label_image');
+    const meta = (await db.doc(`productMeta/${s.gtin}`).get()).data()!;
+    expect(meta.enrichment.databaseImages.read).toEqual(['nutrition']);
+    // A later re-fetch of the database record keeps what the image supplied; the image is not read again.
+    const again = await newScan('u1', BC.imageOnly);
+    await processScan(deps({ productFreshDays: 0 }), 'u1', again.id);
+    expect(calls['lookup:opff']).toBe(2);
+    expect(calls.dbImages).toBe(1);
+    expect((await read(again)).status).toBe('complete');
+  });
+  it('fills missing label facts from the manufacturer page (research), once per freshness window', async () => {
+    const ref = await newScan('u1', BC.webOnly);
+    await processScan(deps({ researchEnabled: true }), 'u1', ref.id);
+    const s = await read(ref);
+    expect(calls.research).toBe(1);
+    expect(s.status).toBe('complete');
+    expect(s.scoreAvailable).toBe(true);
+    expect(s.sources.some((x: { type: string }) => x.type === 'manufacturer')).toBe(true);
+    expect(s.evidenceNotes.join(' ')).toMatch(/manufacturer page/);
+    const nothing = await newScan('u1', BC.unknown);
+    await processScan(deps({ researchEnabled: true }), 'u1', nothing.id);
+    const again = await newScan('u1', BC.unknown);
+    await processScan(deps({ researchEnabled: true }), 'u1', again.id);
+    expect(calls.research).toBe(2); // webOnly once, unknown once: the failed search is not repeated
+    expect((await read(again)).status).toBe('needs_photos');
   });
 });

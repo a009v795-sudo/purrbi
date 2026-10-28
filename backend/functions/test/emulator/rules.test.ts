@@ -115,6 +115,11 @@ describe('server-only collections', () => {
     await assertFails(bob().doc('users/alice/labelFacts/00036000291452').get());
     await assertFails(alice().doc('usage/alice_20261028').get());
     await assertFails(alice().doc('system/aiUsage_20261028').set({ calls: 0 }));
+    // enrichment bookkeeping and the shared explanation cache are server-only
+    await assertFails(alice().doc('productMeta/00036000291452').get());
+    await assertFails(alice().doc('productMeta/00036000291452').set({ enrichment: {} }));
+    await assertFails(alice().doc('knowledge/cat_ingredient_rice-flour').get());
+    await assertFails(alice().doc('knowledge/cat_ingredient_rice-flour').set({ status: 'verified', summary: 'forged' }));
   });
 });
 

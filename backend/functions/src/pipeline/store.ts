@@ -3,6 +3,7 @@
 import { createHash } from 'node:crypto';
 import { FieldValue, Timestamp, type Firestore } from 'firebase-admin/firestore';
 import type { ValidatedLabel } from '../ai/labelExtract';
+import type { CitedExplanation } from '../knowledge/explain';
 import type { PetProfile, ProductFacts, RecallCheck, ScopeResult, SourceRef } from '../domain/types';
 import type { Limits } from './config';
 
@@ -39,6 +40,14 @@ export async function consumeAiBudget(db: Firestore, limits: Limits, now: Date):
 
 // ---- products ----------------------------------------------------------------
 
+/** When optional AI enrichment was last attempted for a product, and what it found (public facts only). */
+export interface Enrichment {
+  databaseImagesAt?: Date | null;
+  databaseImages?: { read: string[]; skipped: string[] };
+  researchAt?: Date | null;
+  research?: { filled: string[]; discarded: string[]; source: string };
+}
+
 export interface StoredProduct {
   facts: ProductFacts;
   origin: string;
@@ -47,6 +56,12 @@ export interface StoredProduct {
   lastRetrievedAt: Date | null;
   recall: RecallCheck | null;
   recallCheckedAt: Date | null;
+}
+
+/** Server-only bookkeeping per barcode (never readable by clients): label image links and enrichment attempts. */
+export interface ProductMeta {
+  labelImageUrls: { ingredients?: string; nutrition?: string };
+  enrichment: Enrichment;
 }
 
 /** Hash of the facts' content, ignoring retrieval times, to detect real changes. */
@@ -84,10 +99,35 @@ export async function readProduct(db: Firestore, gtin: string): Promise<StoredPr
   };
 }
 
+export async function readProductMeta(db: Firestore, gtin: string): Promise<ProductMeta> {
+  const snap = await db.doc(`productMeta/${gtin}`).get();
+  const d = snap.data() ?? {};
+  return {
+    labelImageUrls: (d.labelImageUrls as ProductMeta['labelImageUrls']) ?? {},
+    enrichment: {
+      databaseImagesAt: toDate(d.enrichment?.databaseImagesAt),
+      databaseImages: d.enrichment?.databaseImages ?? undefined,
+      researchAt: toDate(d.enrichment?.researchAt),
+      research: d.enrichment?.research ?? undefined,
+    },
+  };
+}
+
+export async function writeProductMeta(db: Firestore, gtin: string, meta: ProductMeta, now: Date): Promise<void> {
+  await db.doc(`productMeta/${gtin}`).set({ gtin, labelImageUrls: meta.labelImageUrls, enrichment: enrichmentDoc(meta.enrichment), updatedAt: Timestamp.fromDate(now) });
+}
+
 /** Writes public-source facts only (database / verified web). Returns the facts version. */
 export async function writeProduct(
   db: Firestore,
-  args: { facts: ProductFacts; scope: ScopeResult; origin: string; previous: StoredProduct | null; now: Date; traceId: string },
+  args: {
+    facts: ProductFacts;
+    scope: ScopeResult;
+    origin: string;
+    previous: StoredProduct | null;
+    now: Date;
+    traceId: string;
+  },
 ): Promise<number> {
   const publicFacts: ProductFacts = stripPrivate(args.facts);
   const hash = factsHash(publicFacts);
@@ -107,7 +147,11 @@ export async function writeProduct(
       scope: args.scope.status,
       scopeReason: args.scope.reason,
       origin: args.origin,
-      verification: publicFacts.sources.some((s) => s.sourceType === 'manufacturer' || s.sourceType === 'retailer_or_web') ? 'database_and_verified_web' : 'database_record',
+      verification: publicFacts.sources.some((s) => s.sourceType === 'manufacturer' || s.sourceType === 'retailer_or_web')
+        ? 'database_and_verified_web'
+        : publicFacts.sources.some((s) => s.sourceType === 'database_image')
+          ? 'database_and_label_image'
+          : 'database_record',
       facts: publicFacts,
       factsHash: hash,
       factsVersion: version,
@@ -128,23 +172,55 @@ export async function writeProduct(
   return version;
 }
 
+function enrichmentDoc(e: Enrichment): Record<string, unknown> {
+  const ts = (d: Date | null | undefined) => (d ? Timestamp.fromDate(d) : null);
+  return { databaseImagesAt: ts(e.databaseImagesAt), databaseImages: e.databaseImages ?? null, researchAt: ts(e.researchAt), research: e.research ?? null };
+}
+
 export async function writeRecall(db: Firestore, gtin: string, recall: RecallCheck, now: Date): Promise<void> {
   await db.doc(`products/${gtin}`).set({ recall, recallCheckedAt: Timestamp.fromDate(now) }, { merge: true });
 }
 
 function supportedFields(facts: ProductFacts, s: SourceRef): string[] {
-  const keys: (keyof ProductFacts)[] = ['productName', 'brand', 'imageUrl', 'ingredientsText', 'guaranteedAnalysis', 'calories', 'adequacy', 'feedingDirections'];
+  const keys: (keyof ProductFacts)[] = ['productName', 'brand', 'imageUrl', 'ingredientsText', 'guaranteedAnalysis', 'calories', 'adequacy', 'feedingDirections', 'activeIngredients'];
   return keys.filter((k) => (facts[k] as { source?: SourceRef } | undefined)?.source?.sourceId === s.sourceId) as string[];
 }
 
 /** Removes facts that came from the owner's own label photos (they stay private to that owner). */
 export function stripPrivate(facts: ProductFacts): ProductFacts {
   const out: ProductFacts = { ...facts, sources: facts.sources.filter((s) => s.sourceType !== 'user_label'), classificationSignals: facts.classificationSignals.filter((c) => !c.source.startsWith('label:')) };
-  for (const k of ['productName', 'brand', 'imageUrl', 'ingredientsText', 'ingredients', 'guaranteedAnalysis', 'calories', 'adequacy', 'feedingDirections'] as const) {
+  for (const k of ['productName', 'brand', 'imageUrl', 'ingredientsText', 'ingredients', 'guaranteedAnalysis', 'calories', 'adequacy', 'feedingDirections', 'activeIngredients'] as const) {
     const f = out[k] as { source: SourceRef } | undefined;
     if (f?.source.sourceType === 'user_label') delete out[k];
   }
   return out;
+}
+
+// ---- cited explanations (shared, server-only) -------------------------------------
+
+const VERIFIED_DAYS = 180;
+const UNVERIFIED_DAYS = 30;
+
+/** Cached explanations that are still current; expired ones are treated as missing. */
+export async function readExplanations(db: Firestore, keys: string[], now: Date): Promise<Map<string, CitedExplanation>> {
+  const out = new Map<string, CitedExplanation>();
+  const unique = [...new Set(keys)].slice(0, 100);
+  if (!unique.length) return out;
+  const snaps = await db.getAll(...unique.map((k) => db.doc(`knowledge/${k}`)));
+  for (const snap of snaps) {
+    if (!snap.exists) continue;
+    const e = snap.data() as CitedExplanation;
+    const age = (now.getTime() - new Date(e.checkedAt).getTime()) / 86400000;
+    if (age <= (e.status === 'verified' ? VERIFIED_DAYS : UNVERIFIED_DAYS)) out.set(snap.id, e);
+  }
+  return out;
+}
+
+export async function writeExplanations(db: Firestore, items: CitedExplanation[]): Promise<void> {
+  if (!items.length) return;
+  const batch = db.batch();
+  for (const e of items) batch.set(db.doc(`knowledge/${e.key}`), e);
+  await batch.commit();
 }
 
 // ---- private label evidence ---------------------------------------------------

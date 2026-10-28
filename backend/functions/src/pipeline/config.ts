@@ -8,6 +8,7 @@ export interface Limits {
   aiCallsPerDayGlobal: number; // budget breaker across all users
   maxPhotoBytes: number;
   maxPhotosPerScan: number;
+  explanationsPerScan: number; // new terms explained per scan (one AI call)
 }
 
 export interface RuntimeConfig {
@@ -15,8 +16,11 @@ export interface RuntimeConfig {
   openaiApiKey: () => string | undefined;
   visionModel: string;
   researchModel: string;
+  explainModel: string;
   aiEnabled: boolean;
   researchEnabled: boolean;
+  databaseImagesEnabled: boolean;
+  explanationsEnabled: boolean;
   productFreshDays: number;
   recallFreshHours: number;
   limits: Limits;
@@ -29,6 +33,7 @@ export const DEFAULT_LIMITS: Limits = {
   aiCallsPerDayGlobal: 500,
   maxPhotoBytes: 10 * 1024 * 1024,
   maxPhotosPerScan: 6,
+  explanationsPerScan: 8,
 };
 
 export const SCAN_STATUS = {

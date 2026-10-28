@@ -1,22 +1,23 @@
 // Bounded manufacturer/web research for products the pet database lacks. One model call with the
 // web_search tool, then independent verification: every field kept must be found again on a cited
 // page that Purrbi fetches itself. Anything that cannot be verified is discarded, never shown.
-// Disabled unless RESEARCH_ENABLED=true (pending live verification; see TEST_RESULTS.md).
+// Switched by the RESEARCH_ENABLED parameter; attempted at most once per product per freshness window.
 import { researchJson } from '../ai/openai';
 import { parseAdequacyStatement } from '../domain/adequacy';
 import { textContainsGtin } from '../domain/barcode';
 import { normalizeIngredientName, parseIngredientList } from '../domain/ingredients';
 import { normalizeUnit, nutrientKeyFromLabel, parseCalorieText, qualifierFrom, validateGuaranteedAnalysis } from '../domain/nutrition';
+import { parseActiveIngredients } from '../domain/supplements';
 import type { ProductFacts, ProductSpecies, SourceRef } from '../domain/types';
 import { httpRequest } from '../util/http';
 
-export const RESEARCH_VERSION = 'research-1.0.0';
+export const RESEARCH_VERSION = 'research-1.1.0';
 
 const nullableString = { type: ['string', 'null'] };
 const SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['found', 'product_name', 'brand', 'species', 'product_type', 'ingredients_verbatim', 'adequacy_statement_verbatim', 'guaranteed_analysis', 'calorie_statement_verbatim', 'source_urls', 'barcode_seen_on_source'],
+  required: ['found', 'product_name', 'brand', 'species', 'product_type', 'ingredients_verbatim', 'active_ingredients_verbatim', 'adequacy_statement_verbatim', 'guaranteed_analysis', 'calorie_statement_verbatim', 'source_urls', 'barcode_seen_on_source'],
   properties: {
     found: { type: 'boolean' },
     product_name: nullableString,
@@ -24,6 +25,7 @@ const SCHEMA = {
     species: { type: 'string', enum: ['cat', 'dog', 'cat_and_dog', 'unknown'] },
     product_type: nullableString,
     ingredients_verbatim: nullableString,
+    active_ingredients_verbatim: nullableString,
     adequacy_statement_verbatim: nullableString,
     guaranteed_analysis: {
       type: 'array',
@@ -47,6 +49,7 @@ interface RawResearch {
   species: ProductSpecies;
   product_type: string | null;
   ingredients_verbatim: string | null;
+  active_ingredients_verbatim: string | null;
   adequacy_statement_verbatim: string | null;
   guaranteed_analysis: { label: string; qualifier: string; value: number; unit: string }[];
   calorie_statement_verbatim: string | null;
@@ -98,7 +101,7 @@ export async function researchProduct(opts: {
     `Barcode (GTIN/UPC/EAN): ${opts.barcode}.`,
     opts.knownBrand ? `Brand (from a database record): ${opts.knownBrand}.` : '',
     opts.knownName ? `Product name (from a database record): ${opts.knownName}.` : '',
-    'Find its ingredient list, guaranteed analysis, calorie content and nutritional adequacy statement.',
+    'Find its ingredient list, guaranteed analysis, calorie content and nutritional adequacy statement; for a supplement, its active ingredients with amounts (start that text with "Active ingredients").',
   ].filter(Boolean).join(' ');
   const { data, citations, model } = await researchJson<RawResearch>({
     apiKey: opts.apiKey,
@@ -177,6 +180,11 @@ export async function researchProduct(opts: {
   ).valid;
   if (ga.length) facts.guaranteedAnalysis = { value: ga, source };
   else if (data.guaranteed_analysis?.length) discarded.push('guaranteed analysis: values not found on the cited page');
+
+  const actives = parseActiveIngredients(data.active_ingredients_verbatim?.match(/active ingredients?/i) ? data.active_ingredients_verbatim : data.active_ingredients_verbatim ? `Active ingredients: ${data.active_ingredients_verbatim}` : null)
+    .filter((a) => onPage(a.name) && (a.amount === null || pages.some((p) => p.raw.includes(String(a.amount)))));
+  if (actives.length) facts.activeIngredients = { value: actives, source };
+  else if (data.active_ingredients_verbatim) discarded.push('active ingredients: not found on the cited page');
 
   const cals = parseCalorieText(data.calorie_statement_verbatim).filter((c) => pages.some((p) => p.raw.includes(String(c.kcal)) || p.raw.includes(c.kcal.toLocaleString('en-US'))));
   if (cals.length) facts.calories = { value: cals, source };

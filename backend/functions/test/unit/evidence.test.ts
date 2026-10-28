@@ -1,0 +1,167 @@
+// Mocked unit tests for the evidence layer: nutrition context, supplements, cited explanations,
+// database label images and call diagnostics. Network calls are stubbed; inputs are TEST FIXTUREs.
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { nutritionContext, nutritionNotes } from '../../src/domain/nutritionContext';
+import { activesFromGuarantees, assessSupplement, describeAmount, parseActiveIngredients, supplementPurposes } from '../../src/domain/supplements';
+import { assessGeneral } from '../../src/domain/score';
+import { classifyScope } from '../../src/domain/scope';
+import type { GuaranteedAnalysisEntry } from '../../src/domain/types';
+import { explainTerms, explanationKey, needsExplanation } from '../../src/knowledge/explain';
+import { candidateImages, fullResolution } from '../../src/sources/labelImages';
+import { currentCalls, runWithCallLog, sanitizeUrl } from '../../src/util/diagnostics';
+import { httpRequest } from '../../src/util/http';
+import { facts, SRC } from '../helpers/fixtures';
+
+const GA: GuaranteedAnalysisEntry[] = [
+  { nutrient: 'crude_protein', label: 'Crude Protein', qualifier: 'min', value: 30, unit: '%' },
+  { nutrient: 'crude_fat', label: 'Crude Fat', qualifier: 'min', value: 15, unit: '%' },
+  { nutrient: 'crude_fiber', label: 'Crude Fiber', qualifier: 'max', value: 4, unit: '%' },
+  { nutrient: 'moisture', label: 'Moisture', qualifier: 'max', value: 10, unit: '%' },
+  { nutrient: 'ash', label: 'Ash', qualifier: 'max', value: 8, unit: '%' },
+];
+const adultCat = { text: 'x', type: 'complete' as const, species: 'cat' as const, lifeStages: ['adult_maintenance' as const], method: 'formulation' as const, largeSizeGrowth: null, style: 'aafco' as const };
+
+afterEach(() => vi.unstubAllGlobals());
+
+describe('nutrition context', () => {
+  it('explains each line and compares dry matter with the AAFCO minimum for the claimed life stage', () => {
+    const notes = nutritionNotes(GA, { species: 'cat', category: 'complete_food', adequacy: adultCat, calories: [{ kcal: 4000, per: 'kg' }] });
+    const protein = notes.find((n) => n.nutrient === 'crude_protein')!;
+    expect(protein.meaning).toMatch(/lab method/);
+    expect(protein.meaning).toMatch(/at least/);
+    expect(protein.context).toMatch(/≈ 33.3% of dry matter/);
+    // 4,000 kcal/kg as fed at 10% moisture ≈ 4,444 kcal/kg DM → AAFCO minimum scales to ≈ 28.9%
+    expect(protein.context).toMatch(/AAFCO's minimum for cat foods for adult maintenance is 26% of dry matter \(≈ 28.9% at this food's energy density\); by this estimate the food is at or above it/);
+    expect(notes.find((n) => n.nutrient === 'moisture')!.context).toBe('');
+  });
+  it('flags an estimate below the minimum as approximate, not as a fault', () => {
+    const low = GA.map((e) => (e.nutrient === 'crude_protein' ? { ...e, value: 20 } : e));
+    const n = nutritionNotes(low, { species: 'cat', category: 'complete_food', adequacy: adultCat })[0];
+    expect(n.context).toMatch(/below it\. Label guarantees are minimums/);
+  });
+  it('gives no AAFCO comparison for treats or without a life-stage claim', () => {
+    expect(nutritionNotes(GA, { species: 'cat', category: 'treat', adequacy: adultCat })[0].context).not.toMatch(/AAFCO/);
+    expect(nutritionNotes(GA, { species: 'cat', category: 'complete_food' })[0].context).not.toMatch(/AAFCO/);
+  });
+  it('estimates carbohydrate by difference only when every input is listed', () => {
+    expect(nutritionContext(GA, [{ kcal: 3800, per: 'kg' }])).toEqual([
+      'Energy: ≈ 380 kcal per 100 g as sold (≈ 422 kcal per 100 g of dry matter). Calculated from the calorie statement.',
+      'Estimated carbohydrate: ≈ 33% as sold (≈ 36.7% of dry matter), calculated by difference. Label minimums and maximums make this an estimate.',
+    ]);
+    expect(nutritionContext(GA.filter((e) => e.nutrient !== 'ash'), undefined)).toEqual([]);
+  });
+});
+
+describe('supplements', () => {
+  it('parses active ingredients with amounts and serving', () => {
+    expect(parseActiveIngredients('Active Ingredients per Chew: Glucosamine HCl (Shellfish) 500 mg, MSM 250 mg; Vitamin E 20 IU. Inactive Ingredients: Brewers Yeast, Glycerin')).toEqual([
+      { name: 'Glucosamine HCl (Shellfish)', amount: 500, unit: 'mg', per: 'chew' },
+      { name: 'MSM', amount: 250, unit: 'mg', per: 'chew' },
+      { name: 'Vitamin E', amount: 20, unit: 'iu', per: 'chew' },
+    ]);
+    expect(parseActiveIngredients('Active ingredients: Bacillus coagulans 2 billion CFU per scoop')).toEqual([{ name: 'Bacillus coagulans', amount: 2, unit: 'billion cfu', per: 'scoop' }]);
+    expect(parseActiveIngredients('Chicken, rice')).toEqual([]);
+    expect(describeAmount({ name: 'MSM', amount: 1500, unit: 'mg', per: 'chew' })).toBe('1,500 mg per chew');
+    expect(describeAmount({ name: 'MSM', amount: null, unit: null, per: null })).toBe('amount not stated');
+  });
+  it('reads purposes from the label and database, never from the pet', () => {
+    const f = facts({ productName: { value: 'TEST FIXTURE Calming Chews', source: SRC }, classificationSignals: [{ text: 'en:dog-supplements', source: 't' }, { text: 'en:hip-and-joint-supplements', source: 't' }] });
+    expect(supplementPurposes(f).map((p) => `${p.key}:${p.evidence}`)).toEqual(['joint:Database categories', 'calming:Product name']);
+  });
+  it('is never empty: missing actives are stated, limitations are always present', () => {
+    const f = facts({ productName: { value: 'TEST FIXTURE Skin & Coat Supplement', source: SRC }, ingredientsText: '', classificationSignals: [{ text: 'en:cat-supplements', source: 't' }], adequacyText: '' });
+    const a = assessSupplement({ ...f, ingredientsText: undefined, ingredients: undefined, guaranteedAnalysis: undefined }, []);
+    expect(a.purposes[0].key).toBe('skin_coat');
+    expect(a.actives).toEqual([]);
+    expect(a.warnings.map((w) => w.rule)).toEqual(['S-ACTIVES']);
+    expect(a.limitations.length).toBe(3);
+    expect(a.summary).toMatch(/Active ingredients aren’t available yet/);
+  });
+  it('falls back to mg/IU/CFU lines in the guaranteed analysis', () => {
+    expect(activesFromGuarantees([{ nutrient: 'other', label: 'Glucosamine', qualifier: 'min', value: 500, unit: 'mg' }, GA[0]])).toEqual([{ name: 'Glucosamine', amount: 500, unit: 'mg', per: null }]);
+  });
+  it('is attached to the general assessment of a supplement, with documented safety notes', () => {
+    const f = facts({
+      productName: { value: 'TEST FIXTURE Dental Chews', source: SRC },
+      ingredientsText: 'Active Ingredients per Chew: Zinc Gluconate 5 mg. Inactive Ingredients: glycerin, xylitol',
+      classificationSignals: [{ text: 'en:dog-supplements', source: 't' }],
+      adequacyText: '',
+    });
+    const g = assessGeneral(f, classifyScope({ origin: 'opff', categoriesTags: ['en:dog-supplements'], texts: ['TEST FIXTURE Dental Chews'] }));
+    expect(g.scoreApplicable).toBe(false);
+    expect(g.supplement!.actives[0]).toMatchObject({ name: 'Zinc Gluconate', amountText: '5 mg per chew', evidence: 'not_reviewed' });
+    expect(g.supplement!.warnings.some((w) => w.kind === 'alert' && /xylitol/i.test(w.text))).toBe(true);
+    expect(g.findings.some((x) => x.rule === 'G-GA' && x.kind === 'missing')).toBe(false);
+  });
+});
+
+function openAiResponse(items: unknown[], citations: string[]) {
+  return {
+    output: [
+      { type: 'web_search_call' },
+      { type: 'message', content: [{ type: 'output_text', text: JSON.stringify({ items }), annotations: citations.map((url) => ({ type: 'url_citation', url, title: 't' })) }] },
+    ],
+  };
+}
+
+describe('cited explanations', () => {
+  it('keeps an explanation only when its quote is on the cited page', async () => {
+    const quote = 'Carrageenan is a thickener extracted from red seaweed and used in canned foods.';
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.startsWith('https://api.openai.com/')) {
+        return new Response(JSON.stringify(openAiResponse([
+          { term: 'carrageenan', role: 'thickener', summary: 'A seaweed-derived thickener used in wet foods.', citation_url: 'https://www.merckvetmanual.com/test', citation_title: 'Test page', citation_quote: quote },
+          { term: 'sodium hexametaphosphate', role: 'dental additive', summary: 'Binds calcium in saliva.', citation_url: 'https://www.merckvetmanual.com/test', citation_title: 'Test page', citation_quote: 'This sentence is not on the page at all, so it must be rejected.' },
+          { term: 'guar gum', role: 'thickener', summary: 'A thickener.', citation_url: 'https://random-blog.example/guar', citation_title: 'Blog', citation_quote: 'Guar gum is a thickener used in many pet foods and treats.' },
+        ], ['https://www.merckvetmanual.com/test'])), { status: 200 });
+      }
+      return new Response(`<html><body><p>${quote}</p><script>ignored()</script></body></html>`, { status: 200 });
+    }));
+    const out = await explainTerms({ apiKey: 'k', model: 'm', species: 'dog', terms: [
+      { term: 'carrageenan', kind: 'ingredient' }, { term: 'sodium hexametaphosphate', kind: 'ingredient' }, { term: 'guar gum', kind: 'ingredient' }, { term: 'beet pulp', kind: 'ingredient' },
+    ], userAgent: 'test', now: new Date('2026-10-28T00:00:00Z') });
+    expect(out.map((e) => `${e.term}:${e.status}:${e.reason}`)).toEqual([
+      'carrageenan:verified:',
+      'sodium hexametaphosphate:unverified:quote not found on the cited page',
+      'guar gum:not_found:cited page is not on the allowed list',
+      'beet pulp:not_found:no explanation returned',
+    ]);
+    expect(out[0]).toMatchObject({ key: 'dog_ingredient_carrageenan', sourceUrl: 'https://www.merckvetmanual.com/test', quote });
+    expect(out[1].summary).toBe(''); // unverified text is never kept
+  });
+  it('does not pay to explain plain whole foods', () => {
+    expect(needsExplanation('Chicken', 'ingredient')).toBe(false);
+    expect(needsExplanation('Brown rice', 'ingredient')).toBe(false);
+    expect(needsExplanation('Menadione sodium bisulfite complex', 'ingredient')).toBe(true);
+    expect(needsExplanation('Salmon oil', 'active')).toBe(true);
+    expect(explanationKey('cat', 'active', 'L-Lysine HCl (99%)')).toBe('cat_active_l-lysine-hcl');
+  });
+});
+
+describe('database label images', () => {
+  it('uses only full-resolution images from the database image hosts', () => {
+    expect(fullResolution('https://images.openpetfoodfacts.org/images/products/123/ingredients_en.5.400.jpg')).toBe('https://images.openpetfoodfacts.org/images/products/123/ingredients_en.5.full.jpg');
+    expect(candidateImages({ image_ingredients_url: 'https://images.openpetfoodfacts.org/a/ingredients_en.3.400.jpg', image_nutrition_url: 'https://evil.example/n.jpg' }, ['ingredients', 'nutrition'])).toEqual([
+      { purpose: 'ingredients', url: 'https://images.openpetfoodfacts.org/a/ingredients_en.3.full.jpg' },
+    ]);
+    expect(candidateImages({ image_ingredients_url: 'https://images.openpetfoodfacts.org/a/i.400.jpg' }, ['nutrition'])).toEqual([]);
+  });
+});
+
+describe('call diagnostics', () => {
+  it('records each attempt without query strings, headers or bodies', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response('{}', { status: url.includes('missing') ? 404 : 200 })));
+    const calls = await runWithCallLog(async () => {
+      await httpRequest('https://world.openpetfoodfacts.org/api/v2/product/0012345678905?fields=code', { source: 'OPFF', headers: { Authorization: 'Bearer secret' } });
+      await httpRequest('https://api.fda.gov/missing.json?search=brand&api_key=SECRET', { source: 'openFDA', acceptStatuses: [404] });
+      return currentCalls();
+    });
+    expect(calls.map(({ ms: _ms, ...c }) => c)).toEqual([
+      { source: 'OPFF', host: 'world.openpetfoodfacts.org', path: '/api/v2/product/:n', status: 200, outcome: 'ok', attempt: 1 },
+      { source: 'openFDA', host: 'api.fda.gov', path: '/missing.json', status: 404, outcome: 'not_found', attempt: 1 },
+    ]);
+    expect(JSON.stringify(calls)).not.toMatch(/secret|SECRET|api_key|search=/);
+    expect(currentCalls()).toEqual([]); // nothing recorded outside a job
+    expect(sanitizeUrl('not a url')).toEqual({ host: 'invalid-url', path: '' });
+  });
+});

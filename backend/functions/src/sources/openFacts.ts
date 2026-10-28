@@ -34,6 +34,8 @@ const FIELDS = [
   'lang',
   'nutriments',
   'image_front_url',
+  'image_ingredients_url',
+  'image_nutrition_url',
   'quantity',
   'last_modified_t',
 ].join(',');
@@ -53,6 +55,8 @@ export interface OpenFactsProduct {
   lang?: string;
   nutriments?: Record<string, unknown>;
   image_front_url?: string;
+  image_ingredients_url?: string;
+  image_nutrition_url?: string;
   quantity?: string;
   last_modified_t?: number;
 }

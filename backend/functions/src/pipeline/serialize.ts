@@ -6,7 +6,60 @@ import { evidenceLabel } from '../domain/score';
 import { describeCalories, describeEntry, dryMatterPercent, findNutrient } from '../domain/nutrition';
 import type { GeneralAssessment, PersonalAssessment, ProductFacts, RecallCheck, ScopeResult } from '../domain/types';
 import type { ResultState } from '../domain/summary';
+import { summarizeCalls, type SourceCall } from '../util/diagnostics';
 import type { PhotoRequest } from './facts';
+
+/** What one job (scan, retry, photo, personal refresh) did; saved as `lastJob` with its sanitized calls. */
+export interface JobInfo {
+  kind: 'scan' | 'retry' | 'photo' | 'refresh';
+  traceId: string;
+  startedAt: Date;
+  productCache: 'hit' | 'miss' | 'stale_used' | 'none';
+  recallCache: 'hit' | 'miss' | 'skipped';
+  explanationsCached: number;
+  explanationsNew: number;
+  evidenceNotes: string[];
+}
+
+export function jobFields(job: JobInfo, calls: SourceCall[], finishedAt: Date): Record<string, unknown> {
+  const counts = summarizeCalls(calls);
+  return {
+    lastJob: {
+      kind: job.kind,
+      traceId: job.traceId,
+      startedAt: job.startedAt,
+      finishedAt,
+      productCache: job.productCache,
+      recallCache: job.recallCache,
+      explanationsCached: job.explanationsCached,
+      explanationsNew: job.explanationsNew,
+      ...counts,
+    },
+    evidenceNotes: job.evidenceNotes,
+    sourceChecks: calls.map((c) => ({ source: c.source, host: c.host, path: c.path, httpStatus: c.status ?? 0, outcome: c.outcome, ms: c.ms, attempt: c.attempt })),
+  };
+}
+
+/** Ingredient notes and supplement evidence notes, with their explanations (re-written when explanations arrive). */
+export function explanationFields(general: GeneralAssessment, status: string): Record<string, unknown> {
+  return {
+    explanationsStatus: status,
+    ingredientNotes: general.ingredientNotes.map((n) => ({
+      name: n.name,
+      position: n.position,
+      status: n.status,
+      note: n.note,
+      sourceTitle: n.sourceTitle ?? '',
+      sourceUrl: n.sourceUrl ?? '',
+      explanationKind: n.explanationKind,
+      explanation: n.explanation ?? '',
+      explanationSourceTitle: n.explanationSourceTitle ?? '',
+      explanationSourceUrl: n.explanationSourceUrl ?? '',
+      explanationQuote: n.explanationQuote ?? '',
+    })),
+    supplementActives: (general.supplement?.actives ?? []).map((a) => ({ ...a })),
+  };
+}
 
 const RESULT_LABELS: Record<ResultState, string> = {
   strong: 'Strong label information',
@@ -59,14 +112,26 @@ export function resultFields(args: {
     kbVersion: general.kbVersion,
     scoreComponents: general.components.map((c) => ({ key: c.key, label: c.label, points: c.points, maxPoints: c.maxPoints, status: c.status, explanation: c.explanation })),
     generalFindings: general.findings.map((f) => ({ kind: f.kind, text: f.text, evidence: f.evidence, rule: f.rule })),
-    ingredientNotes: general.ingredientNotes.map((n) => ({ name: n.name, position: n.position, status: n.status, note: n.note, sourceUrl: n.sourceUrl ?? '' })),
     ingredientsText: facts.ingredientsText?.value ?? '',
     ingredientsSource: facts.ingredientsText ? evidenceLabel(facts.ingredientsText.source) : '',
-    nutrition: ga.map((e) => {
+    nutrition: ga.map((e, i) => {
       const dm = e.unit === '%' && e.nutrient !== 'moisture' ? dryMatterPercent(e.value, moisture) : null;
-      return { label: e.label, qualifier: e.qualifier, value: e.value, unit: e.unit, display: describeEntry(e), dryMatter: dm === null ? '' : `≈ ${dm}% dry matter (calculated)` };
+      const n = general.nutritionNotes[i];
+      return {
+        label: e.label,
+        qualifier: e.qualifier,
+        value: e.value,
+        unit: e.unit,
+        display: describeEntry(e),
+        dryMatter: dm === null ? '' : `≈ ${dm}% dry matter (calculated)`,
+        meaning: n?.meaning ?? '',
+        context: n?.context ?? '',
+        contextSource: n?.contextSource ?? '',
+      };
     }),
     nutritionSource: facts.guaranteedAnalysis ? evidenceLabel(facts.guaranteedAnalysis.source) : '',
+    nutritionContext: general.nutritionContext,
+    activeIngredientsSource: facts.activeIngredients ? evidenceLabel(facts.activeIngredients.source) : '',
     caloriesText: (facts.calories?.value ?? []).map(describeCalories).join('; '),
     adequacyText: adequacy?.text ?? '',
     adequacySummary: adequacy
@@ -95,6 +160,13 @@ export function resultFields(args: {
     personalFindings: personal.findings.map((f) => ({ kind: f.kind, text: f.text, evidence: f.evidence, rule: f.rule })),
     personalUnresolved: personal.unresolved,
     personalTrace: personal.trace.map((t) => ({ ...t })),
+
+    supplementSummary: general.supplement?.summary ?? '',
+    supplementPurposes: (general.supplement?.purposes ?? []).map((p) => ({ ...p })),
+    supplementActivesSource: general.supplement?.activesSource ?? '',
+    supplementWarnings: (general.supplement?.warnings ?? []).map((f) => ({ kind: f.kind, text: f.text, evidence: f.evidence, rule: f.rule })),
+    supplementLimitations: general.supplement?.limitations ?? [],
+    supplementQualitySignals: general.supplement?.qualitySignals ?? [],
 
     summary: args.summary,
     missingInfo: args.photoRequests.map((p) => p.purpose),

@@ -1,25 +1,50 @@
 name: deploy-backend
-# Deploys Purrbi's functions (codebase "purrbi"), Firestore rules/indexes and Storage rules.
-# Requires the repository secret FIREBASE_SERVICE_ACCOUNT_PURRBI_DEV (service-account JSON key) and
-# the Secret Manager secret OPENAI_API_KEY in the target project.
+# Manually started DEVELOPMENT deploy of Purrbi's backend to Firebase project purrbi-49c21:
+# functions (codebase "purrbi"), Firestore rules and indexes, Storage rules.
+# GitHub signs in to Google Cloud with a short-lived OIDC token (Workload Identity Federation) as
+# purrbi-deployer; there is no service-account key. One-time setup by the project Owner:
+# backend/tools/gcp/setup-dev-access.sh. The Google side only accepts manually started runs of this
+# workflow ("deploy-backend") on main of a009v795-sudo/purrbi.
 on:
   workflow_dispatch:
     inputs:
-      project:
-        description: Firebase project id
+      confirm_project:
+        description: Type the development project id to deploy to
         required: true
-        default: purrbi-dev
+        default: purrbi-49c21
+
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      id-token: write # OIDC token for Workload Identity Federation
     defaults:
       run:
         working-directory: backend/functions
     steps:
       - uses: actions/checkout@v4
+
+      - name: Read deploy configuration
+        id: cfg
+        working-directory: backend
+        run: |
+          PROJECT_ID=$(jq -r .projectId deploy-config.json)
+          PROJECT_NUMBER=$(jq -r .projectNumber deploy-config.json)
+          if [ "${{ inputs.confirm_project }}" != "$PROJECT_ID" ]; then
+            echo "::error::confirm_project must be $PROJECT_ID (development project)"; exit 1
+          fi
+          if [ -z "$PROJECT_NUMBER" ]; then
+            echo "::error::projectNumber is empty in backend/deploy-config.json (run backend/tools/gcp/setup-dev-access.sh first)"; exit 1
+          fi
+          echo "project_id=$PROJECT_ID" >> "$GITHUB_OUTPUT"
+          echo "provider=$(jq -r .workloadIdentityProvider deploy-config.json | sed "s/{projectNumber}/$PROJECT_NUMBER/")" >> "$GITHUB_OUTPUT"
+          echo "deployer=$(jq -r .deployerServiceAccount deploy-config.json)" >> "$GITHUB_OUTPUT"
+
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -27,11 +52,35 @@ jobs:
           cache-dependency-path: backend/functions/package-lock.json
       - run: npm ci
       - run: npm run build
-      - run: npm test
-      - uses: google-github-actions/auth@v2
+      - name: Unit tests (must pass before deploying)
+        run: npm test
+
+      - name: Sign in to Google Cloud (OIDC, no key)
+        uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_PURRBI_DEV }}
+          workload_identity_provider: ${{ steps.cfg.outputs.provider }}
+          service_account: ${{ steps.cfg.outputs.deployer }}
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Preflight — deploy identity permissions
+        working-directory: backend/tools
+        run: GCP_ACCESS_TOKEN="$(gcloud auth print-access-token)" PROJECT_ID="${{ steps.cfg.outputs.project_id }}" node gcp-check.mjs preflight
+
       - run: npm install -g firebase-tools@15.34.1
-      - name: Deploy
+      - name: Deploy (functions:purrbi, Firestore rules + indexes, Storage rules)
         working-directory: backend
-        run: firebase deploy --only functions:purrbi,firestore:rules,firestore:indexes,storage --project "${{ inputs.project }}" --non-interactive --force
+        run: firebase deploy --only functions:purrbi,firestore:rules,firestore:indexes,storage --project "${{ steps.cfg.outputs.project_id }}" --non-interactive --force
+
+      - name: Verify the deployed backend matches the repository
+        if: always()
+        working-directory: backend/tools
+        env:
+          REPORT_PATH: ${{ runner.temp }}/deploy-verify-report.json
+        run: GCP_ACCESS_TOKEN="$(gcloud auth print-access-token)" PROJECT_ID="${{ steps.cfg.outputs.project_id }}" node gcp-check.mjs verify
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: deploy-verify-report
+          path: ${{ runner.temp }}/deploy-verify-report.json
+          if-no-files-found: ignore

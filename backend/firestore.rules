@@ -118,7 +118,10 @@ service cloud.firestore {
       }
     }
 
+    // Server-only: usage counters, AI budget, enrichment bookkeeping, cached cited explanations.
     match /usage/{id} { allow read, write: if false; }
     match /system/{id} { allow read, write: if false; }
+    match /productMeta/{id} { allow read, write: if false; }
+    match /knowledge/{id} { allow read, write: if false; }
   }
 }

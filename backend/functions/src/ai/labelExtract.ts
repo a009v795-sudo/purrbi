@@ -5,10 +5,10 @@ import { sameGtin } from '../domain/barcode';
 import { parseAdequacyStatement } from '../domain/adequacy';
 import { parseIngredientList } from '../domain/ingredients';
 import { normalizeUnit, nutrientKeyFromLabel, parseCalorieText, qualifierFrom, validateGuaranteedAnalysis } from '../domain/nutrition';
-import type { AdequacyStatement, CalorieStatement, GuaranteedAnalysisEntry, ProductSpecies } from '../domain/types';
+import type { ActiveIngredient, AdequacyStatement, CalorieStatement, GuaranteedAnalysisEntry, ProductSpecies } from '../domain/types';
 import { chatJson } from './openai';
 
-export const LABEL_EXTRACTION_VERSION = 'label-extract-1.0.0';
+export const LABEL_EXTRACTION_VERSION = 'label-extract-1.1.0';
 
 const nullableString = { type: ['string', 'null'] };
 
@@ -27,6 +27,7 @@ export const LABEL_SCHEMA = {
     'calorie_statement_verbatim',
     'adequacy_statement_verbatim',
     'feeding_directions_verbatim',
+    'active_ingredients',
     'barcode_digits',
     'uncertain_fields',
   ],
@@ -34,7 +35,7 @@ export const LABEL_SCHEMA = {
     legible: { type: 'boolean' },
     panels_visible: {
       type: 'array',
-      items: { type: 'string', enum: ['front', 'ingredients', 'guaranteed_analysis', 'adequacy_statement', 'calorie_statement', 'feeding_directions', 'barcode', 'other'] },
+      items: { type: 'string', enum: ['front', 'ingredients', 'active_ingredients', 'guaranteed_analysis', 'adequacy_statement', 'calorie_statement', 'feeding_directions', 'barcode', 'other'] },
     },
     product_name: nullableString,
     brand: nullableString,
@@ -58,6 +59,15 @@ export const LABEL_SCHEMA = {
     calorie_statement_verbatim: nullableString,
     adequacy_statement_verbatim: nullableString,
     feeding_directions_verbatim: nullableString,
+    active_ingredients: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['name', 'amount', 'unit', 'per'],
+        properties: { name: { type: 'string' }, amount: { type: ['number', 'null'] }, unit: nullableString, per: nullableString },
+      },
+    },
     barcode_digits: nullableString,
     uncertain_fields: { type: 'array', items: { type: 'string' } },
   },
@@ -75,6 +85,7 @@ export interface RawLabelExtraction {
   calorie_statement_verbatim: string | null;
   adequacy_statement_verbatim: string | null;
   feeding_directions_verbatim: string | null;
+  active_ingredients?: { name: string; amount: number | null; unit: string | null; per: string | null }[];
   barcode_digits: string | null;
   uncertain_fields: string[];
 }
@@ -86,6 +97,7 @@ const SYSTEM = [
   'Do not infer, complete, correct, summarise or translate. Keep ingredient order and wording exactly as printed, including parentheses and percentages.',
   'For the guaranteed analysis / analytical constituents, give each printed line with its qualifier (min/max when printed), number and unit exactly as printed.',
   'Copy the nutritional adequacy statement (e.g. "complete and balanced", AAFCO, "complete/complementary pet food") and calorie statement verbatim.',
+  'For supplements, list each "active ingredient" line with its printed amount, unit and serving ("per chew", "per scoop"); use null for anything not printed.',
   'barcode_digits: the digits printed under a barcode if fully legible, otherwise null.',
   'List the name of any field you are not certain about in uncertain_fields.',
 ].join(' ');
@@ -104,6 +116,7 @@ export interface ValidatedLabel {
   calories: CalorieStatement[];
   adequacy: AdequacyStatement | null;
   feedingDirections: string | null;
+  activeIngredients: ActiveIngredient[];
   uncertainFields: string[];
   rejected: string[];
   model: string;
@@ -124,6 +137,7 @@ export function validateLabelExtraction(raw: RawLabelExtraction, scanGtin14: str
     calories: [],
     adequacy: null,
     feedingDirections: null,
+    activeIngredients: [],
     uncertainFields: raw.uncertain_fields ?? [],
     rejected: [],
     model,
@@ -148,7 +162,11 @@ export function validateLabelExtraction(raw: RawLabelExtraction, scanGtin14: str
   if (raw.calorie_statement_verbatim && !calories.length) rejected.push('calorie statement: could not be parsed');
   const adequacy = parseAdequacyStatement(raw.adequacy_statement_verbatim);
   const species: ProductSpecies = raw.species_claim === 'not_visible' ? 'unknown' : raw.species_claim;
-  const anything = ingredients.length || ga.length || calories.length || adequacy || raw.product_name;
+  const actives: ActiveIngredient[] = (raw.active_ingredients ?? [])
+    .filter((a) => a.name?.trim())
+    .map((a) => ({ name: a.name.trim().slice(0, 80), amount: typeof a.amount === 'number' && Number.isFinite(a.amount) && a.amount >= 0 ? a.amount : null, unit: a.unit?.trim() || null, per: a.per?.trim() || null }))
+    .slice(0, 30);
+  const anything = ingredients.length || ga.length || calories.length || adequacy || raw.product_name || actives.length;
   if (!anything) return { ...empty, reason: 'No label details were readable in this photo. Retake it closer to the panel you need.' };
   return {
     status: 'processed',
@@ -164,6 +182,7 @@ export function validateLabelExtraction(raw: RawLabelExtraction, scanGtin14: str
     calories,
     adequacy,
     feedingDirections: raw.feeding_directions_verbatim?.trim() || null,
+    activeIngredients: actives,
     uncertainFields: raw.uncertain_fields ?? [],
     rejected,
     model,

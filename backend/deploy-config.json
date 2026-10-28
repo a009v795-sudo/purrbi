@@ -1,0 +1,17 @@
+{
+  "projectId": "purrbi-49c21",
+  "projectNumber": "",
+  "region": "us-central1",
+  "firestoreLocation": "us-central1",
+  "workloadIdentityProvider": "projects/{projectNumber}/locations/global/workloadIdentityPools/github/providers/purrbi-github",
+  "deployerServiceAccount": "purrbi-deployer@purrbi-49c21.iam.gserviceaccount.com",
+  "runtimeServiceAccount": "purrbi-functions@purrbi-49c21.iam.gserviceaccount.com",
+  "secrets": ["OPENAI_API_KEY"],
+  "functions": {
+    "processScanJob": { "secrets": ["OPENAI_API_KEY"] },
+    "processScanPhoto": { "secrets": ["OPENAI_API_KEY"] },
+    "onScanRequestUpdated": { "secrets": ["OPENAI_API_KEY"] },
+    "onScanDeleted": { "secrets": [] },
+    "cleanupDeletedUser": { "secrets": [] }
+  }
+}

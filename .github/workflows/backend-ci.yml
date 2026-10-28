@@ -9,6 +9,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: backend/functions
@@ -32,9 +34,15 @@ jobs:
       - name: Emulator tests (security rules + scan job, mocked sources)
         working-directory: backend
         run: firebase emulators:exec --only firestore,storage --project demo-purrbi "cd functions && npx vitest run test/emulator"
-      - name: Trigger end-to-end (real function code, real sources)
+      - name: Trigger end-to-end (real function code, real sources, no AI)
         working-directory: backend
+        env:
+          E2E_REPORT_PATH: ${{ runner.temp }}/emulator-e2e-report.json
         run: |
           printf 'OPENAI_API_KEY=emulator-placeholder-not-a-real-key\n' > functions/.secret.local
-          printf 'AI_ENABLED=false\n' > functions/.env.local
+          printf 'AI_ENABLED=false\nSOURCE_USER_AGENT=Purrbi/0.1 (CI emulator test; contact@valenciainnovations.com)\n' > functions/.env.local
           firebase emulators:exec --only auth,firestore,functions,storage --project demo-purrbi "cd functions && npx vitest run test/e2e"
+      - name: Publish end-to-end report
+        if: always()
+        working-directory: backend/tools
+        run: node report.mjs "Emulator end-to-end report" "${{ runner.temp }}/emulator-e2e-report.json"

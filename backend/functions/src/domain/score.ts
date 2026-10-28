@@ -11,8 +11,10 @@
 import { lifeStageLabel } from './adequacy';
 import { ingredientNotes, KB_VERSION } from './kb';
 import { describeCalories, findNutrient, hasCoreGuaranteedAnalysis } from './nutrition';
+import { nutritionContext, nutritionNotes } from './nutritionContext';
 import { parseIngredientList, type ParsedIngredient } from './ingredients';
 import { categoryLabel } from './scope';
+import { assessSupplement } from './supplements';
 import type {
   Finding,
   GeneralAssessment,
@@ -32,6 +34,8 @@ export function evidenceLabel(src: SourceRef | undefined): string {
   switch (src.sourceType) {
     case 'database':
       return `${src.sourceName} record`;
+    case 'database_image':
+      return `${src.sourceName} (read by AI, not reviewed)`;
     case 'user_label':
       return 'Your label photo (read by AI, not reviewed)';
     case 'manufacturer':
@@ -119,7 +123,7 @@ export function assessGeneral(facts: ProductFacts, scope: ScopeResult): GeneralA
   const species = speciesList(scope.species);
   const notes = ingredientNotes(ingredients, species);
   const findings: Finding[] = [];
-  const base = { methodologyVersion: METHODOLOGY_VERSION, kbVersion: KB_VERSION, ingredientNotes: notes };
+  const base = { methodologyVersion: METHODOLOGY_VERSION, kbVersion: KB_VERSION, ingredientNotes: notes, nutritionNotes: [], nutritionContext: [], supplement: null };
 
   if (scope.status === 'out_of_scope') {
     findings.push({ kind: 'info', text: scope.reason, evidence: 'Product classification', rule: 'G-SCOPE' });
@@ -131,6 +135,16 @@ export function assessGeneral(facts: ProductFacts, scope: ScopeResult): GeneralA
   if (category === 'complete_food' && adequacy?.type === 'intermittent') {
     category = 'complementary';
     findings.push({ kind: 'review', text: 'The label says this is for intermittent or supplemental feeding, so it is assessed as a complementary product, not a complete diet.', evidence: evidenceLabel(facts.adequacy?.source), rule: 'G-CATEGORY' });
+  }
+
+  const explained = {
+    ...base,
+    nutritionNotes: category === 'supplement' ? [] : nutritionNotes(facts.guaranteedAnalysis?.value, { species: scope.species, category, adequacy, calories: facts.calories?.value }),
+    nutritionContext: category === 'supplement' ? [] : nutritionContext(facts.guaranteedAnalysis?.value, facts.calories?.value),
+    supplement: category === 'supplement' ? assessSupplement(facts, notes) : null,
+  };
+  if ([facts.ingredientsText, facts.guaranteedAnalysis, facts.adequacy, facts.calories, facts.activeIngredients].some((f) => f?.source.sourceType === 'database_image')) {
+    findings.push({ kind: 'info', text: 'Some details were read by AI from a label image published in the product database. Check them against the package.', evidence: 'Database label image', rule: 'G-DBIMAGE' });
   }
 
   // ---- General findings (pet-independent) ----
@@ -157,7 +171,7 @@ export function assessGeneral(facts: ProductFacts, scope: ScopeResult): GeneralA
     const m = findNutrient(ga, 'moisture');
     const parts = [p && `protein ${p.value}%`, f && `fat ${f.value}%`, fi && `fiber ${fi.value}%`, m && `moisture ${m.value}%`].filter(Boolean);
     if (parts.length) findings.push({ kind: 'info', text: `Guaranteed analysis: ${parts.join(', ')}.`, evidence: evidenceLabel(facts.guaranteedAnalysis?.source), rule: 'G-GA' });
-  } else {
+  } else if (category !== 'supplement') {
     findings.push({ kind: 'missing', text: 'Guaranteed analysis (protein, fat, fiber) is not available yet.', evidence: 'Missing evidence', rule: 'G-GA' });
   }
 
@@ -181,7 +195,7 @@ export function assessGeneral(facts: ProductFacts, scope: ScopeResult): GeneralA
 
   if (category === 'supplement') {
     return {
-      ...base,
+      ...explained,
       category,
       scoreApplicable: false,
       score: null,
@@ -249,7 +263,7 @@ export function assessGeneral(facts: ProductFacts, scope: ScopeResult): GeneralA
 
   if (missingForScore.length) {
     return {
-      ...base,
+      ...explained,
       category,
       scoreApplicable: true,
       score: null,
@@ -269,7 +283,7 @@ export function assessGeneral(facts: ProductFacts, scope: ScopeResult): GeneralA
   const provisional = components.some((c) => c.status === 'unverified');
   const b = band(score);
   return {
-    ...base,
+    ...explained,
     category,
     scoreApplicable: true,
     score,

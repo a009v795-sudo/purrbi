@@ -4,7 +4,7 @@
 //  - no penalties for grains, by-products, unfamiliar names or synthetic nutrients (WSAVA: ingredient
 //    lists alone do not establish food quality);
 //  - human-only evidence is not translated into cat/dog claims.
-// Every URL is checked by the CI link check (test/live/kbLinks.test.ts). Entries are drafts until a
+// Every URL is checked by the live link check (test/live/contract.test.ts, run on GitHub). Entries are drafts until a
 // veterinary reviewer signs them off (reviewStatus).
 import { containsTerm, type ParsedIngredient } from './ingredients';
 import type { IngredientNote, Species } from './types';
@@ -30,9 +30,9 @@ interface KbEntry {
 
 const SRC = {
   cfrPropyleneGlycol: { title: '21 CFR 589.1001 — Propylene glycol in or on cat food (eCFR)', url: 'https://www.ecfr.gov/current/title-21/chapter-I/subchapter-E/part-589/subpart-B/section-589.1001' },
-  fdaXylitol: { title: "FDA: Paws Off Xylitol; It's a Dog-Gone Danger!", url: 'https://www.fda.gov/consumers/consumer-updates/paws-xylitol-its-dog-gone-danger' },
+  fdaXylitol: { title: "FDA: Paws Off Xylitol; It's Dangerous for Dogs", url: 'https://www.fda.gov/consumers/consumer-updates/paws-xylitol-its-dangerous-dogs' },
   aspcaPeopleFoods: { title: 'ASPCA Animal Poison Control: People foods to avoid feeding your pets', url: 'https://www.aspca.org/pet-care/aspca-poison-control/people-foods-avoid-feeding-your-pets' },
-  fdaLabels: { title: 'FDA: Pet Food Labels — General', url: 'https://www.fda.gov/animal-veterinary/animal-health-literacy/pet-food-labels-general' },
+  fdaLabels: { title: 'FDA: Animal Food Labeling and Pet Food Claims', url: 'https://www.fda.gov/animal-veterinary/animal-food-feeds/animal-food-labeling-and-pet-food-claims' },
   fdaDcm: { title: 'FDA: Investigation into potential link between certain diets and canine dilated cardiomyopathy', url: 'https://www.fda.gov/animal-veterinary/outbreaks-and-advisories/fda-investigation-potential-link-between-certain-diets-and-canine-dilated-cardiomyopathy' },
 } satisfies Record<string, KbSource>;
 
@@ -189,10 +189,10 @@ function entryFor(ing: ParsedIngredient): KbEntry | undefined {
  * the most severe status across cats and dogs is used and the note says which species it applies to.
  */
 export function ingredientNotes(ingredients: ParsedIngredient[], species: Species[]): IngredientNote[] {
-  return ingredients.map((ing) => {
+  return ingredients.map((ing): IngredientNote => {
     const entry = entryFor(ing);
     if (!entry) {
-      return { name: ing.name, position: ing.position, status: 'unknown' as const, note: 'Not yet reviewed by Purrbi. Unknown is not the same as harmful.' };
+      return { name: ing.name, position: ing.position, status: 'unknown', note: 'Not yet reviewed by Purrbi. Unknown is not the same as harmful.', explanationKind: 'none' };
     }
     let status: IngredientNote['status'] = 'unknown';
     let note = '';
@@ -207,12 +207,12 @@ export function ingredientNotes(ingredients: ParsedIngredient[], species: Specie
       }
     }
     if (status === 'unknown') {
-      return { name: ing.name, position: ing.position, status: 'unknown' as const, note: 'Not yet reviewed by Purrbi for this species.' };
+      return { name: ing.name, position: ing.position, status: 'unknown', note: 'Not yet reviewed by Purrbi for this species.', explanationKind: 'none' };
     }
     if (species.length > 1 && forSpecies && (status === 'concern' || status === 'caution') && !entry.status[species.find((x) => x !== forSpecies)!]) {
       note = `${note} (Applies to ${forSpecies}s.)`;
     }
-    return { name: ing.name, position: ing.position, status, note, sourceUrl: entry.sources[0]?.url };
+    return { name: ing.name, position: ing.position, status, note, sourceUrl: entry.sources[0]?.url, sourceTitle: entry.sources[0]?.title, explanationKind: 'curated' };
   });
 }
 

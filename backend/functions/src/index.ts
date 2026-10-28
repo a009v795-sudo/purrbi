@@ -5,6 +5,7 @@ import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
 import { logger } from 'firebase-functions';
 import { defineBoolean, defineSecret, defineString } from 'firebase-functions/params';
+import { setGlobalOptions } from 'firebase-functions/v2';
 import { onDocumentCreated, onDocumentDeleted, onDocumentUpdated } from 'firebase-functions/v2/firestore';
 import * as functionsV1 from 'firebase-functions/v1';
 import { DEFAULT_LIMITS, type RuntimeConfig } from './pipeline/config';
@@ -15,12 +16,20 @@ const db = getFirestore();
 db.settings({ ignoreUndefinedProperties: true });
 
 const REGION = 'us-central1';
+// Every function runs as this dedicated identity (Firestore, the Storage bucket, Eventarc delivery and
+// the OpenAI secret only); see backend/tools/gcp/setup-dev-access.sh. "name@" expands to the project.
+const RUNTIME_SERVICE_ACCOUNT = 'purrbi-functions@';
+setGlobalOptions({ region: REGION, serviceAccount: RUNTIME_SERVICE_ACCOUNT });
+
 const OPENAI_API_KEY = defineSecret('OPENAI_API_KEY');
 const AI_ENABLED = defineBoolean('AI_ENABLED', { default: true });
-const RESEARCH_ENABLED = defineBoolean('RESEARCH_ENABLED', { default: false });
+const RESEARCH_ENABLED = defineBoolean('RESEARCH_ENABLED', { default: true });
+const DATABASE_IMAGES_ENABLED = defineBoolean('DATABASE_IMAGES_ENABLED', { default: true });
+const EXPLANATIONS_ENABLED = defineBoolean('EXPLANATIONS_ENABLED', { default: true });
 const VISION_MODEL = defineString('OPENAI_VISION_MODEL', { default: 'gpt-4o-mini' });
 const RESEARCH_MODEL = defineString('OPENAI_RESEARCH_MODEL', { default: 'gpt-4.1-mini' });
-const USER_AGENT = defineString('SOURCE_USER_AGENT', { default: 'Purrbi/0.1 (development build)' });
+const EXPLAIN_MODEL = defineString('OPENAI_EXPLAIN_MODEL', { default: 'gpt-4.1-mini' });
+const USER_AGENT = defineString('SOURCE_USER_AGENT', { default: 'Purrbi/0.1 (development build; contact@valenciainnovations.com)' });
 
 function config(): RuntimeConfig {
   return {
@@ -28,10 +37,13 @@ function config(): RuntimeConfig {
     openaiApiKey: () => OPENAI_API_KEY.value() || undefined,
     visionModel: VISION_MODEL.value(),
     researchModel: RESEARCH_MODEL.value(),
+    explainModel: EXPLAIN_MODEL.value(),
     aiEnabled: AI_ENABLED.value(),
     researchEnabled: RESEARCH_ENABLED.value(),
+    databaseImagesEnabled: DATABASE_IMAGES_ENABLED.value(),
+    explanationsEnabled: EXPLANATIONS_ENABLED.value(),
     productFreshDays: 30,
-    recallFreshHours: 12,
+    recallFreshHours: 24, // openFDA enforcement data is updated weekly
     limits: DEFAULT_LIMITS,
   };
 }
@@ -100,7 +112,7 @@ export const onScanDeleted = onDocumentDeleted({ document: 'users/{uid}/scans/{s
 });
 
 /** Account deletion removes the owner's documents, photos and usage counters. */
-export const cleanupDeletedUser = functionsV1.region(REGION).auth.user().onDelete(async (user) => {
+export const cleanupDeletedUser = functionsV1.runWith({ serviceAccount: RUNTIME_SERVICE_ACCOUNT }).region(REGION).auth.user().onDelete(async (user) => {
   await db.recursiveDelete(db.doc(`users/${user.uid}`));
   await getStorage().bucket().deleteFiles({ prefix: `users/${user.uid}/` });
   const usage = await db.collection('usage').where('uid', '==', user.uid).get();

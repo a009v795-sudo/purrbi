@@ -1,7 +1,11 @@
 // The scan job. The app creates users/{uid}/scans/{scanId} with {barcode, petId?, status: "queued"};
 // this module claims it, gathers evidence, assesses, and writes everything back to the same document.
-// Each failure keeps its own error code: a timeout, a quota stop or a failed save is never reported
-// as "product not found", and partial findings are kept.
+// Evidence order: saved product facts → pet database → the database's own label images (read by AI)
+// → manufacturer/web research → the owner's label photos. Each later step runs only when the earlier
+// ones left something important missing, and paid enrichment is attempted at most once per product
+// per freshness window. Each failure keeps its own error code: a timeout, a quota stop or a failed
+// save is never reported as "product not found", and partial findings are kept. Every outbound call
+// is recorded (sanitized) under the job's trace id.
 import { randomUUID } from 'node:crypto';
 import type { Firestore } from 'firebase-admin/firestore';
 import { extractLabel as extractLabelImpl, type ValidatedLabel } from '../ai/labelExtract';
@@ -10,26 +14,35 @@ import { personalize } from '../domain/personalize';
 import { classifyScope, type DatabaseOrigin } from '../domain/scope';
 import { assessGeneral } from '../domain/score';
 import { buildSummary, overallState } from '../domain/summary';
-import type { PetProfile, ProductFacts, RecallCheck, ScopeResult, SourceRef } from '../domain/types';
+import type { GeneralAssessment, PetProfile, ProductFacts, RecallCheck, ScopeResult, SourceRef } from '../domain/types';
+import { explainTerms as explainImpl, explanationKey, needsExplanation, type CitedExplanation, type ExplainRequest } from '../knowledge/explain';
+import { readDatabaseLabelImages as databaseImagesImpl } from '../sources/labelImages';
 import { checkRecalls as checkRecallsImpl } from '../sources/openfda';
 import { lookupOpenFacts as lookupOpenFactsImpl, openFactsToFacts, type OpenFactsDb, type OpenFactsLookup } from '../sources/openFacts';
 import { researchProduct as researchImpl, type ResearchOutcome } from '../sources/research';
+import { currentCalls, runWithCallLog } from '../util/diagnostics';
 import { SourceError } from '../util/http';
 import { SCAN_STATUS, type ErrorCode, type RuntimeConfig } from './config';
-import { fillMissing, labelToFacts, missingInfo, type PhotoRequest } from './facts';
-import { resultFields } from './serialize';
+import { enrichmentFacts, fillMissing, labelToFacts, missingInfo, type PhotoRequest } from './facts';
+import { explanationFields, jobFields, resultFields, type JobInfo } from './serialize';
 import {
   consumeAiBudget,
   consumeQuota,
+  FieldValue,
   QuotaError,
+  readExplanations,
   readLabelExtractions,
   readPet,
   readProduct,
+  readProductMeta,
   saveLabelExtraction,
   stripPrivate,
   Timestamp,
+  writeExplanations,
   writeProduct,
+  writeProductMeta,
   writeRecall,
+  type ProductMeta,
   type StoredProduct,
 } from './store';
 
@@ -44,6 +57,8 @@ export interface Sources {
   checkRecalls: typeof checkRecallsImpl;
   research: (o: Parameters<typeof researchImpl>[0]) => Promise<ResearchOutcome>;
   extractLabel: (o: Parameters<typeof extractLabelImpl>[0]) => Promise<ValidatedLabel>;
+  databaseImages: (o: Parameters<typeof databaseImagesImpl>[0]) => ReturnType<typeof databaseImagesImpl>;
+  explain: (o: Parameters<typeof explainImpl>[0]) => Promise<CitedExplanation[]>;
 }
 
 export const realSources: Sources = {
@@ -51,6 +66,8 @@ export const realSources: Sources = {
   checkRecalls: checkRecallsImpl,
   research: researchImpl,
   extractLabel: extractLabelImpl,
+  databaseImages: databaseImagesImpl,
+  explain: explainImpl,
 };
 
 export interface Deps {
@@ -73,6 +90,11 @@ class JobError extends Error {
 }
 
 const scanPath = (uid: string, scanId: string) => `users/${uid}/scans/${scanId}`;
+const ageDays = (d: Date | null | undefined, now: Date) => (d ? (now.getTime() - d.getTime()) / 86400000 : Infinity);
+
+function newJob(kind: JobInfo['kind'], traceId: string, now: Date): JobInfo {
+  return { kind, traceId, startedAt: now, productCache: 'none', recallCache: 'skipped', explanationsCached: 0, explanationsNew: 0, evidenceNotes: [] };
+}
 
 async function setStatus(deps: Deps, uid: string, scanId: string, status: string, message: string, progress: number) {
   await deps.db.doc(scanPath(uid, scanId)).update({ status, statusMessage: message, progress, updatedAt: Timestamp.fromDate(deps.now()) });
@@ -99,8 +121,12 @@ function errorMessage(code: ErrorCode, detail?: string): string {
 
 // ---------------------------------------------------------------------------------------------
 
-/** Entry point for a newly created (or retried) scan request. */
-export async function processScan(deps: Deps, uid: string, scanId: string): Promise<void> {
+/** Entry point for a newly created (kind "scan") or owner-retried (kind "retry") scan request. */
+export function processScan(deps: Deps, uid: string, scanId: string, kind: 'scan' | 'retry' = 'scan'): Promise<void> {
+  return runWithCallLog(() => claimAndRun(deps, uid, scanId, kind));
+}
+
+async function claimAndRun(deps: Deps, uid: string, scanId: string, kind: 'scan' | 'retry'): Promise<void> {
   const ref = deps.db.doc(scanPath(uid, scanId));
   const traceId = randomUUID().slice(0, 12);
   const claimed = await deps.db.runTransaction(async (tx) => {
@@ -108,12 +134,13 @@ export async function processScan(deps: Deps, uid: string, scanId: string): Prom
     if (!snap.exists) return null;
     const d = snap.data()!;
     const retry = d.status === SCAN_STATUS.failed && d.retryRequested === true && d.errorRetryable === true;
-    if (d.status !== SCAN_STATUS.queued && !retry) return null;
+    if (d.status !== SCAN_STATUS.queued && !retry) return { duplicate: true as const };
     tx.update(ref, {
       status: SCAN_STATUS.identifying,
       statusMessage: 'Looking up the barcode',
       progress: 10,
       traceId,
+      claimCount: FieldValue.increment(1),
       startedAt: Timestamp.fromDate(deps.now()),
       updatedAt: Timestamp.fromDate(deps.now()),
       retryRequested: false,
@@ -121,9 +148,16 @@ export async function processScan(deps: Deps, uid: string, scanId: string): Prom
       errorMessage: '',
       errorRetryable: false,
     });
-    return { data: d as Record<string, unknown>, isRetry: retry };
+    return { duplicate: false as const, data: d as Record<string, unknown>, isRetry: retry };
   });
   if (!claimed) return;
+  if (claimed.duplicate) {
+    // A second delivery of the same event: nothing is processed or charged twice.
+    if (kind === 'scan') await ref.update({ duplicateDeliveries: FieldValue.increment(1) }).catch(() => undefined);
+    deps.log.info('duplicate delivery ignored', { uid, scanId, kind });
+    return;
+  }
+  const job = newJob(claimed.isRetry ? 'retry' : 'scan', traceId, deps.now());
   const log = (msg: string, data: Record<string, unknown> = {}) => deps.log.info(msg, { traceId, uid, scanId, ...data });
 
   try {
@@ -142,112 +176,185 @@ export async function processScan(deps: Deps, uid: string, scanId: string): Prom
     }
     await ref.update({ gtin: barcode.gtin14, barcodeKind: barcode.kind });
     log('scan claimed', { gtin: barcode.gtin14, retry: claimed.isRetry });
-    await runAssessment(deps, { uid, scanId, traceId, barcode, petId: (claimed.data.petId as string) ?? null, allowFetch: true, skipPhotos: claimed.data.skipPhotos === true });
+    await runAssessment(deps, job, { uid, scanId, barcode, petId: (claimed.data.petId as string) ?? null, allowFetch: true, allowExplain: true, skipPhotos: claimed.data.skipPhotos === true });
   } catch (err) {
-    await failScan(deps, uid, scanId, traceId, err);
+    await failScan(deps, uid, scanId, job, err);
   }
 }
 
-async function failScan(deps: Deps, uid: string, scanId: string, traceId: string, err: unknown) {
-  const job = err instanceof JobError ? err : err instanceof SourceError ? new JobError('source_unavailable', errorMessage('source_unavailable'), true) : new JobError('analysis_failed', errorMessage('analysis_failed'), true);
-  deps.log.error('scan failed', { traceId, uid, scanId, code: job.code, error: (err as Error)?.message });
+async function failScan(deps: Deps, uid: string, scanId: string, job: JobInfo, err: unknown) {
+  const e = err instanceof JobError ? err : err instanceof SourceError ? new JobError('source_unavailable', errorMessage('source_unavailable'), true) : new JobError('analysis_failed', errorMessage('analysis_failed'), true);
+  const calls = currentCalls();
+  deps.log.error('scan failed', { traceId: job.traceId, uid, scanId, code: e.code, error: (err as Error)?.message, calls });
   try {
     await deps.db.doc(scanPath(uid, scanId)).update({
       status: SCAN_STATUS.failed,
-      statusMessage: job.message,
-      errorCode: job.code,
-      errorMessage: job.message,
-      errorRetryable: job.retryable,
+      statusMessage: e.message,
+      errorCode: e.code,
+      errorMessage: e.message,
+      errorRetryable: e.retryable,
       progress: 100,
       updatedAt: Timestamp.fromDate(deps.now()),
+      ...jobFields(job, calls, deps.now()),
     });
   } catch (writeErr) {
-    deps.log.error('could not record scan failure', { traceId, uid, scanId, error: (writeErr as Error).message });
+    deps.log.error('could not record scan failure', { traceId: job.traceId, uid, scanId, error: (writeErr as Error).message });
   }
 }
 
 interface AssessOptions {
   uid: string;
   scanId: string;
-  traceId: string;
   barcode: NormalizedBarcode;
   petId: string | null;
-  allowFetch: boolean; // false for personal refreshes: reuse stored evidence
+  allowFetch: boolean; // false for personal refreshes and photo re-assessments: reuse stored public evidence
+  allowExplain: boolean; // false for personal refreshes: explanations come from the cache only
   skipPhotos: boolean;
 }
 
-/** Gathers evidence (cache → databases → research → owner's label photos), assesses and saves. */
-export async function runAssessment(deps: Deps, o: AssessOptions): Promise<void> {
+interface PublicEvidence {
+  facts: ProductFacts;
+  origin: DatabaseOrigin;
+  fetchedPublic: boolean;
+  notes: string[];
+  openFacts: Extract<OpenFactsLookup, { found: true }> | null;
+}
+
+/** Saved facts when fresh (or when fetching is not allowed), else the pet database (+ sister databases for scope). */
+async function publicEvidence(deps: Deps, job: JobInfo, o: AssessOptions, stored: StoredProduct | null, now: Date): Promise<PublicEvidence> {
+  const { config } = deps;
+  const gtin = o.barcode.gtin14;
+  const fresh = stored?.lastRetrievedAt && now.getTime() - stored.lastRetrievedAt.getTime() < config.productFreshDays * 86400000;
+  if (stored && (fresh || !o.allowFetch)) {
+    job.productCache = 'hit';
+    job.evidenceNotes.push(`Product details reused from Purrbi’s saved record (retrieved ${stored.lastRetrievedAt?.toISOString().slice(0, 10) ?? 'earlier'}); no database call was needed.`);
+    return { facts: stored.facts, origin: (stored.origin as DatabaseOrigin) ?? 'opff', fetchedPublic: false, notes: [], openFacts: null };
+  }
+  job.productCache = 'miss';
+  try {
+    const pet = await deps.sources.lookupOpenFacts('opff', o.barcode, config.userAgent, now);
+    if (pet.found) {
+      job.evidenceNotes.push('Found in Open Pet Food Facts.');
+      // Keep earlier verified enrichment for fields the database record still lacks.
+      const facts = fillMissing(openFactsToFacts(pet, gtin, o.barcode.digits), enrichmentFacts(stored?.facts)).facts;
+      return { facts, origin: 'opff', fetchedPublic: true, notes: [], openFacts: pet };
+    }
+    // Not in the pet database: check whether the barcode is a human food, cosmetic or other product.
+    const sister = await firstFound(deps, o.barcode, now);
+    job.evidenceNotes.push(sister ? `Not in Open Pet Food Facts; listed in ${sister.source.sourceName}.` : 'Not found in Open Pet Food Facts or its sister databases.');
+    return {
+      facts: sister ? openFactsToFacts(sister, gtin, o.barcode.digits) : { gtin, barcode: o.barcode.digits, classificationSignals: [], sources: [] },
+      origin: sister ? (sister.db as DatabaseOrigin) : 'label',
+      fetchedPublic: true,
+      notes: [],
+      openFacts: null,
+    };
+  } catch (err) {
+    if (!stored) throw err;
+    job.productCache = 'stale_used';
+    job.evidenceNotes.push('The product database was unreachable, so Purrbi’s saved record was used.');
+    deps.log.info('database unavailable, using stale cache', { traceId: job.traceId, error: (err as Error).message });
+    return { facts: stored.facts, origin: (stored.origin as DatabaseOrigin) ?? 'opff', fetchedPublic: false, notes: ['The product database was unreachable, so saved product information was used.'], openFacts: null };
+  }
+}
+
+const scopeOf = (facts: ProductFacts, origin: DatabaseOrigin): ScopeResult =>
+  classifyScope({ origin, categoriesTags: facts.classificationSignals.map((s) => s.text), texts: [facts.productName?.value ?? ''], adequacy: facts.adequacy?.value });
+
+/** Gathers evidence, assesses and saves. Explanations not yet cached are added in a second, separate update. */
+export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions): Promise<void> {
   const now = deps.now();
   const { db, config } = deps;
-  const log = (msg: string, data: Record<string, unknown> = {}) => deps.log.info(msg, { traceId: o.traceId, uid: o.uid, scanId: o.scanId, ...data });
+  const log = (msg: string, data: Record<string, unknown> = {}) => deps.log.info(msg, { traceId: job.traceId, uid: o.uid, scanId: o.scanId, ...data });
   const gtin = o.barcode.gtin14;
 
-  // 1. Public product facts: fresh cache, else the pet database (+ sister databases for scope).
+  // 1. Public product facts.
   const stored = await readProduct(db, gtin);
-  const fresh = stored?.lastRetrievedAt && now.getTime() - stored.lastRetrievedAt.getTime() < config.productFreshDays * 86400000;
-  let facts: ProductFacts;
-  let origin: DatabaseOrigin;
-  let fetchedPublic = false;
-  const notes: string[] = [];
+  const evidence = await publicEvidence(deps, job, o, stored, now);
+  let { facts, origin, fetchedPublic } = evidence;
+  const notes = evidence.notes;
+  let scope = scopeOf(facts, origin);
 
-  if (stored && (fresh || !o.allowFetch)) {
-    facts = stored.facts;
-    origin = (stored.origin as DatabaseOrigin) ?? 'opff';
-    log('product from cache', { factsVersion: stored.factsVersion });
-  } else {
-    try {
-      const pet = await deps.sources.lookupOpenFacts('opff', o.barcode, config.userAgent, now);
-      if (pet.found) {
-        facts = openFactsToFacts(pet, gtin, o.barcode.digits);
-        origin = 'opff';
-      } else {
-        // Not in the pet database: check whether the barcode is a human food, cosmetic or other product.
-        const sister = await firstFound(deps, o.barcode, now);
-        facts = sister ? openFactsToFacts(sister, gtin, o.barcode.digits) : { gtin, barcode: o.barcode.digits, classificationSignals: [], sources: [] };
-        origin = sister ? (sister.db as DatabaseOrigin) : 'label';
-      }
-      fetchedPublic = true;
-      log('database lookup', { origin, found: facts.sources.length > 0 });
-    } catch (err) {
-      if (stored) {
-        facts = stored.facts;
-        origin = (stored.origin as DatabaseOrigin) ?? 'opff';
-        notes.push('The product database was unreachable, so saved product information was used.');
-        log('database unavailable, using stale cache', { error: (err as Error).message });
-      } else throw err;
+  // 2. Optional enrichment for missing public facts (pet products only; at most once per freshness window).
+  const meta: ProductMeta = await readProductMeta(db, gtin);
+  let metaChanged = false;
+  if (evidence.openFacts) {
+    const p = evidence.openFacts.product;
+    const urls = { ...(p.image_ingredients_url ? { ingredients: p.image_ingredients_url } : {}), ...(p.image_nutrition_url ? { nutrition: p.image_nutrition_url } : {}) };
+    if (JSON.stringify(urls) !== JSON.stringify(meta.labelImageUrls)) {
+      meta.labelImageUrls = urls;
+      metaChanged = true;
     }
   }
+  const aiOk = o.allowFetch && config.aiEnabled && scope.status !== 'out_of_scope' && origin !== 'off' && origin !== 'obf' && origin !== 'opf';
+  const panelNeeds = () => missingInfo(facts, scope, scope.category).map((r) => r.purpose).filter((p) => p === 'ingredients' || p === 'nutrition');
 
-  // 2. Bounded research for missing public facts (pet products only, once per product per freshness window).
-  let scope = classifyScope({ origin, categoriesTags: facts.classificationSignals.map((s) => s.text), texts: [facts.productName?.value ?? ''], adequacy: facts.adequacy?.value });
-  const needsResearch = o.allowFetch && config.researchEnabled && config.aiEnabled && scope.status !== 'out_of_scope' && origin !== 'off' && origin !== 'obf' && origin !== 'opf' &&
-    missingInfo(facts, scope, scope.category).some((r) => r.purpose !== 'front' || !facts.productName) && !facts.sources.some((s) => s.sourceType === 'manufacturer' || s.sourceType === 'retailer_or_web');
-  if (needsResearch) {
-    await setStatus(deps, o.uid, o.scanId, SCAN_STATUS.researching, 'Looking for the manufacturer’s label information', 35);
+  // 2a. Label images already published in the pet database, read by AI.
+  if (aiOk && config.databaseImagesEnabled && panelNeeds().length && Object.keys(meta.labelImageUrls).length && ageDays(meta.enrichment.databaseImagesAt, now) > config.productFreshDays) {
+    await setStatus(deps, o.uid, o.scanId, SCAN_STATUS.researching, 'Reading the label images in the product database', 30);
+    const code = facts.sources.find((s) => s.sourceType === 'database')?.sourceId.split(':')[1] ?? o.barcode.digits;
+    const product = { image_ingredients_url: meta.labelImageUrls.ingredients, image_nutrition_url: meta.labelImageUrls.nutrition };
+    const r = await deps.sources.databaseImages({
+      product,
+      code,
+      needs: panelNeeds(),
+      gtin14: gtin,
+      userAgent: config.userAgent,
+      now,
+      extract: (x) => deps.sources.extractLabel({ apiKey: config.openaiApiKey(), model: config.visionModel, ...x }),
+      beforeAiCall: () => consumeAiBudget(db, config.limits, now),
+    });
+    for (const f of r.facts) {
+      const merged = fillMissing(facts, f);
+      facts = merged.facts;
+      fetchedPublic = fetchedPublic || merged.filled.length > 0;
+    }
+    meta.enrichment.databaseImagesAt = now;
+    meta.enrichment.databaseImages = { read: r.read, skipped: r.skipped };
+    metaChanged = true;
+    if (r.read.length) job.evidenceNotes.push(`Read the ${r.read.map((x) => (x === 'nutrition' ? 'nutrition panel' : 'ingredient list')).join(' and ')} from a label image in Open Pet Food Facts (AI, not reviewed).`);
+    log('database label images', { read: r.read, skipped: r.skipped });
+    scope = scopeOf(facts, origin);
+  }
+
+  // 2b. Bounded manufacturer/web research.
+  const stillMissing = missingInfo(facts, scope, scope.category).some((r) => r.purpose !== 'front' || !facts.productName);
+  const hasWeb = facts.sources.some((s) => s.sourceType === 'manufacturer' || s.sourceType === 'retailer_or_web');
+  if (aiOk && config.researchEnabled && stillMissing && !hasWeb && ageDays(meta.enrichment.researchAt, now) > config.productFreshDays) {
+    await setStatus(deps, o.uid, o.scanId, SCAN_STATUS.researching, 'Looking for the manufacturer’s label information', 40);
     try {
       await consumeQuota(db, o.uid, 'research', config.limits, now);
       await consumeAiBudget(db, config.limits, now);
       const r = await deps.sources.research({ apiKey: config.openaiApiKey(), model: config.researchModel, gtin14: gtin, barcode: o.barcode.digits, knownName: facts.productName?.value, knownBrand: facts.brand?.value, userAgent: config.userAgent, now });
+      let filled: string[] = [];
       if (r.facts) {
         const merged = fillMissing(facts, { ...r.facts, sources: r.sources });
         facts = merged.facts;
-        fetchedPublic = fetchedPublic || merged.filled.length > 0;
-        if (origin === 'label' && merged.filled.length) origin = 'web';
+        filled = merged.filled;
+        fetchedPublic = fetchedPublic || filled.length > 0;
+        if (origin === 'label' && filled.length) origin = 'web';
       }
-      log('research', { filled: r.facts ? Object.keys(r.facts) : [], discarded: r.discarded });
+      const src = r.sources[0];
+      meta.enrichment.researchAt = now;
+      meta.enrichment.research = { filled, discarded: r.discarded, source: src ? `${src.sourceName} (${src.sourceType})` : '' };
+      metaChanged = true;
+      job.evidenceNotes.push(
+        filled.length && src
+          ? `Filled ${filled.filter((k) => k !== 'ingredients').map(fieldLabel).join(', ')} from ${src.sourceName} (${src.sourceType === 'manufacturer' ? 'manufacturer page' : 'web page'}), each checked against the page.`
+          : 'Searched the manufacturer’s and retailers’ pages; nothing could be verified against a page, so nothing was added.',
+      );
+      log('research', { filled, discarded: r.discarded });
     } catch (err) {
       // Research is optional: keep going with what we have.
       log('research skipped', { reason: err instanceof QuotaError ? err.kind : (err as Error).message });
     }
+    scope = scopeOf(facts, origin);
   }
 
-  // 3. Save public facts (never the owner's private label data).
+  // 3. Save public facts (never the owner's private label data) and the enrichment bookkeeping.
   let factsVersion = stored?.factsVersion ?? 0;
-  if (fetchedPublic || !stored) {
-    scope = classifyScope({ origin, categoriesTags: facts.classificationSignals.map((s) => s.text), texts: [facts.productName?.value ?? ''], adequacy: facts.adequacy?.value });
-    if (facts.sources.length) factsVersion = await writeProduct(db, { facts, scope, origin, previous: stored, now, traceId: o.traceId });
-  }
+  if ((fetchedPublic || !stored) && facts.sources.length) factsVersion = await writeProduct(db, { facts, scope, origin, previous: stored, now, traceId: job.traceId });
+  if (metaChanged) await writeProductMeta(db, gtin, meta, now);
 
   // 4. The owner's own label photos fill remaining gaps (private, unreviewed).
   const extractions = await readLabelExtractions(db, o.uid, gtin);
@@ -259,21 +366,26 @@ export async function runAssessment(deps: Deps, o: AssessOptions): Promise<void>
     if (merged.filled.length) labelUsed = true;
     facts = merged.facts;
   }
-  scope = classifyScope({ origin, categoriesTags: facts.classificationSignals.map((s) => s.text), texts: [facts.productName?.value ?? ''], adequacy: facts.adequacy?.value });
+  if (labelUsed) job.evidenceNotes.push('Used details read from your label photo (AI, not reviewed).');
+  scope = scopeOf(facts, origin);
 
-  // 5. Recall check (FDA), cached for a few hours; skipped for out-of-scope products.
+  // 5. Recall check (FDA), cached; skipped for out-of-scope products.
   let recall: RecallCheck | null = null;
   if (scope.status !== 'out_of_scope') {
     const cachedRecall = stored?.recall && stored.recallCheckedAt && now.getTime() - stored.recallCheckedAt.getTime() < config.recallFreshHours * 3600000 ? stored.recall : null;
-    if (cachedRecall) recall = cachedRecall;
-    else {
+    if (cachedRecall || !o.allowFetch) {
+      recall = cachedRecall ?? stored?.recall ?? null;
+      job.recallCache = recall ? 'hit' : 'skipped';
+      if (recall && stored?.recallCheckedAt) job.evidenceNotes.push(`FDA recall check reused from ${Math.max(1, Math.round((now.getTime() - stored.recallCheckedAt.getTime()) / 3600000))} h ago.`);
+    } else {
+      job.recallCache = 'miss';
       await setStatus(deps, o.uid, o.scanId, SCAN_STATUS.checkingAlerts, 'Checking FDA recall records', 60);
       recall = await deps.sources.checkRecalls({ brand: facts.brand?.value, productName: facts.productName?.value, gtin14: gtin }, now);
       if (recall.status !== 'unavailable' && facts.sources.length) await writeRecall(db, gtin, recall, now);
     }
   }
 
-  // 6. Assess. General score is pet-independent; personal fit uses the selected pet only.
+  // 6. Assess. The general assessment is pet-independent; personal fit uses the selected pet only.
   await setStatus(deps, o.uid, o.scanId, SCAN_STATUS.assessing, 'Preparing the assessment', 85);
   const pet: PetProfile | null = await readPet(db, o.uid, o.petId);
   const general = assessGeneral(facts, scope);
@@ -284,19 +396,27 @@ export async function runAssessment(deps: Deps, o: AssessOptions): Promise<void>
   const state = overallState(general, recall, scope);
   const requests: PhotoRequest[] = o.skipPhotos ? [] : missingInfo(facts, scope, general.category);
 
+  // Explanations already in the cache are attached now; new ones follow in step 8.
+  const explain = await cachedExplanations(deps, general, scope, now);
+  job.explanationsCached = explain.cachedCount;
+  const pending = o.allowExplain && config.aiEnabled && config.explanationsEnabled && explain.missing.length > 0;
+
   const status = scope.status === 'out_of_scope' ? SCAN_STATUS.outOfScope : requests.length ? SCAN_STATUS.needsPhotos : SCAN_STATUS.complete;
   const statusMessage =
     status === SCAN_STATUS.outOfScope ? 'Outside Purrbi’s scope' : status === SCAN_STATUS.needsPhotos ? `Add ${requests.length === 1 ? 'a photo' : 'photos'} to finish the assessment` : 'Assessment ready';
 
   // 7. Save. A failed save is reported as such (never as "unknown product").
+  const ref = db.doc(scanPath(o.uid, o.scanId));
   try {
-    await db.doc(scanPath(o.uid, o.scanId)).update({
+    await ref.update({
       ...resultFields({ facts, scope, general, personal, recall, summary, state, photoRequests: requests, factsVersion, labelEvidenceUsed: labelUsed }),
+      ...explanationFields(general, pending ? 'pending' : explain.status),
+      ...jobFields(job, currentCalls(), deps.now()),
       status,
       statusMessage,
       progress: 100,
       identitySource: origin,
-      productFound: facts.sources.some((s) => s.sourceType === 'database' || s.sourceType === 'manufacturer' || s.sourceType === 'retailer_or_web'),
+      productFound: facts.sources.some((s) => ['database', 'database_image', 'manufacturer', 'retailer_or_web'].includes(s.sourceType)),
       errorCode: '',
       errorMessage: '',
       errorRetryable: false,
@@ -305,10 +425,36 @@ export async function runAssessment(deps: Deps, o: AssessOptions): Promise<void>
       updatedAt: Timestamp.fromDate(now),
     });
   } catch (err) {
-    deps.log.error('save failed', { traceId: o.traceId, error: (err as Error).message });
+    deps.log.error('save failed', { traceId: job.traceId, error: (err as Error).message });
     throw new JobError('save_failed', errorMessage('save_failed'), true);
   }
-  log('scan assessed', { status, state, score: general.score, personal: personal.state, labelUsed, factsVersion });
+  log('scan assessed', { status, state, score: general.score, personal: personal.state, labelUsed, factsVersion, productCache: job.productCache, recallCache: job.recallCache, calls: currentCalls().length });
+
+  // 8. New cited explanations (one AI call), then the second update. Failure here never fails the scan.
+  if (pending) {
+    let finalStatus = explain.status;
+    try {
+      await consumeAiBudget(db, config.limits, deps.now());
+      const species = scope.species === 'unknown' ? 'cat_and_dog' : scope.species;
+      const fresh = await deps.sources.explain({ apiKey: config.openaiApiKey(), model: config.explainModel, species, terms: explain.missing.slice(0, config.limits.explanationsPerScan), userAgent: config.userAgent, now: deps.now() });
+      await writeExplanations(db, fresh);
+      applyExplanations(general, new Map(fresh.map((e) => [e.key, e])), species);
+      job.explanationsNew = fresh.filter((e) => e.status === 'verified').length;
+      finalStatus = explanationStatus(general);
+      log('explanations', { requested: explain.missing.length, verified: job.explanationsNew, unverified: fresh.filter((e) => e.status !== 'verified').map((e) => `${e.term}: ${e.reason}`) });
+    } catch (err) {
+      finalStatus = explanationStatus(general) === 'not_needed' ? 'unavailable' : explanationStatus(general);
+      log('explanations skipped', { reason: err instanceof QuotaError ? err.kind : (err as Error).message });
+    }
+    if (job.explanationsCached || job.explanationsNew) job.evidenceNotes.push(`${job.explanationsCached} ingredient explanation${job.explanationsCached === 1 ? '' : 's'} reused; ${job.explanationsNew} new, each checked against its cited page.`);
+    await ref.update({ ...explanationFields(general, finalStatus), ...jobFields(job, currentCalls(), deps.now()), updatedAt: Timestamp.fromDate(deps.now()) }).catch((err) => {
+      deps.log.error('explanation save failed', { traceId: job.traceId, error: (err as Error).message });
+    });
+  }
+}
+
+function fieldLabel(k: string): string {
+  return ({ productName: 'product name', brand: 'brand', ingredientsText: 'ingredients', guaranteedAnalysis: 'guaranteed analysis', calories: 'calorie content', adequacy: 'adequacy statement', activeIngredients: 'active ingredients', feedingDirections: 'feeding directions', imageUrl: 'image' } as Record<string, string>)[k] ?? k;
 }
 
 async function firstFound(deps: Deps, barcode: NormalizedBarcode, now: Date): Promise<Extract<OpenFactsLookup, { found: true }> | null> {
@@ -318,10 +464,66 @@ async function firstFound(deps: Deps, barcode: NormalizedBarcode, now: Date): Pr
   return null;
 }
 
+// ---- explanations ------------------------------------------------------------------------------
+
+function explainRequests(general: GeneralAssessment): ExplainRequest[] {
+  const out: ExplainRequest[] = [];
+  for (const a of general.supplement?.actives ?? []) if (needsExplanation(a.name, 'active')) out.push({ term: a.name, kind: 'active' });
+  const actives = new Set(out.map((x) => x.term.toLowerCase()));
+  for (const n of general.ingredientNotes.slice(0, 15)) {
+    if (n.explanationKind === 'none' && needsExplanation(n.name, 'ingredient') && !actives.has(n.name.toLowerCase())) out.push({ term: n.name, kind: 'ingredient' });
+  }
+  return out.slice(0, 20);
+}
+
+function applyExplanations(general: GeneralAssessment, byKey: Map<string, CitedExplanation>, species: string): number {
+  let applied = 0;
+  for (const n of general.ingredientNotes) {
+    const e = byKey.get(explanationKey(species, 'ingredient', n.name));
+    if (e?.status === 'verified' && n.explanationKind === 'none') {
+      Object.assign(n, { explanation: e.summary, explanationKind: 'cited_ai', explanationSourceTitle: e.sourceTitle, explanationSourceUrl: e.sourceUrl, explanationQuote: e.quote });
+      applied++;
+    }
+  }
+  for (const a of general.supplement?.actives ?? []) {
+    const e = byKey.get(explanationKey(species, 'active', a.name));
+    if (e?.status === 'verified' && a.evidence !== 'cited') {
+      Object.assign(a, { evidence: 'cited', note: e.summary, sourceTitle: e.sourceTitle, sourceUrl: e.sourceUrl, quote: e.quote });
+      applied++;
+    }
+  }
+  return applied;
+}
+
+type ExplanationStatus = 'ready' | 'partial' | 'unavailable' | 'not_needed' | 'pending';
+
+function explanationStatus(general: GeneralAssessment): ExplanationStatus {
+  const wanted = explainRequests(general).length + general.ingredientNotes.filter((n) => n.explanationKind === 'cited_ai').length + (general.supplement?.actives.filter((a) => a.evidence === 'cited').length ?? 0);
+  if (!wanted) return 'not_needed';
+  const remaining = explainRequests(general).length;
+  if (!remaining) return 'ready';
+  return remaining < wanted ? 'partial' : 'unavailable';
+}
+
+async function cachedExplanations(deps: Deps, general: GeneralAssessment, scope: ScopeResult, now: Date): Promise<{ missing: ExplainRequest[]; cachedCount: number; status: ExplanationStatus }> {
+  const species = scope.species === 'unknown' ? 'cat_and_dog' : scope.species;
+  const requests = scope.status === 'out_of_scope' ? [] : explainRequests(general);
+  if (!requests.length) return { missing: [], cachedCount: 0, status: explanationStatus(general) };
+  const cache = await readExplanations(deps.db, requests.map((r) => explanationKey(species, r.kind, r.term)), now);
+  const cachedCount = applyExplanations(general, cache, species);
+  // Terms already looked up (even without a verifiable source) are not paid for again until they expire.
+  const missing = requests.filter((r) => !cache.has(explanationKey(species, r.kind, r.term)));
+  return { missing, cachedCount, status: explanationStatus(general) };
+}
+
 // ---------------------------------------------------------------------------------------------
 
 /** A label photo was added under users/{uid}/scans/{scanId}/photos/{photoId}. */
-export async function processPhoto(deps: Deps, uid: string, scanId: string, photoId: string): Promise<void> {
+export function processPhoto(deps: Deps, uid: string, scanId: string, photoId: string): Promise<void> {
+  return runWithCallLog(() => photoJob(deps, uid, scanId, photoId));
+}
+
+async function photoJob(deps: Deps, uid: string, scanId: string, photoId: string): Promise<void> {
   const { db, config } = deps;
   const scanRef = db.doc(scanPath(uid, scanId));
   const photoRef = scanRef.collection('photos').doc(photoId);
@@ -335,6 +537,7 @@ export async function processPhoto(deps: Deps, uid: string, scanId: string, phot
   });
   if (!claimed) return;
   const traceId = (claimed.scan.traceId as string) || randomUUID().slice(0, 12);
+  const job = newJob('photo', traceId, now);
   const gtin = (claimed.scan.gtin as string) ?? normalizeBarcode(claimed.scan.barcode).gtin14;
   const purpose = String(claimed.photo.purpose ?? 'label');
   const photoFail = async (status: 'unreadable' | 'failed' | 'different_product' | 'rejected', message: string) => {
@@ -346,7 +549,8 @@ export async function processPhoto(deps: Deps, uid: string, scanId: string, phot
       await photoFail('failed', 'Label reading is not switched on yet.');
     } else {
       const count = (await scanRef.collection('photos').count().get()).data().count;
-      if (count > config.limits.maxPhotosPerScan) { // count includes this photo
+      if (count > config.limits.maxPhotosPerScan) {
+        // count includes this photo
         await photoFail('rejected', `A scan can have up to ${config.limits.maxPhotosPerScan} photos.`);
       } else {
         await consumeQuota(db, uid, 'photos', config.limits, now);
@@ -361,7 +565,14 @@ export async function processPhoto(deps: Deps, uid: string, scanId: string, phot
             status: 'processed',
             statusMessage: 'Label read',
             panels: label.panels,
-            fieldsFound: [label.ingredients.length ? 'ingredients' : '', label.guaranteedAnalysis.length ? 'guaranteed analysis' : '', label.adequacy ? 'adequacy statement' : '', label.calories.length ? 'calories' : '', label.productName ? 'product name' : ''].filter(Boolean),
+            fieldsFound: [
+              label.ingredients.length ? 'ingredients' : '',
+              label.activeIngredients.length ? 'active ingredients' : '',
+              label.guaranteedAnalysis.length ? 'guaranteed analysis' : '',
+              label.adequacy ? 'adequacy statement' : '',
+              label.calories.length ? 'calories' : '',
+              label.productName ? 'product name' : '',
+            ].filter(Boolean),
             uncertainFields: label.uncertainFields,
             processedAt: Timestamp.fromDate(deps.now()),
             updatedAt: Timestamp.fromDate(deps.now()),
@@ -379,14 +590,20 @@ export async function processPhoto(deps: Deps, uid: string, scanId: string, phot
 
   // Re-assess with whatever evidence now exists (the scan never gets stuck in "processing").
   try {
-    await runAssessment(deps, { uid, scanId, traceId, barcode: normalizeBarcode(claimed.scan.barcode), petId: (claimed.scan.petId as string) ?? null, allowFetch: false, skipPhotos: claimed.scan.skipPhotos === true });
+    await runAssessment(deps, job, { uid, scanId, barcode: normalizeBarcode(claimed.scan.barcode), petId: (claimed.scan.petId as string) ?? null, allowFetch: false, allowExplain: true, skipPhotos: claimed.scan.skipPhotos === true });
   } catch (err) {
-    await failScan(deps, uid, scanId, traceId, err);
+    await failScan(deps, uid, scanId, job, err);
   }
 }
 
 function purposeText(purpose: string): string {
-  return { front: 'the front of the package (name, brand, species, product type)', ingredients: 'the ingredient list', nutrition: 'the guaranteed analysis, calorie content and nutritional adequacy statement' }[purpose] ?? 'the product label';
+  return (
+    {
+      front: 'the front of the package (name, brand, species, product type)',
+      ingredients: 'the ingredient list (and, for a supplement, its active ingredients with amounts)',
+      nutrition: 'the guaranteed analysis, calorie content and nutritional adequacy statement',
+    }[purpose] ?? 'the product label'
+  );
 }
 
 /** Client-requested actions on an existing scan: retry, skip photos, refresh personal fit for a pet. */
@@ -394,10 +611,9 @@ export async function handleScanUpdate(deps: Deps, uid: string, scanId: string, 
   const ref = deps.db.doc(scanPath(uid, scanId));
   const rising = (k: string) => before[k] !== true && after[k] === true;
   if (rising('retryRequested') && after.status === SCAN_STATUS.failed) {
-    await processScan(deps, uid, scanId);
+    await processScan(deps, uid, scanId, 'retry');
     return;
   }
-  const traceId = (after.traceId as string) || randomUUID().slice(0, 12);
   const barcode = normalizeBarcode(after.barcode);
   if (!barcode.ok) return;
   if (rising('skipPhotos') && after.status === SCAN_STATUS.needsPhotos) {
@@ -405,11 +621,14 @@ export async function handleScanUpdate(deps: Deps, uid: string, scanId: string, 
     return;
   }
   if (rising('refreshPersonalRequested') && [SCAN_STATUS.complete, SCAN_STATUS.needsPhotos].includes(after.status as never)) {
-    try {
-      await runAssessment(deps, { uid, scanId, traceId, barcode, petId: (after.petId as string) ?? null, allowFetch: false, skipPhotos: after.skipPhotos === true || after.status === SCAN_STATUS.complete });
-    } finally {
-      await ref.update({ refreshPersonalRequested: false });
-    }
+    const job = newJob('refresh', (after.traceId as string) || randomUUID().slice(0, 12), deps.now());
+    await runWithCallLog(async () => {
+      try {
+        await runAssessment(deps, job, { uid, scanId, barcode, petId: (after.petId as string) ?? null, allowFetch: false, allowExplain: false, skipPhotos: after.skipPhotos === true || after.status === SCAN_STATUS.complete });
+      } finally {
+        await ref.update({ refreshPersonalRequested: false });
+      }
+    });
   }
 }
 

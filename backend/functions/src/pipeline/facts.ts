@@ -3,8 +3,8 @@ import type { ValidatedLabel } from '../ai/labelExtract';
 import { hasCoreGuaranteedAnalysis } from '../domain/nutrition';
 import type { ProductCategory, ProductFacts, ScopeResult, SourceRef } from '../domain/types';
 
-type FactKey = 'productName' | 'brand' | 'imageUrl' | 'ingredientsText' | 'ingredients' | 'guaranteedAnalysis' | 'calories' | 'adequacy' | 'feedingDirections';
-const FACT_KEYS: FactKey[] = ['productName', 'brand', 'imageUrl', 'ingredientsText', 'ingredients', 'guaranteedAnalysis', 'calories', 'adequacy', 'feedingDirections'];
+type FactKey = 'productName' | 'brand' | 'imageUrl' | 'ingredientsText' | 'ingredients' | 'guaranteedAnalysis' | 'calories' | 'adequacy' | 'feedingDirections' | 'activeIngredients';
+export const FACT_KEYS: FactKey[] = ['productName', 'brand', 'imageUrl', 'ingredientsText', 'ingredients', 'guaranteedAnalysis', 'calories', 'adequacy', 'feedingDirections', 'activeIngredients'];
 
 /** Fills fields that `base` lacks from `extra`. Existing facts are never overwritten. */
 export function fillMissing(base: ProductFacts, extra: Partial<ProductFacts>): { facts: ProductFacts; filled: string[] } {
@@ -23,6 +23,19 @@ export function fillMissing(base: ProductFacts, extra: Partial<ProductFacts>): {
   return { facts, filled };
 }
 
+const ENRICHMENT_SOURCES = new Set(['database_image', 'manufacturer', 'retailer_or_web']);
+
+/** Facts that came from enrichment (database label images, verified web pages), to carry over when the database record is re-fetched. */
+export function enrichmentFacts(facts: ProductFacts | undefined): Partial<ProductFacts> {
+  if (!facts) return {};
+  const out: Partial<ProductFacts> = { sources: facts.sources.filter((s) => ENRICHMENT_SOURCES.has(s.sourceType)), classificationSignals: [] };
+  for (const k of FACT_KEYS) {
+    const f = facts[k] as { source?: { sourceType: string } } | undefined;
+    if (f?.source && ENRICHMENT_SOURCES.has(f.source.sourceType)) (out as Record<string, unknown>)[k] = f;
+  }
+  return out;
+}
+
 export function labelToFacts(label: ValidatedLabel, source: SourceRef): Partial<ProductFacts> {
   const out: Partial<ProductFacts> = { sources: [source], classificationSignals: [] };
   if (label.productName) out.productName = { value: label.productName, source };
@@ -35,6 +48,7 @@ export function labelToFacts(label: ValidatedLabel, source: SourceRef): Partial<
   if (label.calories.length) out.calories = { value: label.calories, source };
   if (label.adequacy) out.adequacy = { value: label.adequacy, source };
   if (label.feedingDirections) out.feedingDirections = { value: label.feedingDirections, source };
+  if (label.activeIngredients?.length) out.activeIngredients = { value: label.activeIngredients, source };
   const signals = [label.productName, label.productTypeClaim, label.species !== 'unknown' ? `for ${label.species.replace('_and_', ' and ')}s` : null];
   out.classificationSignals = signals.filter((t): t is string => !!t).map((text) => ({ text, source: source.sourceId }));
   return out;
@@ -55,6 +69,12 @@ export function missingInfo(facts: ProductFacts, scope: ScopeResult, category: P
   const identityUnclear = !facts.productName || scope.status === 'unknown' || category === 'unknown';
   if (identityUnclear) {
     out.push({ purpose: 'front', title: 'Front of the package', reason: 'To confirm the product name, brand, species and product type.' });
+  }
+  if (category === 'supplement') {
+    if (!facts.ingredients?.value.length && !facts.activeIngredients?.value.length) {
+      out.push({ purpose: 'ingredients', title: 'Active and inactive ingredients', reason: 'Needed to list what the supplement contains and how much, and to check any allergies you recorded.' });
+    }
+    return out;
   }
   if (!facts.ingredients?.value.length) {
     out.push({ purpose: 'ingredients', title: 'Ingredient list', reason: 'Needed to check ingredients and any allergies you recorded.' });
