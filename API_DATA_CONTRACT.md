@@ -47,6 +47,8 @@ Every scan has a `traceId` (12 hex chars) used in all backend logs and evidence 
 | `products/{gtin14}` | backend | any signed-in user | public-source facts only (database / verified web), `factsVersion`, `factsHash`, `recall`, `recallCheckedAt` |
 | `products/{gtin14}/evidence/{sourceId}` | backend | signed-in | `sourceType`, `sourceName`, `url`, `retrievedAt`, `matchConfidence`, `license`, `fieldsSupported[]`, `traceId` |
 | `usage/{uid}_{yyyymmdd}`, `system/aiUsage_{yyyymmdd}` | backend | nobody | quotas and the global AI budget |
+| `productMeta/{gtin14}` | backend | nobody | label-image links from the database and when optional enrichment (database label images, web research) was last attempted, so paid steps run at most once per product per 30 days |
+| `knowledge/{species}_{kind}_{term}` | backend | nobody (copied into scans) | cited explanations of ingredients/supplement actives: `status (verified\|unverified\|not_found)`, `summary`, `role`, `sourceTitle`, `sourceUrl`, `quote`, `checkedAt`, `model`, `version`; verified kept 180 days, others 30 days |
 
 Barcode keys: `gtin14` = digits left-padded to 14 (UPC-A `036000291452` and EAN-13 `0036000291452` are the same product). `barcode` keeps the digits exactly as scanned.
 
@@ -59,13 +61,20 @@ Lists (each item a map with fixed keys; mirrored as FlutterFlow data types):
 |---|---|
 | `scoreComponents` | `key, label, points (int), maxPoints (int), status (met\|partly_met\|not_met\|unverified\|not_applicable), explanation` |
 | `generalFindings`, `personalFindings` | `kind (positive\|review\|alert\|missing\|info), text, evidence, rule` |
-| `ingredientNotes` | `name, position (int, label order), status (positive\|caution\|concern\|unknown\|info), note, sourceUrl` |
-| `nutrition` | `label, qualifier (min\|max\|typical\|not_stated), value (double), unit, display, dryMatter` |
+| `ingredientNotes` | `name, position (int, label order), status (positive\|caution\|concern\|unknown\|info — curated list only, used by the score), note, sourceTitle, sourceUrl, explanationKind (curated\|cited_ai\|none), explanation, explanationSourceTitle, explanationSourceUrl, explanationQuote` |
+| `nutrition` | `label, qualifier (min\|max\|typical\|not_stated), value (double), unit, display, dryMatter, meaning, context, contextSource` |
+| `supplementPurposes` | `key, label, evidence` |
+| `supplementActives` | `name, amountText, evidence (cited\|not_reviewed), note, sourceTitle, sourceUrl, quote` |
+| `supplementWarnings` | `kind, text, evidence, rule` |
+| `sourceChecks` | `source, host, path (no query), httpStatus (0 = no response), outcome (ok\|not_found\|http_error\|rate_limited\|timeout\|network\|parse), ms, attempt` |
+| `lastJob` (map) | `kind (scan\|retry\|photo\|refresh), traceId, startedAt, finishedAt, productCache (hit\|miss\|stale_used\|none), recallCache (hit\|miss\|skipped), explanationsCached, explanationsNew, externalCalls, aiCalls, failedCalls` |
 | `recallRecords` | `recallNumber, status, classification, reason, reportDate, productDescription, recallingFirm, match` |
 | `sources` | `name, type, url, retrievedAt, license, match, label` |
 | `personalTrace` | `input, value, rule, effect` |
 | `photoRequests` | `purpose, title, reason` |
-| `summary`, `missingInfo`, `personalUnresolved` | String |
+| `summary`, `missingInfo`, `personalUnresolved`, `nutritionContext`, `evidenceNotes`, `supplementLimitations`, `supplementQualitySignals` | String |
+
+More scalars: `explanationsStatus` (`ready|partial|pending|unavailable|not_needed`), `supplementSummary`, `supplementActivesSource`, `activeIngredientsSource`, `claimCount` (int: times the job was claimed; 1 per run, +1 per owner retry), `duplicateDeliveries` (int: repeated trigger deliveries that were ignored), `traceId`.
 
 ## 4. Pet profile (`users/{uid}/pets/{petId}`)
 
@@ -91,42 +100,45 @@ Lists (each item a map with fixed keys; mirrored as FlutterFlow data types):
 
 ## 5. External sources
 
-### Open Pet Food Facts — product identity & composition (pending live)
-`GET https://world.openpetfoodfacts.org/api/v2/product/{code}?fields=code,product_name,product_name_en,generic_name,generic_name_en,brands,categories_tags,labels_tags,countries_tags,ingredients_text,ingredients_text_en,lang,nutriments,image_front_url,quantity,last_modified_t`
-Header `User-Agent: Purrbi/0.1 (…)` — **owner to supply a contact address before production** (Open Food Facts asks for app name, version and contact).
-Found: HTTP 200 with `status: 1` and `product`. Not found: HTTP 404 or `status: 0`. Codes tried: as scanned, then UPC-A↔EAN-13 zero-padded variant (both exact GTIN matches).
-| Field | → Purrbi | Verification |
+### Open Pet Food Facts — product identity & composition (live-verified 2026-10-28 from GitHub Actions)
+`GET https://world.openpetfoodfacts.org/api/v2/product/{code}?fields=code,product_name,product_name_en,generic_name,generic_name_en,brands,categories_tags,labels_tags,countries_tags,ingredients_text,ingredients_text_en,lang,nutriments,image_front_url,image_ingredients_url,image_nutrition_url,quantity,last_modified_t`
+Header `User-Agent: Purrbi/0.1 (development build; contact@valenciainnovations.com)`.
+Found: HTTP 200 with `status: 1` and `product`. Not found: HTTP 404 (verified: unknown barcodes return 404). Codes tried: as scanned, then the UPC-A↔EAN-13 variant.
+| Field | → Purrbi | Live finding |
 |---|---|---|
-| `product_name_en` / `product_name` | productName | pending live |
-| `brands` (first) | brand | pending live |
-| `categories_tags`, `labels_tags`, `generic_name` | scope/category signals (`en:cat-food`, `en:dog-treats`, …) | pending live — tag names assumed from the Product Opener taxonomy |
-| `ingredients_text_en` / `ingredients_text` | ingredientsText (label order kept) | pending live |
-| `nutriments.{proteins,fat,fiber,moisture/water,ash,calcium,phosphorus,…}_100g` (+ `_unit`, `_modifier`) | guaranteed analysis, % (g/100 g) | **pending live — biggest unknown**: pet-food nutrient ids and min/max modifiers |
-| `nutriments.energy-kcal_100g` | calories (×10 → per kg) | pending live |
-| `image_front_url` | imageUrl (CC BY-SA, attribution shown) | pending live |
-| (none known) | nutritional adequacy statement | not provided by Product Opener as far as known → comes from label photo or verified manufacturer page |
-License: ODbL 1.0 (data), CC BY-SA 3.0 (images); attribution "Open Pet Food Facts" shown on sources.
+| `product_name_en` / `product_name` | productName | ✅ present on sampled records (often in French/Dutch/German) |
+| `brands` (first) | brand | ✅ |
+| `categories_tags` | scope/category signals | ✅ `en:cat-food`, `en:dog-food`, `en:cat-treats`, `en:dog-treats`, `en:dry-cat-food`… **Every pet food also carries the generic `en:dog-and-cat-food`**, which is ignored for species (fixed after the first live run reported cat-only products as "cats and dogs") |
+| `ingredients_text_en` / `ingredients_text` | ingredientsText (label order kept) | ✅ present on about half of sampled records |
+| `nutriments.crude-protein/crude-fat/crude-fibre/crude-ash/moisture_100g` (pet keys, preferred), else `proteins/fat/fiber/ash/water_100g` | guaranteed analysis, % | ✅ pet records use the `crude-*` keys (fixed after the live run); values carry no min/max modifier (EU "analytical constituents" are typical values) |
+| `nutriments.energy-kcal_100g` | calories (×10 → per kg) | ✅; values under 30 kcal/100 g are rejected (one sampled record had 5) |
+| `image_ingredients_url`, `image_nutrition_url` | label images read by AI when the record lacks those panels (`productMeta`) | images host reachable from GitHub; full-resolution variant (`.full.jpg`) used |
+| (none) | nutritional adequacy statement | ✅ confirmed absent on every sampled record → comes from a label image, a verified manufacturer page or the owner's photo |
+License: ODbL 1.0 (data), CC BY-SA 3.0 (images); attribution shown on sources.
 
-### Open Food Facts / Open Beauty Facts / Open Products Facts — scope only (pending live)
-Same API on `world.openfoodfacts.org`, `world.openbeautyfacts.org`, `world.openproductsfacts.org`; queried only when the pet database has no record, to classify human foods, human supplements, cosmetics and other products as out of scope.
+### Open Food Facts / Open Beauty Facts / Open Products Facts — scope only (live-verified)
+Same API; queried only when the pet database has no record. Verified: UPC `036000291452` → Open Pet Food Facts 404 → Open Food Facts 200 "Alaska Peanut Butter - Creamy" → out of scope (human food). The Open Food Facts *search* endpoint sometimes returns HTTP 503; product lookups were unaffected.
 
-### openFDA food enforcement — recalls (pending live)
-`GET https://api.fda.gov/food/enforcement.json?search=(recalling_firm:"{brand}"+product_description:"{brand}")&limit=100&sort=report_date:desc` (optional `api_key`).
-HTTP 404 = no matches. Records kept only if the description/reason mentions dogs, cats or pet food. Match: barcode digits in `product_description`/`code_info` → `exact_barcode`; ≥60 % product-name token overlap → `brand_and_product`; else `brand_only`. Active = status `Ongoing`/`Pending`.
-**Open question for the live test:** whether animal-food recalls appear in this endpoint at all. If they do not, `none_found` would be misleading and the adapter must report coverage as unavailable. Coverage note always shown: updated weekly; not every FDA animal-product notice.
+### openFDA food enforcement — recalls (live-verified)
+`GET https://api.fda.gov/food/enforcement.json?search=(recalling_firm:"{brand}"+product_description:"{brand}")&limit=100&sort=report_date:desc`
+HTTP 200; the pet-food query (`"dog food" "cat food" "pet food"`) returns only a handful of records (3 on 2026-10-28), so coverage of animal-food recalls in this endpoint is thin. The result text always says so: "updated weekly and doesn't include every FDA animal-product notice". Match rules: barcode digits in `product_description`/`code_info` → `exact_barcode`; ≥60 % name overlap → `brand_and_product`; else `brand_only`; active = `Ongoing`/`Pending`.
 
-### OpenAI — label photos (pending live) and research (disabled)
-- Label photos: `POST https://api.openai.com/v1/chat/completions`, model `OPENAI_VISION_MODEL` (default `gpt-4o-mini`), `response_format: json_schema` (strict, schema `pet_label_extraction` in `src/ai/labelExtract.ts`), image as base64 data URL. Output validated: barcode in photo must match the scan, guarantees range-checked, statements re-parsed deterministically. Key: Secret Manager `OPENAI_API_KEY`.
-- Research: `POST https://api.openai.com/v1/responses` with `tools: [{type: "web_search"}]` and strict JSON schema; every kept field is re-found on the cited page fetched by Purrbi. **Off** (`RESEARCH_ENABLED=false`) until verified live.
+### OpenAI — label reading, research and explanations (pending deploy)
+- **Label reading** (owner photos and database label images): `POST /v1/chat/completions`, model `OPENAI_VISION_MODEL` (`gpt-4o-mini`), strict schema `pet_label_extraction` (now including `active_ingredients` with amount/unit/serving). Validated: the barcode in the image must match the scan, guarantees range-checked, statements re-parsed deterministically.
+- **Manufacturer/web research**: `POST /v1/responses` with `web_search`, strict schema `pet_product_research`; a field is kept only if Purrbi finds it again on the cited page it fetches itself (barcode, or brand + name, on the page). On by default; attempted at most once per product per 30 days.
+- **Cited explanations**: `POST /v1/responses` with `web_search` limited to 18 authoritative sites (FDA, eCFR, AAFCO, FEDIAF, EFSA, Merck/MSD Veterinary Manual, VCA, VIN Veterinary Partner, ASPCA, Pet Poison Helpline, WSAVA, AVMA, Cornell, Tufts Petfoodology, NCBI, NIH ODS, Today's Veterinary Practice); one call per scan for up to 8 new terms; kept only if the verbatim quote is on the cited page. Never changes a score.
+- Key: Secret Manager `OPENAI_API_KEY`, readable only by `purrbi-functions@purrbi-49c21.iam.gserviceaccount.com`.
 
 ## 6. Configuration
 
 | Name | Kind | Default |
 |---|---|---|
 | `OPENAI_API_KEY` | Secret Manager secret | — (required to deploy) |
-| `AI_ENABLED` | param | `true` |
-| `RESEARCH_ENABLED` | param | `false` |
-| `OPENAI_VISION_MODEL` / `OPENAI_RESEARCH_MODEL` | param | `gpt-4o-mini` / `gpt-4.1-mini` |
-| `SOURCE_USER_AGENT` | param | `Purrbi/0.1 (development build)` |
-| Limits | code (`DEFAULT_LIMITS`) | 40 scans, 20 photos, 10 research calls per user per day; 500 AI calls per day globally; 10 MB per photo; 6 photos per scan |
-| Caching | code | product facts 30 days; recall check 12 hours |
+| `AI_ENABLED` | param | `true` (master switch for every AI call) |
+| `RESEARCH_ENABLED` / `DATABASE_IMAGES_ENABLED` / `EXPLANATIONS_ENABLED` | param | `true` / `true` / `true` |
+| `OPENAI_VISION_MODEL` / `OPENAI_RESEARCH_MODEL` / `OPENAI_EXPLAIN_MODEL` | param | `gpt-4o-mini` / `gpt-4.1-mini` / `gpt-4.1-mini` |
+| `SOURCE_USER_AGENT` | param | `Purrbi/0.1 (development build; contact@valenciainnovations.com)` |
+| Runtime identity | code (`setGlobalOptions`) | `purrbi-functions@` (all functions, including the account-deletion trigger) |
+| Region | code | `us-central1` (Firestore database also `us-central1`) |
+| Limits | code (`DEFAULT_LIMITS`) | 40 scans, 20 photos, 10 research calls per user per day; 500 AI calls per day globally; 10 MB per photo; 6 photos per scan; 8 new explanations per scan |
+| Caching | code | product facts 30 days; recall check 24 hours (openFDA updates weekly); enrichment attempts 30 days; explanations 180 days (unverified 30) |

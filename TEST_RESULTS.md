@@ -2,35 +2,55 @@
 
 Mocked tests and live tests are kept separate. "Mocked" = synthetic inputs labelled `TEST FIXTURE`; "emulator" = Firebase Local Emulator Suite (no production data); "live" = real public services or the deployed backend.
 
+## Categories (kept separate)
+1. **Mocked** — unit tests with labelled TEST FIXTURE inputs; network stubbed.
+2. **Emulator** — Firebase Local Emulator Suite; security rules and the real job code, sources mocked.
+3. **Emulator + real network** — the real function code on emulators with real source adapters (GitHub Actions has open internet; this session does not).
+4. **Live public providers** — real Open Pet Food Facts / Open Food Facts / openFDA / citation pages from GitHub Actions; no Purrbi backend involved.
+5. **Live deployed backend** — the deployed Firebase project, driven by client requests (`live-e2e`). *Not run yet: nothing is deployed.*
+6. **Android compilation** — `android-apk` workflow. *Not run yet: needs the Firebase config files.*
+7. **Physical device** — *pending; not possible in this environment.*
+
 ## Executed
 
-| Date (UTC) | Suite | Kind | Command | Result |
+| Date (UTC) | Suite | Kind | Where | Result |
 |---|---|---|---|---|
-| 2026-10-28 | Domain unit tests (barcode, ingredients, adequacy, nutrition, scope, allergens, life stage, score, personal fit, summary) | mocked | `cd backend/functions && npm test` | **41/41 passed** |
-| 2026-10-28 | Security rules (Firestore + Storage) | emulator | `firebase emulators:exec --only firestore,storage --project demo-purrbi "cd functions && npx vitest run test/emulator"` | **12/12 passed** |
-| 2026-10-28 | Scan-job lifecycle (path A, path B with photo, rescan reuse, wrong-product photo, skip photos, unknown barcode, human food, source outage + retry, invalid barcode, quota, duplicate trigger, pet switch) | emulator + mocked sources | same run as above | **13/13 passed** |
-| 2026-10-28 | Trigger end-to-end: Auth sign-up → client write through rules → real `processScanJob` → real source adapters | emulator, real code, real adapters | `NODE_OPTIONS="--require ./tools/loopback-no-proxy.cjs" firebase emulators:exec --only auth,firestore,functions,storage --project demo-purrbi "cd functions && npx vitest run test/e2e"` | **1/1 passed.** Outcome: `status: failed`, `errorCode: source_unavailable`, `errorRetryable: true`, `traceId: de1897dd-a09`, `gtin: 00036000291452` — the sandbox blocks the pet database, and the app gets a specific retryable failure, not "unknown product". Owner retry through the rules re-ran the job. |
-| 2026-10-28 | Live contract (Open Pet Food Facts, Open Food Facts, openFDA, KB citation URLs) | live | `npx vitest run test/live` | **Not run successfully here: 12/12 failed with `fetch failed`** — this session's network policy denies `world.openpetfoodfacts.org`, `world.openfoodfacts.org`, `api.fda.gov`, `www.fda.gov`, `www.ecfr.gov`, `www.aspca.org`. Runs in GitHub Actions (`live-contract.yml`). |
-
-| 2026-10-28 | FlutterFlow check + push of foundations | FlutterFlow validator | `./fft check`, `./fft push` | all pushes accepted; one warning: `appState.currencyType` never set (only read by hidden premium pages — placeholder) |
-| 2026-10-28 | App compile (export → Flutter 3.47.8 web build) | build | `tools/refresh-app.sh` | **First build failed**: template ad actions import an undeclared package (`google_mobile_ads`). Fixed in FlutterFlow; **build passes**. |
-| 2026-10-28 | Visual check of pushed screens (web build, 393×852, simulated signed-in flags) | screenshots | `tools/web-screens.cjs` | `docs/screens/01-04`: Welcome (create/sign in only), Home (no premium/bell/sample stats), Scan (barcode first), Profile (no premium/subscription/notifications). Connectivity pings answered locally for the screenshot only (blocked in sandbox). |
+| 2026-10-28 | Domain + evidence unit tests (barcode, ingredients, adequacy, nutrition + AAFCO context, scope, allergens, life stage, score, personal fit, summary, supplements, cited-explanation verification, database images, call diagnostics) | 1 mocked | sandbox + GitHub (`backend-ci`) | **56/56 passed** |
+| 2026-10-28 | Security rules (Firestore + Storage, incl. server-only `productMeta`/`knowledge`) | 2 emulator | sandbox + GitHub | **12/12 passed** |
+| 2026-10-28 | Scan-job lifecycle: path A/B, rescan reuse, wrong-product photo, skip photos, unknown barcode, human food, outage + retry, invalid barcode, quota, duplicate trigger (claimCount 1, duplicateDeliveries 1), pet switch, cited explanations reused with **no AI or database call** on rescan, supplement assessment, database label image fallback (not re-read on refetch), manufacturer research (failed search not repeated) | 2 emulator | sandbox + GitHub | **17/17 passed** |
+| 2026-10-28 | Trigger E2E: Auth sign-up → client write through rules → real `processScanJob` → real adapters; account deletion → `cleanupDeletedUser` | 3 emulator + network | sandbox | **2/2 passed.** Sandbox blocks the pet database: `failed / source_unavailable / retryable`, trace `3f9434fc-55e`, calls `world.openpetfoodfacts.org /api/v2/product/:n → network` ×2; owner retry re-claimed (claimCount 2); account deletion left 0 documents |
+| 2026-10-28 | Same trigger E2E with open internet | 3 emulator + network | GitHub `backend-ci` run 40787594932 | **passed.** UPC 036000291452: Open Pet Food Facts **404** (×2 code variants) → Open Food Facts **200** "Alaska Peanut Butter - Creamy" → `out_of_scope`, trace `f444cbd1-7fa`, claimCount 1, 7 external calls, 0 AI calls |
+| 2026-10-28 | Provider reachability | 4 live providers | GitHub `live-contract` | Open Pet Food Facts API **200**, image host reachable, Open Food Facts **200**, Open Beauty Facts **200**, Open Products Facts **200**, openFDA **200**, OpenAI reachable (**401** without key), Firebase Auth/Firestore/Storage APIs reachable |
+| 2026-10-28 | Live contract, first run | 4 live providers | GitHub run 40783753877 | 2 citation URLs **404** (FDA moved them) and Open Food Facts search **503** → citations replaced (all 5 now **200**); revealed two mapping defects (species from the generic `en:dog-and-cat-food` tag; pet `crude-*` nutrient keys not read) |
+| 2026-10-28 | Live contract after fixes | 4 live providers | GitHub run 40788183281 | **passed.** Real records mapped with correct species; e.g. Whiskas Temptations Salmon 60g (5998749108536) cat treat **80/100**, Carnilove Chicken enriched with Thyme (8595602527212) **85**, Pedigree Biscrok (5010394133852) dog treat **60**, Purina Dentalife (7613035379114) **65**; complete foods withheld (no adequacy statement in the database — confirmed field absent); unknown barcode → not found; human food → out of scope; openFDA **200** (3 pet-food records: thin coverage, stated in results) |
+| 2026-10-28 | FlutterFlow check + push of foundations | FlutterFlow validator | sandbox | all pushes accepted |
+| 2026-10-28 | App compile (export → Flutter 3.47.8 web build) | build | sandbox | passed after removing the template's broken ad actions (before Firebase was connected) |
+| 2026-10-28 | Visual check of pushed screens (web build) | screenshots | sandbox | `docs/screens/01-04` |
+| — | Live deployed backend (`live-e2e`, client requests only) | 5 | GitHub | **not run — nothing deployed yet** |
+| — | Android APK (`android-apk`) | 6 | GitHub | **not run — needs Firebase config files** |
+| — | Physical device | 7 | — | **pending** |
 
 Notes:
-- `tools/loopback-no-proxy.cjs` is a test-harness preload for this sandbox only: firebase-tools ignores `NO_PROXY`, so emulator-to-emulator calls on 127.0.0.1 were sent to the egress proxy and blocked. It sends loopback traffic directly; nothing else changes. Not needed in CI.
+- `backend/tools/loopback-no-proxy.cjs` is a sandbox-only test preload (firebase-tools ignores `NO_PROXY`); not used on GitHub.
+- GitHub reports are read through check-run annotations because artifact downloads are blocked in this session.
 
-## Required evidence (brief §11) — status
+## Required evidence — status
 
 | Test | Required evidence | Status |
 |---|---|---|
-| Real authentication | sign-up/login/logout/reset; owner access | **Blocked**: no Firebase project connected to the FlutterFlow project yet. Rules for owner access verified on the emulator. |
-| Known cat and dog foods | identity, real evidence, assessment, saved result | **Pending live** (`live-e2e.yml` after deploy). Mocked path verified on the emulator. |
-| Treat and pet supplement | category-specific treatment | Mocked/emulator verified (treats not held to complete-diet rules; supplements not scored). Live pending. |
-| Unknown catalog item → photo recovery | extraction continues to assessment | Emulator verified with mocked extraction; live AI extraction pending (needs `OPENAI_API_KEY` + deploy). |
-| Unsupported human product | clear out-of-scope result | Emulator verified (mocked Open Food Facts record); live pending. |
-| Different pet profiles | different personal findings; stable general score | Unit + emulator verified; live pending. |
-| Service/upload failure | specific recoverable failure | Verified on emulators with the real code path (`source_unavailable`, retryable). |
-| Restart and rescan | saved findings persist; cache reused | Emulator verified (one database call for two scans; label photo reused). Live pending. |
-| Account isolation | no cross-account access | Emulator rules verified; live REST check in `live-e2e.yml` (needs `FIREBASE_WEB_API_KEY`). |
-| Mobile experience | camera permission, layout, navigation, retry | **Not possible in this environment**: no Android device, no emulator (no KVM). |
-| Android APK | installable build | **Blocked here** (`dl.google.com` denied, no Android SDK). Workflow `android-apk.yml` builds it on GitHub. |
+| Real authentication | sign-up/login/logout/reset; owner access | Rules verified on the emulator; sign-up/delete verified on the Auth emulator. App screens: **blocked on config files**. Live: in `live-e2e` (pending deploy) |
+| Real cat food / dog food | identified → evidence → assessment → saved → visible → reopened | Database mapping live-verified (category 4); full chain **pending deploy** (`live-e2e`) |
+| Treat | category-specific treatment | Live-scored from real records (category 4); full chain pending deploy |
+| Supplement | informational assessment, not empty | Emulator verified; live pending deploy |
+| Product needing photo recovery | photos → extraction → assessment | Emulator verified (mocked extraction); live pending deploy (`live-e2e` uploads real package photos through the owner photo path) |
+| Manufacturer/source fallback | at least one product | Emulator verified; live pending deploy |
+| Unsupported human product | out of scope | **Live verified on real code** (emulator + network, GitHub) |
+| Different pet profiles | different personal findings; stable general score | Unit + emulator; live pending |
+| Duplicate events | no duplicate paid processing | Emulator verified (claim transaction; claimCount/duplicateDeliveries recorded); live pending |
+| Forgery / other user's scan | refused | Emulator rules verified; live (client requests) pending |
+| Retry path | specific retry | Emulator verified; live pending |
+| Restart and rescan | saved, reused | Emulator verified (no database/AI call on rescan); live pending |
+| Account isolation (client requests) | refused | Emulator; live `live-e2e` pending |
+| Deployed rules = repository | match | `deploy-backend` verify step; pending deploy |
+| Mobile experience | camera, layout, navigation, retry | **pending (no device here)** |
+| Android APK | installable build | **pending (config files)** |
