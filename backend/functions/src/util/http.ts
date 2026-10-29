@@ -31,6 +31,7 @@ export interface HttpResponse {
   status: number;
   text: string;
   headers: Headers;
+  url: string; // after redirects
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -58,7 +59,7 @@ export async function httpRequest(url: string, opts: HttpOptions): Promise<HttpR
       status = res.status;
       const text = await res.text();
       outcome = res.ok ? 'ok' : res.status === 404 ? 'not_found' : res.status === 429 ? 'rate_limited' : 'http_error';
-      if (res.ok || opts.acceptStatuses?.includes(res.status)) return { status: res.status, text, headers: res.headers };
+      if (res.ok || opts.acceptStatuses?.includes(res.status)) return { status: res.status, text, headers: res.headers, url: res.url || url };
       detail = errorDetail(text);
       if (res.status === 429) lastError = new SourceError(opts.source, 'rate_limited', 'rate limited', 429);
       else if (res.status >= 500) lastError = new SourceError(opts.source, 'http', `HTTP ${res.status}`, res.status);

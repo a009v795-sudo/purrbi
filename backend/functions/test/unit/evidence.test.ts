@@ -123,12 +123,62 @@ describe('cited explanations', () => {
     ], userAgent: 'test', now: new Date('2026-10-28T00:00:00Z') });
     expect(out.map((e) => `${e.term}:${e.status}:${e.reason}`)).toEqual([
       'carrageenan:verified:',
-      'sodium hexametaphosphate:unverified:quote not found on the cited page',
-      'guar gum:not_found:cited page is not on the allowed list',
+      'sodium hexametaphosphate:unverified:quote not found on the cited page (merckvetmanual.com)',
+      'guar gum:not_found:cited page is not on the allowed list (random-blog.example)',
       'beet pulp:not_found:no explanation returned',
     ]);
     expect(out[0]).toMatchObject({ key: 'dog_ingredient_carrageenan', sourceUrl: 'https://www.merckvetmanual.com/test', quote });
     expect(out[1].summary).toBe(''); // unverified text is never kept
+  });
+  it('shows the page’s own sentence when the model’s quote is close but not word for word, without needing search citations', async () => {
+    const onPage = 'Beet pulp is a source of fiber that is fermented slowly by bacteria in the colon.';
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.startsWith('https://api.openai.com/')) {
+        return new Response(JSON.stringify(openAiResponse([
+          // translated term, matched by its number; the quote changes one word
+          { n: 1, term: 'dried beet pulp', role: 'fiber source', summary: 'Dried sugar beet pulp adds slowly fermented fiber.', citation_url: 'https://vcahospitals.com/know-your-pet/fiber', citation_title: 'Fiber', citation_quote: 'Beet pulp is a source of fibre that is fermented slowly by bacteria in the colon.' },
+          // a different sentence altogether is still rejected
+          { n: 2, term: 'Levures déshydratées', role: 'yeast', summary: 'Dried yeast.', citation_url: 'https://vcahospitals.com/know-your-pet/fiber', citation_title: 'Fiber', citation_quote: 'Dried yeast is a rich natural source of B vitamins for dogs and cats.' },
+        ], [])), { status: 200 });
+      }
+      return new Response(`<html><body><h1>Fiber</h1><p>Some pet foods add fiber.</p><p>${onPage}</p><p>Too much fiber can reduce how well other nutrients are digested.</p></body></html>`, { status: 200 });
+    }));
+    const out = await explainTerms({ apiKey: 'k', model: 'm', species: 'cat', terms: [
+      { term: 'Pulpes de betterave déshydratée', kind: 'ingredient' }, { term: 'Levures déshydratées', kind: 'ingredient' },
+    ], userAgent: 'test', now: new Date('2026-10-29T00:00:00Z') });
+    expect(out.map((e) => `${e.term}:${e.status}:${e.reason}`)).toEqual([
+      'Pulpes de betterave déshydratée:verified:',
+      'Levures déshydratées:unverified:quote not found on the cited page (vcahospitals.com)',
+    ]);
+    expect(out[0].quote).toBe(onPage); // the page's wording, not the model's
+    expect(out[0].version).toBe('explain-1.1.0');
+  });
+  it('tries the next listed model when one is rejected, and reports pages it could not use', async () => {
+    const models: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.startsWith('https://api.openai.com/')) {
+        const body = JSON.parse(String(init?.body));
+        models.push(body.model);
+        if (body.model === 'missing-model') return new Response(JSON.stringify({ error: { message: 'The model `missing-model` does not exist' } }), { status: 404 });
+        expect(body.reasoning).toBeUndefined(); // only reasoning models get a reasoning effort
+        return new Response(JSON.stringify({ model: body.model, ...openAiResponse([
+          { n: 1, term: 'carrageenan', role: 'thickener', summary: 'A thickener.', citation_url: 'https://www.fda.gov/moved', citation_title: 'FDA', citation_quote: 'Carrageenan is a thickener extracted from red seaweed and used in canned foods.' },
+          { n: 2, term: 'guar gum', role: 'thickener', summary: 'A thickener.', citation_url: 'https://www.aspca.org/blocked', citation_title: 'ASPCA', citation_quote: 'Guar gum is a thickener used in many pet foods and treats.' },
+        ], []) }), { status: 200 });
+      }
+      if (url.includes('aspca.org')) return new Response('Forbidden', { status: 403 });
+      const res = new Response('<p>Carrageenan is a thickener extracted from red seaweed and used in canned foods.</p>', { status: 200 });
+      Object.defineProperty(res, 'url', { value: 'https://elsewhere.example/landing' });
+      return res;
+    }));
+    const out = await explainTerms({ apiKey: 'k', model: 'missing-model, gpt-4.1-mini', species: 'dog', terms: [
+      { term: 'carrageenan', kind: 'ingredient' }, { term: 'guar gum', kind: 'ingredient' },
+    ], userAgent: 'test', now: new Date('2026-10-29T00:00:00Z') });
+    expect(models).toEqual(['missing-model', 'gpt-4.1-mini']);
+    expect(out.map((e) => `${e.model}:${e.status}:${e.reason}`)).toEqual([
+      'gpt-4.1-mini:unverified:cited page redirected off the allowed sites (elsewhere.example)',
+      'gpt-4.1-mini:unverified:cited page could not be fetched (aspca.org, HTTP 403)',
+    ]);
   });
   it('does not pay to explain plain whole foods', () => {
     expect(needsExplanation('Chicken', 'ingredient')).toBe(false);
@@ -191,6 +241,15 @@ describe('failed-call reasons and the research domain filter', () => {
     expect((bodies[0].tools as { filters?: unknown }[])[0].filters).toEqual({ allowed_domains: ['fda.gov'] });
     expect((bodies[1].tools as { filters?: unknown }[])[0].filters).toBeUndefined();
     expect(JSON.stringify(bodies[1].input)).toContain('Search and cite only pages on these sites: fda.gov.');
+  });
+  it('gives reasoning models a reasoning effort and room for it, and reports a cut-off answer', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      bodies.push(JSON.parse(String(init.body)));
+      return new Response(JSON.stringify({ status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output: [{ type: 'reasoning' }] }), { status: 200 });
+    }));
+    await expect(researchJson({ apiKey: 'test', model: 'gpt-5-mini', system: 's', user: 'u', format: { name: 'x', schema: { type: 'object' } }, timeoutMs: 1000 })).rejects.toThrow('output incomplete (max_output_tokens)');
+    expect(bodies[0]).toMatchObject({ reasoning: { effort: 'low' }, max_output_tokens: 16000 });
   });
   it('does not retry other failures', async () => {
     const fetchMock = vi.fn(async () => new Response('{"error":{"message":"bad key"}}', { status: 401 }));

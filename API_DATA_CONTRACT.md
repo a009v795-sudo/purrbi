@@ -72,7 +72,9 @@ Lists (each item a map with fixed keys; mirrored as FlutterFlow data types):
 | `sources` | `name, type, url, retrievedAt, license, match, label` |
 | `personalTrace` | `input, value, rule, effect` |
 | `photoRequests` | `purpose, title, reason` |
-| `summary`, `missingInfo`, `personalUnresolved`, `nutritionContext`, `evidenceNotes`, `supplementLimitations`, `supplementQualitySignals` | String |
+| `summary`, `missingInfo`, `personalUnresolved`, `nutritionContext`, `evidenceNotes`, `diagnosticNotes`, `supplementLimitations`, `supplementQualitySignals` | String |
+
+`diagnosticNotes` says why AI-found information was or was not used (research pages that could not be verified, explanations whose quote was not on the cited page), sanitized, for tracing; the app does not need to show it.
 
 More scalars: `explanationsStatus` (`ready|partial|pending|unavailable|not_needed`), `supplementSummary`, `supplementActivesSource`, `activeIngredientsSource`, `claimCount` (int: times the job was claimed; 1 per run, +1 per owner retry), `duplicateDeliveries` (int: repeated trigger deliveries that were ignored), `traceId`.
 
@@ -136,7 +138,7 @@ HTTP 200; the pet-food query (`"dog food" "cat food" "pet food"`) returns only a
 | `OPENAI_API_KEY` | Secret Manager secret | — (required to deploy) |
 | `AI_ENABLED` | param | `true` (master switch for every AI call) |
 | `RESEARCH_ENABLED` / `DATABASE_IMAGES_ENABLED` / `EXPLANATIONS_ENABLED` | param | `true` / `true` / `true` |
-| `OPENAI_VISION_MODEL` / `OPENAI_RESEARCH_MODEL` / `OPENAI_EXPLAIN_MODEL` | param | `gpt-4o-mini` / `gpt-4.1-mini` / `gpt-4.1-mini` |
+| `OPENAI_VISION_MODEL` / `OPENAI_RESEARCH_MODEL` / `OPENAI_EXPLAIN_MODEL` | param | `gpt-4o-mini` / `gpt-4.1-mini` / `gpt-4.1-mini` (the explain model may be a comma-separated list, tried in order; dev uses `gpt-5-mini,gpt-4.1-mini`) |
 | `SOURCE_USER_AGENT` | param | `Purrbi/0.1 (development build; contact@valenciainnovations.com)` |
 | Runtime identity | code (`setGlobalOptions`) | `purrbi-functions@` (all functions, including the account-deletion trigger) |
 | Region | code | functions `us-central1`; Firestore database `nam5` (US multi-region; triggers are placed in `nam5`) |

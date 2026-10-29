@@ -9,6 +9,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Firestore } from 'firebase-admin/firestore';
 import { extractLabel as extractLabelImpl, type ValidatedLabel } from '../ai/labelExtract';
+import { parseAdequacyStatement } from '../domain/adequacy';
 import { normalizeBarcode, type NormalizedBarcode } from '../domain/barcode';
 import { personalize } from '../domain/personalize';
 import { classifyScope, type DatabaseOrigin } from '../domain/scope';
@@ -19,8 +20,8 @@ import { explainTerms as explainImpl, explanationKey, needsExplanation, type Cit
 import { readDatabaseLabelImages as databaseImagesImpl } from '../sources/labelImages';
 import { checkRecalls as checkRecallsImpl } from '../sources/openfda';
 import { lookupOpenFacts as lookupOpenFactsImpl, openFactsToFacts, type OpenFactsDb, type OpenFactsLookup } from '../sources/openFacts';
-import { researchProduct as researchImpl, type ResearchOutcome } from '../sources/research';
-import { currentCalls, runWithCallLog } from '../util/diagnostics';
+import { RESEARCH_VERSION, researchProduct as researchImpl, type ResearchOutcome } from '../sources/research';
+import { currentCalls, errorDetail, runWithCallLog } from '../util/diagnostics';
 import { SourceError } from '../util/http';
 import { rematchAnalysis } from '../domain/nutrition';
 import { SCAN_STATUS, type ErrorCode, type RuntimeConfig } from './config';
@@ -94,7 +95,7 @@ const scanPath = (uid: string, scanId: string) => `users/${uid}/scans/${scanId}`
 const ageDays = (d: Date | null | undefined, now: Date) => (d ? (now.getTime() - d.getTime()) / 86400000 : Infinity);
 
 function newJob(kind: JobInfo['kind'], traceId: string, now: Date): JobInfo {
-  return { kind, traceId, startedAt: now, productCache: 'none', recallCache: 'skipped', explanationsCached: 0, explanationsNew: 0, evidenceNotes: [] };
+  return { kind, traceId, startedAt: now, productCache: 'none', recallCache: 'skipped', explanationsCached: 0, explanationsNew: 0, evidenceNotes: [], diagnosticNotes: [] };
 }
 
 async function setStatus(deps: Deps, uid: string, scanId: string, status: string, message: string, progress: number) {
@@ -331,7 +332,8 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   // 2b. Bounded manufacturer/web research.
   const stillMissing = missingInfo(facts, scope, scope.category).some((r) => r.purpose !== 'front' || !facts.productName);
   const hasWeb = facts.sources.some((s) => s.sourceType === 'manufacturer' || s.sourceType === 'retailer_or_web');
-  if (aiOk && config.researchEnabled && stillMissing && !hasWeb && ageDays(meta.enrichment.researchAt, now) > config.productFreshDays) {
+  const researchDue = ageDays(meta.enrichment.researchAt, now) > config.productFreshDays || meta.enrichment.research?.version !== RESEARCH_VERSION;
+  if (aiOk && config.researchEnabled && stillMissing && !hasWeb && researchDue) {
     await setStatus(deps, o.uid, o.scanId, SCAN_STATUS.researching, 'Looking for the manufacturer’s label information', 40);
     try {
       await consumeQuota(db, o.uid, 'research', config.limits, now);
@@ -347,17 +349,20 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       }
       const src = r.sources[0];
       meta.enrichment.researchAt = now;
-      meta.enrichment.research = { filled, discarded: r.discarded, source: src ? `${src.sourceName} (${src.sourceType})` : '' };
+      meta.enrichment.research = { filled, discarded: r.discarded, source: src ? `${src.sourceName} (${src.sourceType})` : '', version: RESEARCH_VERSION };
       metaChanged = true;
       job.evidenceNotes.push(
         filled.length && src
           ? `Filled ${filled.filter((k) => k !== 'ingredients').map(fieldLabel).join(', ')} from ${src.sourceName} (${src.sourceType === 'manufacturer' ? 'manufacturer page' : 'web page'}), each checked against the page.`
           : 'Searched the manufacturer’s and retailers’ pages; nothing could be verified against a page, so nothing was added.',
       );
+      job.diagnosticNotes.push(...r.discarded.slice(0, 4).map((d) => `Research (${r.model}): ${d}`));
       log('research', { filled, discarded: r.discarded });
     } catch (err) {
       // Research is optional: keep going with what we have.
-      log('research skipped', { reason: err instanceof QuotaError ? err.kind : (err as Error).message });
+      const reason = err instanceof QuotaError ? err.kind : errorDetail((err as Error).message);
+      job.diagnosticNotes.push(`Research not run: ${reason}`);
+      log('research skipped', { reason });
     }
     scope = scopeOf(facts, origin);
   }
@@ -378,7 +383,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
     facts = merged.facts;
   }
   if (labelUsed) job.evidenceNotes.push('Used details read from your label photo (AI, not reviewed).');
-  if (facts.guaranteedAnalysis) facts = { ...facts, guaranteedAnalysis: { ...facts.guaranteedAnalysis, value: rematchAnalysis(facts.guaranteedAnalysis.value) } };
+  facts = rederive(facts);
   scope = scopeOf(facts, origin);
 
   // 5. Recall check (FDA), cached; skipped for out-of-scope products.
@@ -453,16 +458,29 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       applyExplanations(general, new Map(fresh.map((e) => [e.key, e])), species);
       job.explanationsNew = fresh.filter((e) => e.status === 'verified').length;
       finalStatus = explanationStatus(general);
-      log('explanations', { requested: explain.missing.length, verified: job.explanationsNew, unverified: fresh.filter((e) => e.status !== 'verified').map((e) => `${e.term}: ${e.reason}`) });
+      const misses = fresh.filter((e) => e.status !== 'verified').map((e) => `${e.term.slice(0, 40)}: ${e.reason}`);
+      job.diagnosticNotes.push(`Explanations (${fresh[0]?.model ?? config.explainModel}): ${job.explanationsNew} of ${fresh.length} verified against their cited page.`, ...misses.slice(0, 10));
+      log('explanations', { requested: explain.missing.length, verified: job.explanationsNew, unverified: misses });
     } catch (err) {
       finalStatus = explanationStatus(general) === 'not_needed' ? 'unavailable' : explanationStatus(general);
-      log('explanations skipped', { reason: err instanceof QuotaError ? err.kind : (err as Error).message });
+      const reason = err instanceof QuotaError ? err.kind : errorDetail((err as Error).message);
+      job.diagnosticNotes.push(`Explanations not run: ${reason}`);
+      log('explanations skipped', { reason });
     }
     if (job.explanationsCached || job.explanationsNew) job.evidenceNotes.push(`${job.explanationsCached} ingredient explanation${job.explanationsCached === 1 ? '' : 's'} reused; ${job.explanationsNew} new, each checked against its cited page.`);
     await ref.update({ ...explanationFields(general, finalStatus), ...jobFields(job, currentCalls(), deps.now()), updatedAt: Timestamp.fromDate(deps.now()) }).catch((err) => {
       deps.log.error('explanation save failed', { traceId: job.traceId, error: (err as Error).message });
     });
   }
+}
+
+/** Saved records keep the label text; what Purrbi reads from it is re-derived with the current rules. */
+function rederive(facts: ProductFacts): ProductFacts {
+  let out = facts;
+  if (out.guaranteedAnalysis) out = { ...out, guaranteedAnalysis: { ...out.guaranteedAnalysis, value: rematchAnalysis(out.guaranteedAnalysis.value) } };
+  const adequacy = out.adequacy ? parseAdequacyStatement(out.adequacy.value.text) : null;
+  if (out.adequacy && adequacy) out = { ...out, adequacy: { ...out.adequacy, value: adequacy } };
+  return out;
 }
 
 function fieldLabel(k: string): string {

@@ -61,7 +61,14 @@ export interface UrlCitation {
   title?: string;
 }
 
-/** Responses API with the web_search tool and a strict JSON schema. Returns parsed data + citations. */
+/** Reasoning models (o-series, GPT-5 family) take a reasoning effort and spend output tokens on reasoning. */
+const isReasoningModel = (model: string) => /^(o\d|gpt-5)/i.test(model);
+
+/**
+ * Responses API with the web_search tool and a strict JSON schema. Returns parsed data, the url
+ * citations attached to the output (models often attach none to JSON output, so callers verify pages
+ * themselves) and how many searches ran.
+ */
 export async function researchJson<T>(opts: {
   apiKey: string | undefined;
   model: string;
@@ -70,13 +77,15 @@ export async function researchJson<T>(opts: {
   format: JsonSchemaFormat;
   timeoutMs: number;
   allowedDomains?: string[];
-}): Promise<{ data: T; citations: UrlCitation[]; model: string }> {
+}): Promise<{ data: T; citations: UrlCitation[]; searches: number; model: string }> {
   const tool: Record<string, unknown> = { type: 'web_search' };
   if (opts.allowedDomains?.length) tool.filters = { allowed_domains: opts.allowedDomains };
+  const reasoning = isReasoningModel(opts.model);
   const body = {
     model: opts.model,
     tools: [tool],
-    max_output_tokens: 3000,
+    max_output_tokens: reasoning ? 16000 : 3000,
+    ...(reasoning ? { reasoning: { effort: 'low' } } : {}),
     input: [
       { role: 'system', content: opts.system },
       { role: 'user', content: opts.user },
@@ -85,6 +94,8 @@ export async function researchJson<T>(opts: {
   };
   type ResearchResponse = {
     model?: string;
+    status?: string;
+    incomplete_details?: { reason?: string } | null;
     output?: { type?: string; content?: { type?: string; text?: string; annotations?: { type?: string; url?: string; title?: string }[] }[] }[];
   };
   const send = (b: typeof body) =>
@@ -104,9 +115,11 @@ export async function researchJson<T>(opts: {
     // The result stays restricted: callers keep only citations on the allowed sites whose quote is
     // found again on the fetched page.
     if (!(opts.allowedDomains?.length && err instanceof SourceError && err.status === 400)) throw err;
-    const sites = `Search and cite only pages on these sites: ${opts.allowedDomains.join(', ')}.`;
+    const sites = `Search and cite only pages on these sites: ${opts.allowedDomains.join(', ')}. Add site: to every search query (for example: <search terms> site:${opts.allowedDomains[0]}).`;
     ({ json } = await send({ ...body, tools: [{ type: 'web_search' }], input: [{ role: 'system', content: `${opts.system} ${sites}` }, body.input[1]] }));
   }
+  if (json?.status === 'incomplete') throw new SourceError('OpenAI', 'parse', `output incomplete (${json.incomplete_details?.reason ?? 'no reason given'})`);
+  const searches = (json?.output ?? []).filter((o) => o.type === 'web_search_call').length;
   const message = json?.output?.find((o) => o.type === 'message');
   const part = message?.content?.find((c) => c.type === 'output_text');
   if (!part?.text) throw new SourceError('OpenAI', 'parse', 'no output text');
@@ -114,7 +127,7 @@ export async function researchJson<T>(opts: {
     .filter((a) => a.type === 'url_citation' && a.url)
     .map((a) => ({ url: a.url as string, title: a.title }));
   try {
-    return { data: JSON.parse(part.text) as T, citations, model: json?.model ?? opts.model };
+    return { data: JSON.parse(part.text) as T, citations, searches, model: json?.model ?? opts.model };
   } catch {
     throw new SourceError('OpenAI', 'parse', 'research output did not match the JSON schema');
   }

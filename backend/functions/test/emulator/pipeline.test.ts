@@ -199,6 +199,18 @@ describe('path A: enough information', () => {
     expect(calls.recall).toBe(1);
     expect((await read(b)).status).toBe('complete');
   });
+  it('re-reads a saved label statement with the current rules when the record is reused', async () => {
+    const a = await newScan('u1', BC.treat);
+    await processScan(deps(), 'u1', a.id);
+    const gtin = (await read(a)).gtin;
+    // A record saved before EU statements were understood keeps its old reading next to the label text.
+    const old = { text: 'Aliment complet pour chats adultes', type: 'unclear', species: 'cat', lifeStages: [], method: 'unknown', largeSizeGrowth: null, style: 'other' };
+    await db.doc(`products/${gtin}`).update({ 'facts.adequacy': { value: old, source: src('opff', BC.treat) } });
+    const b = await newScan('u1', BC.treat);
+    await processScan(deps(), 'u1', b.id);
+    expect(calls['lookup:opff']).toBe(1); // reused, not fetched again
+    expect((await read(b)).adequacySummary).toBe('Complete and balanced for adult maintenance');
+  });
 });
 
 describe('path B: missing label information', () => {

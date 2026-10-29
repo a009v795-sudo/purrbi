@@ -9,9 +9,9 @@ import { normalizeIngredientName, parseIngredientList } from '../domain/ingredie
 import { normalizeUnit, nutrientKeyFromLabel, parseCalorieText, qualifierFrom, validateGuaranteedAnalysis } from '../domain/nutrition';
 import { parseActiveIngredients } from '../domain/supplements';
 import type { ProductFacts, ProductSpecies, SourceRef } from '../domain/types';
-import { httpRequest } from '../util/http';
+import { httpRequest, SourceError } from '../util/http';
 
-export const RESEARCH_VERSION = 'research-1.1.0';
+export const RESEARCH_VERSION = 'research-1.2.0';
 
 const nullableString = { type: ['string', 'null'] };
 const SCHEMA = {
@@ -103,7 +103,7 @@ export async function researchProduct(opts: {
     opts.knownName ? `Product name (from a database record): ${opts.knownName}.` : '',
     'Find its ingredient list, guaranteed analysis, calorie content and nutritional adequacy statement; for a supplement, its active ingredients with amounts (start that text with "Active ingredients").',
   ].filter(Boolean).join(' ');
-  const { data, citations, model } = await researchJson<RawResearch>({
+  const { data, citations, searches, model } = await researchJson<RawResearch>({
     apiKey: opts.apiKey,
     model: opts.model,
     system: SYSTEM,
@@ -112,11 +112,15 @@ export async function researchProduct(opts: {
     timeoutMs: 60000,
   });
   const discarded: string[] = [];
-  if (!data.found) return { facts: null, sources: [], discarded: ['model reported no matching product'], model };
+  const searched = `${searches} search${searches === 1 ? '' : 'es'}, ${citations.length} citation${citations.length === 1 ? '' : 's'}`;
+  if (!data.found) return { facts: null, sources: [], discarded: [`model reported no matching product (${searched})`], model };
 
+  // Pages the search cited come first. A page the model names without a citation (models often attach
+  // none to JSON output) is used only the same way: Purrbi fetches it and every kept field must be on it.
   const cited = new Set(citations.map((c) => canonical(c.url)));
-  const urls = (data.source_urls ?? []).map(canonical).filter((u) => /^https:\/\//.test(u) && cited.has(u)).slice(0, 2);
-  if (!urls.length) return { facts: null, sources: [], discarded: ['no source URL was backed by a web-search citation'], model };
+  const named = [...new Set((data.source_urls ?? []).map(canonical).filter((u) => /^https:\/\//.test(u)))];
+  const urls = [...named.filter((u) => cited.has(u)), ...named.filter((u) => !cited.has(u))].slice(0, 2);
+  if (!urls.length) return { facts: null, sources: [], discarded: [`no source page was named (${searched})`], model };
 
   const pages: { url: string; text: string; raw: string }[] = [];
   for (const url of urls) {
@@ -125,8 +129,8 @@ export async function researchProduct(opts: {
       const plain = htmlToText(res.text).slice(0, 400000);
       // text: normalised for phrase checks; raw: keeps numbers and percentages for value checks
       pages.push({ url, text: normalizeIngredientName(plain), raw: plain.toLowerCase() });
-    } catch {
-      discarded.push(`could not fetch ${url} to verify it`);
+    } catch (err) {
+      discarded.push(`could not fetch ${url.slice(0, 120)} to verify it${err instanceof SourceError ? ` (${err.status ? `HTTP ${err.status}` : err.kind})` : ''}`);
     }
   }
   if (!pages.length) return { facts: null, sources: [], discarded, model };

@@ -19,6 +19,7 @@ export interface JobInfo {
   explanationsCached: number;
   explanationsNew: number;
   evidenceNotes: string[];
+  diagnosticNotes: string[]; // why AI-found information was or was not used (sanitized, for tracing)
 }
 
 export function jobFields(job: JobInfo, calls: SourceCall[], finishedAt: Date): Record<string, unknown> {
@@ -36,6 +37,7 @@ export function jobFields(job: JobInfo, calls: SourceCall[], finishedAt: Date): 
       ...counts,
     },
     evidenceNotes: job.evidenceNotes,
+    diagnosticNotes: job.diagnosticNotes.slice(0, 16).map((n) => n.slice(0, 240)),
     sourceChecks: calls.map((c) => ({ source: c.source, host: c.host, path: c.path, httpStatus: c.status ?? 0, outcome: c.outcome, ms: c.ms, attempt: c.attempt, detail: c.detail ?? '' })),
   };
 }

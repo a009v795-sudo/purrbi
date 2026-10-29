@@ -3,7 +3,7 @@
 import { createHash } from 'node:crypto';
 import { FieldValue, Timestamp, type Firestore } from 'firebase-admin/firestore';
 import type { ValidatedLabel } from '../ai/labelExtract';
-import type { CitedExplanation } from '../knowledge/explain';
+import { EXPLAIN_VERSION, type CitedExplanation } from '../knowledge/explain';
 import type { PetProfile, ProductFacts, RecallCheck, ScopeResult, SourceRef } from '../domain/types';
 import type { Limits } from './config';
 
@@ -45,7 +45,7 @@ export interface Enrichment {
   databaseImagesAt?: Date | null;
   databaseImages?: { read: string[]; skipped: string[] };
   researchAt?: Date | null;
-  research?: { filled: string[]; discarded: string[]; source: string };
+  research?: { filled: string[]; discarded: string[]; source: string; version?: string };
 }
 
 export interface StoredProduct {
@@ -210,6 +210,7 @@ export async function readExplanations(db: Firestore, keys: string[], now: Date)
   for (const snap of snaps) {
     if (!snap.exists) continue;
     const e = snap.data() as CitedExplanation;
+    if (e.status !== 'verified' && e.version !== EXPLAIN_VERSION) continue; // a failed lookup is tried again once the method changes
     const age = (now.getTime() - new Date(e.checkedAt).getTime()) / 86400000;
     if (age <= (e.status === 'verified' ? VERIFIED_DAYS : UNVERIFIED_DAYS)) out.set(snap.id, e);
   }
