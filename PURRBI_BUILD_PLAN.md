@@ -61,7 +61,8 @@ References (read-only): Moxis FlutterFlow `moxis-one-x51584` (pulled and export,
 | 7 | Photo recovery UI | ✅ live |
 | 8 | Deploy backend (OIDC); deployed-rules check; live E2E with client requests | ✅ live (two E2E runs) |
 | 9 | Visual refinement; legal/privacy/methodology copy; spoken labels for icon-only buttons | pending |
-| 10 | Android APK via GitHub Actions; checksum; test report | ✅ APK built (run 40920027599, SHA-256 recorded); device test pending |
+| 10 | Android APK via GitHub Actions; checksum; test report | ✅ APK built (build 1: run 40920027599; current: build 4, see TEST_RESULTS.md); device test pending |
+| 11 | Targeted repair (2026-10-29): classification by evidence (099482480882), research identity, no permanent negative caching, score 2.0.0 (coverage apart from quality, concern cap, roles), checked AI verdict, photo stages with backend-only promotion, compact result page, guarded scan chains, FlutterFlow issues | ✅ deployed, live-tested in the browser build; device test pending (`docs/SCAN_FLOW_AUDIT.md`, `METHODOLOGY.md`) |
 
 ## Owner actions, in order (one at a time)
 1. ~~FlutterFlow → Generate Config Files~~ — **done** (export configured for `purrbi-49c21`).
@@ -70,7 +71,8 @@ References (read-only): Moxis FlutterFlow `moxis-one-x51584` (pulled and export,
 4. ~~Google Cloud Shell: `backend/tools/gcp/setup-dev-access.sh`~~ — **done 2026-10-29** (re-run after IAM propagation retries; Cloud Billing API enabled; the default build identity's Editor role removed and replaced with the Cloud Build builder role).
 5. ~~Deploy and live tests~~ — **done 2026-10-29**: `deploy-backend` runs (all verified), two `live-e2e` runs, live app demos (`TEST_RESULTS.md`).
 6. ~~Repository secret `FIREBASE_GOOGLE_SERVICES_JSON`~~ — **done 2026-10-29**; `android-apk` run 40920027599 built the installable APK.
-7. **Next — device test:** install `app-release.apk` from the run's artifact on an Android phone and try sign-up, onboarding, a camera scan and a label photo.
+7. **Next — new OpenAI key (blocking AI features):** at ~22:35 UTC on 2026-10-29 OpenAI started answering the deployed backend with HTTP 401 "Your API key has been invalidated". Create a new key in the OpenAI dashboard (API keys → Create new secret key), then in Google Cloud console → Security → Secret Manager → `OPENAI_API_KEY` → **+ New version**, paste it there (never in chat), and say "secret saved"; Purrbi then redeploys so the functions pick up the new version.
+8. **Then — device test:** on the Android phone, **uninstall the earlier Purrbi build first** (its signing key differs, so the new APK cannot install over it), then install `app-release.apk` from the latest `android-apk` run's artifact and try a camera scan (also cancel one), repeated taps on the camera button, a label photo, and 099482480882.
 
 ## FlutterFlow changes so far (main)
 - Theme from the prototype (cream/teal/coral/sun/alert/slate, Nunito; 318 hard-coded Inter overrides reset to the theme font).
@@ -89,6 +91,12 @@ References (read-only): Moxis FlutterFlow `moxis-one-x51584` (pulled and export,
 - **Template defect fixed:** the template's connectivity check (`connected` custom action) polled four unrelated third-party hosts every 10 s (icanhazip.com, one.one.one.one, jsonplaceholder.typicode.com, pokeapi.co), and the sign-in/sign-up buttons refused to work when they were unreachable. It now checks only Firebase's own Auth/Firebase API hosts every 30 s with a keyless GET (refused before any project is involved, so no cost; GET because Google answers HEAD without CORS headers).
 - Still template content: profile/edit-profile fields, Terms link on Welcome without action.
 - 2026-10-29: Cat/Dog chips without icons (labels were cut off); result page: the "Check it for another pet" chip row now has a fixed height — without it, release builds pushed every later section (label findings, ingredients, nutrition, sources) out of view.
+- 2026-10-29 (targeted repair):
+  - **Scan page:** one scan at a time (taps while a request is created are ignored, spinner); offline check; a cancelled scan stops quietly; barcode scan mode; check-digit validation as the backend applies it (UPC-E included); temporary client trace (`traceScan` custom action, `[purrbi-trace]` in the device log).
+  - **Compact result page:** score circle (band colour; `scoreText`, so never 0 for unscored; a partial assessment shows its range); label; basis; verdict for the pet; at most 2 cautions and 2 positives (`HighlightRow` component); photo requests; label photo stages; ingredient preview with roles and the full list on demand; recall row; expandable details (personal fit with pet chips, nutrition, score breakdown or "what is missing", label findings, sources); delete a result.
+  - **Fixes:** a failed upload no longer disables the photo buttons; "Identifying the product" only while working; a stopped job can be retried; out-of-scope results offer a front photo; pet chips ignore taps during a refresh; history dates never null-assert.
+  - **FlutterFlow issues:** `users.photo_url` is an Image Path (the validator error is gone); AppLogo uses its size parameters; a category list no longer shrink-wraps. The remaining review items are verified false positives or by-design warnings (`docs/SCAN_FLOW_AUDIT.md` §3).
+  - **Note:** after a structural rewrite, FlutterFlow re-used the old lists' stored item types by position. The page was pushed in two steps (lists removed, then added) so each list got its own type.
 - Accessibility gap: icon-only buttons (back, favorite) and the custom terms checkbox have no spoken label, and two onboarding fields are merged into their parent in the accessibility tree. FlutterFlow's Tooltip widget does not provide a label (it uses `aligned_tooltip`, which excludes itself from semantics), so a tooltip attempt was reverted; the fix needs a small custom widget with a `Semantics` label.
 
 ## Environment limits found in this session

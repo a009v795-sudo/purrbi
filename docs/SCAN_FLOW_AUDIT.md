@@ -87,10 +87,13 @@ See TEST_RESULTS.md for the live results with trace ids.
 
 | Case | Method | Status |
 |---|---|---|
-| Scan page from Home "Scan now" | live, web build | see TEST_RESULTS.md |
-| Known product, three rapid taps on "Look up" | live, web build | see TEST_RESULTS.md |
-| Retry after a source failure | live, web build | see TEST_RESULTS.md |
-| 099482480882 | live, web build | see TEST_RESULTS.md |
+| Scan page from Home "Scan now" | live, web build | **passed** |
+| Known product, three rapid taps on "Look up" | live, web build | **passed**: 1 scan created (trace `383c17c7-e01`) |
+| Retry after a source failure | live, web build | **passed**: `f85f2b9d-ceb` failed → `ce0c86b4-28a` complete, claimCount 2 |
+| 099482480882 | live, web build | **passed**: unresolved, front photo requested (`a2643b66-5c7`) |
+| Not a pet product → front photo offered | live, web build | **passed** (`b275c4d3-418`) |
+| Reopen after an app restart | live, web build | **passed** |
+| Client trace | live, web build | **passed**: `create_start → create_done → result_open`, `retry_failed` |
 | Cancelled camera scan | — | **unverified**: the camera path runs only on a phone. The web build shows "Camera scanning needs the Android or iOS app" |
 | Repeated camera taps | — | **unverified on a device**; the same guard is verified on "Look up" |
 
