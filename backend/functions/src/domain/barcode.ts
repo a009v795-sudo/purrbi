@@ -1,12 +1,14 @@
 // Barcodes stay strings end to end; leading zeros are significant.
 
-export type BarcodeKind = 'EAN-8' | 'UPC-A' | 'EAN-13' | 'GTIN-14';
+export type BarcodeKind = 'EAN-8' | 'UPC-E' | 'UPC-A' | 'EAN-13' | 'GTIN-14';
 
 export interface NormalizedBarcode {
   ok: boolean;
   digits: string; // as scanned, digits only
   gtin14: string; // left-padded to 14 digits (product key)
   kind: BarcodeKind | null;
+  /** UPC-E only: the same product's 12-digit UPC-A, which databases and web pages use. */
+  expanded?: string;
   reason?: 'empty' | 'non_digit' | 'length' | 'check_digit';
 }
 
@@ -37,8 +39,27 @@ export function normalizeBarcode(raw: unknown): NormalizedBarcode {
   const kind = KIND_BY_LENGTH[compact.length];
   if (!kind) return fail('length', compact);
   const expected = gs1CheckDigit(compact.slice(0, -1));
-  if (expected !== Number(compact[compact.length - 1])) return fail('check_digit', compact);
+  if (expected !== Number(compact[compact.length - 1])) {
+    // Eight digits that are not a valid EAN-8 may be a UPC-E (small US packages): zeros suppressed from a UPC-A.
+    const upcA = compact.length === 8 ? expandUpcE(compact) : null;
+    if (upcA) return { ok: true, digits: compact, gtin14: upcA.padStart(14, '0'), kind: 'UPC-E', expanded: upcA };
+    return fail('check_digit', compact);
+  }
   return { ok: true, digits: compact, gtin14: compact.padStart(14, '0'), kind };
+}
+
+/**
+ * UPC-E (number system 0 or 1, six digits, check digit) to its UPC-A, or null when the code is not a
+ * valid UPC-E. The UPC-E check digit is the UPC-A's, so it must match the expanded number.
+ */
+export function expandUpcE(code: string): string | null {
+  if (!/^[01]\d{7}$/.test(code)) return null;
+  const [ns, x, check] = [code[0], code.slice(1, 7), code[7]];
+  const last = x[5];
+  const body =
+    last <= '2' ? `${x.slice(0, 2)}${last}0000${x.slice(2, 5)}` : last === '3' ? `${x.slice(0, 3)}00000${x.slice(3, 5)}` : last === '4' ? `${x.slice(0, 4)}00000${x[4]}` : `${x.slice(0, 5)}0000${last}`;
+  const upcA = `${ns}${body}${check}`;
+  return gs1CheckDigit(upcA.slice(0, -1)) === Number(check) ? upcA : null;
 }
 
 /**
@@ -47,6 +68,7 @@ export function normalizeBarcode(raw: unknown): NormalizedBarcode {
  */
 export function lookupVariants(b: NormalizedBarcode): string[] {
   if (!b.ok) return [];
+  if (b.kind === 'UPC-E' && b.expanded) return [b.expanded, '0' + b.expanded, b.digits];
   const out = [b.digits];
   if (b.digits.length === 12) out.push('0' + b.digits);
   if (b.digits.length === 13 && b.digits.startsWith('0')) out.push(b.digits.slice(1));

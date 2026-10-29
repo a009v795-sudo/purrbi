@@ -29,6 +29,11 @@ beforeEach(async () => {
     await db.doc('users/alice/scans/waiting').set({ barcode: '036000291452', status: 'needs_photos' });
     await db.doc('users/alice/scans/broken').set({ barcode: '036000291452', status: 'failed', errorRetryable: true });
     await db.doc('users/alice/scans/stuck').set({ barcode: '036000291452', status: 'failed', errorRetryable: false });
+    const minutesAgo = (m: number) => firebase.firestore.Timestamp.fromMillis(Date.now() - m * 60000);
+    await db.doc('users/alice/scans/stalled').set({ barcode: '036000291452', status: 'assessing', updatedAt: minutesAgo(10) });
+    await db.doc('users/alice/scans/working').set({ barcode: '036000291452', status: 'researching', updatedAt: minutesAgo(1) });
+    await db.doc('users/alice/scans/neverClaimed').set({ barcode: '036000291452', status: 'queued', createdAt: minutesAgo(9) });
+    await db.doc('users/alice/scans/rejected').set({ barcode: '036000291452', status: 'out_of_scope' });
     await db.doc('users/alice/labelFacts/00036000291452').set({ gtin: '00036000291452' });
     await db.doc('products/00036000291452').set({ productName: 'TEST FIXTURE' });
   });
@@ -63,6 +68,12 @@ describe('scan requests', () => {
     await assertSucceeds(alice().doc('users/alice/scans/waiting').update({ skipPhotos: true }));
     await assertSucceeds(alice().doc('users/alice/scans/broken').update({ retryRequested: true }));
     await assertFails(alice().doc('users/alice/scans/stuck').update({ retryRequested: true }));
+    // A job that stopped without a result (no update for 6 minutes) can be retried; a working one cannot.
+    await assertSucceeds(alice().doc('users/alice/scans/stalled').update({ retryRequested: true }));
+    await assertSucceeds(alice().doc('users/alice/scans/neverClaimed').update({ retryRequested: true }));
+    await assertFails(alice().doc('users/alice/scans/working').update({ retryRequested: true }));
+    await assertFails(bob().doc('users/alice/scans/stalled').update({ retryRequested: true }));
+    await assertFails(alice().doc('users/alice/scans/stalled').update({ retryRequested: true, status: 'queued' }));
     await assertSucceeds(alice().doc('users/alice/scans/done').update({ refreshPersonalRequested: true, petId: 'p2' }));
     await assertFails(bob().doc('users/alice/scans/done').update({ favorite: true }));
   });
@@ -75,6 +86,10 @@ describe('scan requests', () => {
 describe('label photos', () => {
   it('accepts a photo from the owner’s own storage folder while photos are needed', async () => {
     await assertSucceeds(alice().collection('users/alice/photos').add({ scanId: 'waiting', purpose: 'nutrition', imageUrl: ALICE_URL, status: 'uploaded', createdAt: ts() }));
+  });
+  it('accepts a photo for a scan judged not a cat or dog product (the owner can show the package)', async () => {
+    await assertSucceeds(alice().collection('users/alice/photos').add({ scanId: 'rejected', purpose: 'front', imageUrl: ALICE_URL, status: 'uploaded', createdAt: ts() }));
+    await assertFails(alice().collection('users/alice/photos').add({ scanId: 'working', purpose: 'front', imageUrl: ALICE_URL, status: 'uploaded', createdAt: ts() }));
   });
   it('rejects other folders, other owners, server fields and edits', async () => {
     await assertFails(alice().collection('users/alice/photos').add({ scanId: 'waiting', purpose: 'nutrition', imageUrl: BOB_URL, status: 'uploaded', createdAt: ts() }));

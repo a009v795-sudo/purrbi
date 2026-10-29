@@ -150,13 +150,32 @@ Purrbi checks the official FDA enforcement reports (openFDA, updated weekly). Th
 | `none_found` | "No matching notice found in the sources checked" (never "no recalls") |
 | `unavailable` | "The recall check failed; try again later" |
 
-## 9. Evidence labels
+## 9. Evidence labels and label photos
 
 Each fact shows where it came from:
 
 - the database record;
 - a database label image read by AI (two readings must agree);
 - a manufacturer or retailer page, where each fact was found on the page;
-- the owner's label photo, read by AI.
+- a label photo matched to this barcode (shared);
+- the owner's own label photo (private).
 
-A result based on the owner's photo says "Label-based assessment with product identity not yet independently verified". Nothing is marked as reviewed by a person unless it was.
+Nothing is marked as reviewed by a person unless it was.
+
+An owner's label photo goes through these stages, recorded on the photo (`stage`, `stageNote`) by the backend only (`pipeline/corroborate.ts`):
+
+| Stage | Meaning | Used for |
+|---|---|---|
+| submitted | Uploaded by the owner | — |
+| extracted | Two independent AI readings agreed on the label text | The owner's own result |
+| corroborated | An independent public source agrees: this barcode's record has the same recipe in order, the same analysis (±0.5 points), or the same name | The owner's own result |
+| verified | Also tied to this barcode: the barcode is on the photo, or the photo shows this barcode's recipe (at least 80% of the first 10 ingredients, in order) | The owner's result, **and** gaps in Purrbi's shared record for this barcode |
+| disputed | Conflicts with this barcode's record (another recipe, under 60% match, or another analysis) | Not used; the owner is asked to check the package |
+
+Promotion rules for verified readings:
+- They fill only fields the shared record lacks, and never overwrite.
+- They are shown to others as "A label photo matched to this barcode (read by AI, not reviewed)".
+- Each promotion is audited in `products/{gtin}/contributions` with a one-way hash, not the account id. The image itself is never shared.
+- The switch is `PROMOTE_LABEL_PHOTOS`.
+
+A result that uses the owner's photo before it is tied to the barcode says "Label-based assessment with product identity not yet independently verified".

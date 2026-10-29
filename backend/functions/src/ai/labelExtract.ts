@@ -92,6 +92,7 @@ export interface ValidatedLabel {
   activeIngredients: ActiveIngredient[];
   uncertainFields: string[]; // panels a reading saw but could not read fully
   rejected: string[]; // what was read but not kept, and why
+  barcodeMatch?: boolean; // both readings show the scanned barcode (ties the photo to this product)
   model: string;
   version?: string; // LABEL_EXTRACTION_VERSION; readings without it predate the grounded reader
 }
@@ -295,7 +296,7 @@ export function combineReadings(a: Reading, b: Reading, scanGtin14: string): Val
   }
 
   const rejected: string[] = [];
-  const out = { ...base };
+  const out = { ...base, barcodeMatch: !!ba && ba === bb && sameGtin(ba, scanGtin14) };
   if (a.ingredientsText && b.ingredientsText) {
     if (wordAgreement(a.ingredientsText, b.ingredientsText) >= 0.9) Object.assign(out, { ingredientsText: a.ingredientsText, ingredients: a.ingredients });
     else rejected.push('ingredients: the two readings differ');

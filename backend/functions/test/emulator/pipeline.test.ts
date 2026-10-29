@@ -34,6 +34,7 @@ let db: Firestore;
 let calls: Record<string, number>;
 let opffDown = false;
 let verdictMode: 'ok' | 'invalid' | 'fail' = 'ok';
+let labelPatch: Partial<ValidatedLabel> | null = null; // changes the mocked reading of a label panel
 let verdictInputs: string[] = [];
 
 const NOW = new Date('2026-10-28T12:00:00Z');
@@ -158,7 +159,7 @@ const sources: Sources = {
     if (verdictMode === 'fail') throw new Error('mock verdict outage');
     if (verdictMode === 'invalid') return { text: 'TEST FIXTURE: the safest food.', model: 'mock' };
     const subject = o.input.pet ? o.input.pet.name : 'a cat or dog';
-    const score = o.input.assessment.score === null ? 'not available yet' : `${o.input.assessment.score}/100`;
+    const score = o.input.assessment.score === null ? 'not available yet' : `${o.input.assessment.score}/100${o.input.assessment.label === 'Partial assessment' ? ', a partial assessment' : ''}`;
     const first = o.input.cautions[0]?.value ? ` (first: ${o.input.cautions[0].value})` : '';
     return { text: `TEST FIXTURE verdict: Purrbi’s label score for this product is ${score}; for ${subject}, check the cautions listed below${first} against what you already know before choosing it.`, model: 'mock' };
   },
@@ -179,6 +180,7 @@ const sources: Sources = {
       calories: [{ kcal: 3900, per: 'kg' }],
       adequacy: { text: 'TEST FIXTURE is formulated to meet the nutritional levels established by the AAFCO Cat Food Nutrient Profiles for adult maintenance.', type: 'complete', species: 'cat', lifeStages: ['adult_maintenance'], method: 'formulation', largeSizeGrowth: null, style: 'aafco' },
       feedingDirections: null, activeIngredients: [], uncertainFields: [], rejected: [], model: 'mock', version: LABEL_EXTRACTION_VERSION,
+      ...labelPatch,
     };
   },
 };
@@ -211,6 +213,7 @@ beforeEach(async () => {
   opffDown = false;
   verdictMode = 'ok';
   verdictInputs = [];
+  labelPatch = null;
   await fetch(`http://${process.env.FIRESTORE_EMULATOR_HOST}/emulator/v1/projects/demo-purrbi/databases/(default)/documents`, { method: 'DELETE' });
   await db.doc('users/u1/pets/cat1').set({ name: 'Miso', species: 'cat', birthDate: Timestamp.fromDate(new Date('2022-01-01')), allergiesStatus: 'reported', allergies: ['chicken'], profileVersion: 2 });
   await db.doc('users/u1/pets/cat2').set({ name: 'Pip', species: 'cat', birthDate: Timestamp.fromDate(new Date('2021-03-01')), allergiesStatus: 'none_reported', profileVersion: 1 });
@@ -461,6 +464,26 @@ describe('failures stay specific', () => {
     expect(s.claimCount).toBe(2);
     expect(calls['lookup:opff']).toBe(1);
   });
+  it('a scan whose job stopped without a result can be retried by the owner, and completes', async () => {
+    const ref = await newScan('u1', BC.treat, 'cat2');
+    // As a job leaves it when it times out: still "assessing", last updated 10 minutes ago, quota already used.
+    await ref.update({ status: 'assessing', claimCount: 1, updatedAt: Timestamp.fromDate(new Date(NOW.getTime() - 10 * 60000)) });
+    const before = await read(ref);
+    await ref.update({ retryRequested: true });
+    await handleScanUpdate(deps(), 'u1', ref.id, before, await read(ref));
+    const s = await read(ref);
+    expect(s).toMatchObject({ status: 'complete', claimCount: 2, retryRequested: false });
+    expect(s.lastJob.kind).toBe('retry');
+  });
+  it('a working scan is not retried', async () => {
+    const ref = await newScan('u1', BC.treat, 'cat2');
+    await ref.update({ status: 'researching', claimCount: 1, updatedAt: Timestamp.fromDate(new Date(NOW.getTime() - 60000)) });
+    const before = await read(ref);
+    await ref.update({ retryRequested: true });
+    await handleScanUpdate(deps(), 'u1', ref.id, before, await read(ref));
+    expect((await read(ref)).status).toBe('researching');
+    expect(calls['lookup:opff']).toBeUndefined();
+  });
   it('an invalid barcode fails without retry', async () => {
     const ref = await newScan('u1', '036000291453');
     await processScan(deps(), 'u1', ref.id);
@@ -604,6 +627,75 @@ describe('concise result: highlights and verdict', () => {
     expect(s.positives).toEqual([]);
     expect(s.scoreText).not.toBe('0');
     expect(calls.verdict).toBeUndefined();
+  });
+});
+
+describe('label photo stages: submitted → extracted → corroborated → verified, or disputed', () => {
+  const photoFor = (uid: string, scanId: string) =>
+    db.collection(`users/${uid}/photos`).add({ scanId, purpose: 'nutrition', imageUrl: `https://firebasestorage.googleapis.com/v0/b/x/o/users%2F${uid}%2Fuploads%2F1.jpg`, status: 'uploaded', createdAt: Timestamp.fromDate(NOW) });
+  it('a photo not tied to this barcode stays private, and the result says it is label-based', async () => {
+    const ref = await newScan('u1', BC.food, 'cat1');
+    await processScan(deps(), 'u1', ref.id);
+    const photo = await photoFor('u1', ref.id);
+    await processPhoto(deps(), 'u1', photo.id);
+    expect(await read(photo)).toMatchObject({ status: 'processed', stage: 'extracted' });
+    const s = await read(ref);
+    expect(s.status).toBe('complete');
+    expect(s.verificationStatus).toMatch(/^Label-based assessment with product identity not yet independently verified\./);
+    expect((await db.doc(`products/${s.gtin}`).get()).data()!.facts.guaranteedAnalysis).toBeUndefined();
+  });
+  it('a photo showing the scanned barcode is verified and fills the shared record without any account id', async () => {
+    labelPatch = { barcodeMatch: true };
+    const ref = await newScan('u1', BC.food, 'cat1');
+    await processScan(deps(), 'u1', ref.id);
+    const photo = await photoFor('u1', ref.id);
+    await processPhoto(deps(), 'u1', photo.id);
+    const p = await read(photo);
+    expect(p).toMatchObject({ status: 'processed', stage: 'verified' });
+    expect(p.stageNote).toMatch(/barcode on the photo is the scanned one/);
+    const s = await read(ref);
+    expect(s.status).toBe('complete');
+    expect(s.verificationStatus).not.toMatch(/not yet independently verified/);
+    const product = (await db.doc(`products/${s.gtin}`).get()).data()!;
+    expect(product.facts.guaranteedAnalysis.source).toMatchObject({ sourceType: 'verified_label', sourceName: 'A label photo matched to this barcode' });
+    expect(JSON.stringify(product)).not.toMatch(/u1|firebasestorage/); // no account id, no private image
+    const contributions = (await db.collection(`products/${s.gtin}/contributions`).get()).docs.map((d) => d.data());
+    expect(contributions).toHaveLength(1);
+    expect(contributions[0].fields).toEqual(expect.arrayContaining(['guaranteedAnalysis']));
+    expect(JSON.stringify(contributions)).not.toMatch(/u1/);
+    // Another owner now gets the analysis from the shared record, with no photo.
+    const other = await newScan('u2', BC.food);
+    await processScan(deps(), 'u2', other.id);
+    const o = await read(other);
+    expect(o.status).toBe('complete');
+    expect(o.nutritionSource).toBe('A label photo matched to this barcode (read by AI, not reviewed)');
+    expect(o.labelEvidenceUsed).toBe(false);
+  });
+  it('a photo whose ingredient list differs from this barcode’s record is disputed and not used', async () => {
+    labelPatch = { ingredientsText: 'Salmon, potatoes, peas, canola oil, tapioca, salt', ingredients: ['Salmon', 'potatoes', 'peas', 'canola oil', 'tapioca', 'salt'] };
+    const ref = await newScan('u1', BC.food, 'cat1');
+    await processScan(deps(), 'u1', ref.id);
+    const photo = await photoFor('u1', ref.id);
+    await processPhoto(deps(), 'u1', photo.id);
+    const p = await read(photo);
+    expect(p).toMatchObject({ status: 'processed', stage: 'disputed' });
+    expect(p.stageNote).toMatch(/^Not used: its ingredient list differs from this barcode’s record/);
+    const s = await read(ref);
+    expect(s.status).toBe('needs_photos');
+    expect(s.labelEvidenceUsed).toBe(false);
+    expect(s.evidenceNotes.join(' ')).toMatch(/A label photo was not used/);
+  });
+  it('lets the owner show the package when a product was judged not a cat or dog product', async () => {
+    labelPatch = { species: 'dog', productTypeClaim: 'Dry dog food', adequacy: null };
+    const ref = await newScan('u1', BC.human, 'cat1');
+    await processScan(deps(), 'u1', ref.id);
+    expect((await read(ref)).status).toBe('out_of_scope');
+    const photo = await db.collection('users/u1/photos').add({ scanId: ref.id, purpose: 'label', imageUrl: 'https://firebasestorage.googleapis.com/v0/b/x/o/users%2Fu1%2Fuploads%2F2.jpg', status: 'uploaded', createdAt: Timestamp.fromDate(NOW) });
+    await processPhoto(deps(), 'u1', photo.id);
+    const s = await read(ref);
+    expect(s).toMatchObject({ scope: 'supported', productSpecies: 'dog', labelEvidenceUsed: true }); // the owner's package decides their own result
+    expect(s.verificationStatus).toMatch(/^Label-based assessment with product identity not yet independently verified/);
+    expect((await db.doc(`products/${s.gtin}`).get()).data()!.scope).toBe('out_of_scope'); // the shared record is unchanged by a private photo
   });
 });
 

@@ -53,6 +53,8 @@ export function evidenceLabel(src: SourceRef | undefined): string {
       return `${src.sourceName} (read by AI, not reviewed)`;
     case 'user_label':
       return 'Your label photo (read by AI, not reviewed)';
+    case 'verified_label':
+      return 'A label photo matched to this barcode (read by AI, not reviewed)';
     case 'manufacturer':
       return 'Manufacturer web page';
     case 'retailer_or_web':

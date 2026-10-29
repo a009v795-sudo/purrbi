@@ -79,6 +79,7 @@ describe('verdict', () => {
     expect(checkVerdict(ok.replace('compare the ingredient list', 'it is the safest choice; compare the list'), v)).toMatch(/claim Purrbi does not make/);
     expect(checkVerdict(ok.replace(`${v.assessment.score}/100`, '97/100'), v)).toMatch(/number not in the assessment/);
     expect(checkVerdict('Contains chicken.', v)).toMatch(/length/);
+    expect(checkVerdict(ok.replace('but it contains', 'a partial assessment, but it contains'), v)).toMatch(/calls a full assessment partial/);
     expect(checkVerdict(ok.replace(/chicken/g, 'poultry').replace('which you recorded as an allergy', 'which may matter'), v)).toMatch(/most serious caution/);
   });
   it('the rule-based verdict leads with the alert and stays within 45 words', () => {

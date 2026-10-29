@@ -33,6 +33,7 @@ const RESEARCH_MODEL = defineString('OPENAI_RESEARCH_MODEL', { default: 'gpt-4.1
 const EXPLAIN_MODEL = defineString('OPENAI_EXPLAIN_MODEL', { default: 'gpt-4.1-mini' });
 const VERDICT_MODEL = defineString('OPENAI_VERDICT_MODEL', { default: 'gpt-4.1-mini' });
 const VERDICTS_ENABLED = defineBoolean('VERDICTS_ENABLED', { default: true });
+const PROMOTE_LABEL_PHOTOS = defineBoolean('PROMOTE_LABEL_PHOTOS', { default: true });
 const USER_AGENT = defineString('SOURCE_USER_AGENT', { default: 'Purrbi/0.1 (development build; contact@valenciainnovations.com)' });
 // The project's Storage bucket (deploy-config.json storageBucket, written to .env.<projectId> by the deploy
 // workflow). Empty means the default bucket, which is what the emulators use.
@@ -54,6 +55,7 @@ function config(): RuntimeConfig {
     databaseImagesEnabled: DATABASE_IMAGES_ENABLED.value(),
     explanationsEnabled: EXPLANATIONS_ENABLED.value(),
     verdictsEnabled: VERDICTS_ENABLED.value(),
+    promoteLabelPhotos: PROMOTE_LABEL_PHOTOS.value(),
     productFreshDays: 30,
     recallFreshHours: 24, // openFDA enforcement data is updated weekly
     limits: DEFAULT_LIMITS,

@@ -23,7 +23,7 @@ export function fillMissing(base: ProductFacts, extra: Partial<ProductFacts>): {
   return { facts, filled };
 }
 
-const ENRICHMENT_SOURCES = new Set(['database_image', 'manufacturer', 'retailer_or_web']);
+const ENRICHMENT_SOURCES = new Set(['database_image', 'manufacturer', 'retailer_or_web', 'verified_label']);
 
 /**
  * Removes enrichment made under older rules, so it is done again: facts read from database label images

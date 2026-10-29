@@ -11,7 +11,7 @@ import type { Highlight } from '../domain/highlights';
 import { SourceError } from '../util/http';
 import { chatJson } from './openai';
 
-export const VERDICT_VERSION = 'verdict-1.0.0';
+export const VERDICT_VERSION = 'verdict-1.1.0';
 
 export interface VerdictInput {
   product: { name: string; brand: string; species: string; category: string };
@@ -83,7 +83,9 @@ export function ruleVerdict(input: VerdictInput): string {
   const score =
     input.assessment.score === null
       ? input.assessment.withheldReason
-      : `Purrbi’s label score for ${name} is ${input.assessment.score}/100${input.assessment.provisional ? ' so far, a partial assessment' : ''}.`;
+      : input.assessment.label === 'Partial assessment'
+        ? `Purrbi’s label score for ${name} is ${input.assessment.score}/100 so far, a partial assessment.`
+        : `Purrbi’s label score for ${name} is ${input.assessment.score}/100 (${input.assessment.label.toLowerCase()}).`;
   const why = first ? `Check: ${first.detail}` : input.positives[0] ? input.positives[0].detail : '';
   const fit = input.pet?.headline && input.pet.fit !== 'fits' ? `${input.pet.headline}.` : '';
   return trimTo([fit, score, why].filter(Boolean).join(' '), 45);
@@ -101,6 +103,10 @@ export function checkVerdict(text: string, input: VerdictInput): string | null {
   const numbers = text.replace(/\/\s*100\b/g, '').match(/\d+(?:[.,]\d+)?/g) ?? [];
   const invented = numbers.find((x) => !source.includes(x));
   if (invented) return `number not in the assessment (${invented})`;
+  // The label is used as given: a full assessment is never called partial, nor the reverse.
+  const partial = input.assessment.label === 'Partial assessment';
+  if (!partial && /\bpartial\b/i.test(text)) return 'calls a full assessment partial';
+  if (partial && !/\bpartial\b/i.test(text)) return 'does not say it is a partial assessment';
   const first = input.cautions[0];
   if (first?.severity === 'alert') {
     const named = [first.value, ...(first.rule === 'G-RECALL' ? ['recall'] : []), ...(first.rule === 'P-SPECIES' ? ['dog', 'cat'] : [])].filter(Boolean);
@@ -113,7 +119,7 @@ const SYSTEM = [
   'You write the verdict a cat or dog owner sees first: one or two plain sentences, 25 to 45 words, saying what Purrbi’s assessment of this product means for their pet.',
   'Use only the facts in the JSON input. Never add facts, numbers, ingredients, health claims or advice that are not in it.',
   'If there is a caution with severity "alert" (a recall match, a product made for another species, an ingredient in the pet’s allergy profile), start with it.',
-  'Call the score “Purrbi’s label score”; if provisional is true, say it is a partial assessment. If there is no score, say what is missing.',
+  'Call the score “Purrbi’s label score” and use the assessment label exactly as given. Only if the label is “Partial assessment”, say it is a partial assessment; if provisional is true with any other label, you may say some optional label details are not confirmed yet. If there is no score, say what is missing.',
   'If there is no pet, speak about the product in general.',
   'Never say safe, ideal, perfect, healthy, best, excellent, recommended, guaranteed or “no concerns”; say “no documented concerns in Purrbi’s reviewed list” only if a positive says so. Do not give veterinary advice.',
 ].join(' ');

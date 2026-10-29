@@ -10,8 +10,8 @@ There are **no HTTP or callable endpoints**. The app talks to the backend only t
 | Step | Client writes | Backend trigger | Backend writes | Status |
 |---|---|---|---|---|
 | Start scan | `users/{uid}/scans/{scanId}` = `{barcode: String (digits, leading zeros kept), petId?: String, source?: "camera"\|"manual", status: "queued", createdAt: serverTimestamp, clientVersion?: String}` | `processScanJob` (onDocumentCreated) | status/progress updates, then result fields (§3) | emulator |
-| Add label photo | upload image to Storage `users/{uid}/uploads/...` (FlutterFlow Upload), then `users/{uid}/scans/{scanId}/photos/{photoId}` = `{purpose: "front"\|"ingredients"\|"nutrition"\|"label", imageUrl: String (that file's download URL), status: "uploaded", createdAt: serverTimestamp}` | `processScanPhoto` | photo `{status: processing→processed\|unreadable\|different_product\|failed\|rejected, statusMessage, panels[], fieldsFound[], uncertainFields[], processedAt}`; scan re-assessed | emulator |
-| Retry after failure | scan `{retryRequested: true}` (only when `status == "failed"` and `errorRetryable == true`) | `onScanRequestUpdated` | re-runs the job | emulator |
+| Add label photo | upload image to Storage `users/{uid}/uploads/...` (FlutterFlow Upload), then `users/{uid}/photos/{photoId}` = `{scanId, purpose: "front"\|"ingredients"\|"nutrition"\|"label", imageUrl: String (that file's download URL), status: "uploaded", createdAt: serverTimestamp}` (scan `needs_photos`, `complete` or `out_of_scope`) | `processScanPhoto` | photo `{status: processing→processed\|unreadable\|different_product\|failed\|rejected, stage: extracted\|corroborated\|verified\|disputed, stageNote, statusMessage, panels[], fieldsFound[], uncertainFields[], processedAt}`; scan re-assessed | emulator |
+| Retry after failure | scan `{retryRequested: true}` (when `status == "failed"` and `errorRetryable == true`, or when a working status has had no update for 6 minutes: the job stopped without a result) | `onScanRequestUpdated` | re-runs the job (a stuck scan is not charged again) | emulator |
 | Continue without photos | scan `{skipPhotos: true}` (only when `status == "needs_photos"`) | `onScanRequestUpdated` | `status: "complete"` with partial assessment | emulator |
 | Personal fit for another pet / after profile edit | scan `{refreshPersonalRequested: true, petId}` (status `complete` or `needs_photos`) | `onScanRequestUpdated` | personal fields recomputed; general score unchanged unless evidence changed | emulator |
 | Save / unsave | scan `{favorite: Boolean}` | — | — | emulator |
@@ -42,13 +42,14 @@ Every scan has a `traceId` (12 hex chars) used in all backend logs and evidence 
 | `users/{uid}` | owner (FlutterFlow auth fields + `activePetId`, `onboardingComplete`, `consentVersion`, `consentAcceptedAt`, `unitsPreference`) | owner | |
 | `users/{uid}/pets/{petId}` | owner (validated) | owner, backend | §4 |
 | `users/{uid}/scans/{scanId}` | owner: request + flags only; backend: everything else | owner | §3 |
-| `users/{uid}/photos/{photoId}` | owner creates (`scanId`, `purpose`, `imageUrl`, `status: uploaded`, `createdAt`) for a scan that is waiting for photos or complete; backend updates | owner | one level below `users` because FlutterFlow does not support collections nested under subcollections |
+| `users/{uid}/photos/{photoId}` | owner creates (`scanId`, `purpose`, `imageUrl`, `status: uploaded`, `createdAt`) for a scan that is waiting for photos, complete, or out of scope; backend updates (`status`, `statusMessage`, `stage` = `extracted\|corroborated\|verified\|disputed`, `stageNote`, `agreements`, `conflicts`, `panels`, `fieldsFound`, `uncertainFields`, `processedAt`) | owner | one level below `users` because FlutterFlow does not support collections nested under subcollections |
 | `users/{uid}/labelFacts/{gtin14}` | backend | owner | private label text read from the owner's photos; never copied to `products` |
 | `products/{gtin14}` | backend | any signed-in user | public-source facts only (database / verified web), `factsVersion`, `factsHash`, `recall`, `recallCheckedAt` |
 | `products/{gtin14}/evidence/{sourceId}` | backend | signed-in | `sourceType`, `sourceName`, `url`, `retrievedAt`, `matchConfidence`, `license`, `fieldsSupported[]`, `traceId` |
 | `usage/{uid}_{yyyymmdd}`, `system/aiUsage_{yyyymmdd}` | backend | nobody | quotas and the global AI budget |
 | `productMeta/{gtin14}` | backend | nobody | label-image links from the database and when optional enrichment (database label images, web research) was last attempted, so paid steps run at most once per product per 30 days |
 | `users/{uid}/verdicts/{key}` | backend | nobody (copied into scans) | cached verdicts: `text`, `model`, `source (ai\|rules)`, `createdAt`; `key` = hash of the verdict input (no pet name) and model; deleted with the account |
+| `products/{gtin14}/contributions/{photoKey}` | backend | nobody | label facts an owner's **verified** photo added to the shared record: `contributor` (one-way hash, never the account id), `fields`, `agreements`, `traceId`, `at` |
 | `products/{gtin14}/classifications/{auto}` | backend | nobody | audit trail of changed classifications: `from`/`to` (`scope`, `species`, `category`, `reason`, `version`), `signals`, `traceId`, `at` |
 | `knowledge/{species}_{kind}_{term}` | backend | nobody (copied into scans) | cited explanations of ingredients/supplement actives: `status (verified\|unverified\|not_found)`, `summary`, `role`, `sourceTitle`, `sourceUrl`, `quote`, `checkedAt`, `model`, `version`; verified kept 180 days, others 30 days |
 
@@ -141,6 +142,7 @@ HTTP 200; the pet-food query (`"dog food" "cat food" "pet food"`) returns only a
 | `OPENAI_API_KEY` | Secret Manager secret | — (required to deploy) |
 | `AI_ENABLED` | param | `true` (master switch for every AI call) |
 | `RESEARCH_ENABLED` / `DATABASE_IMAGES_ENABLED` / `EXPLANATIONS_ENABLED` | param | `true` / `true` / `true` |
+| `PROMOTE_LABEL_PHOTOS` | param | `true`: verified label photos may fill gaps in the shared product record (METHODOLOGY.md §9) |
 | `VERDICTS_ENABLED` / `OPENAI_VERDICT_MODEL` | param | `true` / `gpt-4.1-mini` (dev: `gpt-4.1-mini,gpt-5-mini`, tried in order) |
 | `OPENAI_VISION_MODEL` / `OPENAI_RESEARCH_MODEL` / `OPENAI_EXPLAIN_MODEL` | param | `gpt-4o-mini` / `gpt-4.1-mini` / `gpt-4.1-mini` (the explain model may be a comma-separated list, tried in order; dev uses `gpt-5-mini,gpt-4.1-mini`). The vision model may name two models: each label photo is read by both, and only what both readings agree on is kept (dev: `gpt-4.1-mini,gpt-5-mini`; one model reads twice) |
 | `SOURCE_USER_AGENT` | param | `Purrbi/0.1 (development build; contact@valenciainnovations.com)` |

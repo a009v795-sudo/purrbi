@@ -268,14 +268,18 @@ export interface StoredLabelExtraction {
   purpose: string;
   processedAt: Date;
   label: ValidatedLabel;
+  /** submitted → extracted → corroborated → verified, or disputed (pipeline/corroborate.ts); older readings have none. */
+  stage?: string;
+  agreements?: string[];
+  conflicts?: string[];
 }
 
 export async function readLabelExtractions(db: Firestore, uid: string, gtin: string): Promise<StoredLabelExtraction[]> {
   const snap = await db.doc(`users/${uid}/labelFacts/${gtin}`).get();
   if (!snap.exists) return [];
-  const items = (snap.get('extractions') as Record<string, { scanId: string; purpose: string; processedAt: Timestamp; label: ValidatedLabel }> | undefined) ?? {};
+  const items = (snap.get('extractions') as Record<string, { scanId: string; purpose: string; processedAt: Timestamp; label: ValidatedLabel; stage?: string; agreements?: string[]; conflicts?: string[] }> | undefined) ?? {};
   return Object.entries(items)
-    .map(([photoId, x]) => ({ photoId, scanId: x.scanId, purpose: x.purpose, processedAt: x.processedAt.toDate(), label: x.label }))
+    .map(([photoId, x]) => ({ photoId, scanId: x.scanId, purpose: x.purpose, processedAt: x.processedAt.toDate(), label: x.label, stage: x.stage ?? 'extracted', agreements: x.agreements ?? [], conflicts: x.conflicts ?? [] }))
     .sort((a, b) => b.processedAt.getTime() - a.processedAt.getTime());
 }
 
@@ -284,10 +288,15 @@ export async function saveLabelExtraction(db: Firestore, uid: string, gtin: stri
     {
       gtin,
       updatedAt: Timestamp.fromDate(e.processedAt),
-      extractions: { [e.photoId]: { scanId: e.scanId, purpose: e.purpose, processedAt: Timestamp.fromDate(e.processedAt), label: e.label } },
+      extractions: { [e.photoId]: { scanId: e.scanId, purpose: e.purpose, processedAt: Timestamp.fromDate(e.processedAt), label: e.label, stage: e.stage ?? 'extracted', agreements: e.agreements ?? [], conflicts: e.conflicts ?? [] } },
     },
     { merge: true },
   );
+}
+
+/** Audit entry for label facts an owner's verified photo added to the shared record (no account id: a one-way hash). */
+export async function recordContribution(db: Firestore, gtin: string, c: { photoKey: string; contributor: string; fields: string[]; agreements: string[]; traceId: string; now: Date }): Promise<void> {
+  await db.doc(`products/${gtin}/contributions/${c.photoKey}`).set({ contributor: c.contributor, fields: c.fields, agreements: c.agreements, traceId: c.traceId, at: Timestamp.fromDate(c.now) });
 }
 
 // ---- pets -------------------------------------------------------------------------

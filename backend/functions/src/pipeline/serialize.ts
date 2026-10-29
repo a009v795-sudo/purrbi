@@ -89,6 +89,7 @@ export function resultFields(args: {
   photoRequests: PhotoRequest[];
   factsVersion: number;
   labelEvidenceUsed: boolean;
+  labelIdentityVerified?: boolean; // every label photo used is tied to this barcode (verified)
 }): Record<string, unknown> {
   const { facts, scope, general, personal, recall } = args;
   const ga = facts.guaranteedAnalysis?.value ?? [];
@@ -183,7 +184,7 @@ export function resultFields(args: {
     summary: args.summary,
     ingredientsPreview: (facts.ingredients?.value ?? []).slice(0, 5).join(', '),
     ingredientsCount: facts.ingredients?.value.length ?? 0,
-    verificationStatus: verificationStatus(facts),
+    verificationStatus: verificationStatus(facts, args.labelIdentityVerified !== false),
     missingInfo: args.photoRequests.map((p) => p.purpose),
     photoRequests: args.photoRequests.map((p) => ({ ...p })),
     labelEvidenceUsed: args.labelEvidenceUsed,
@@ -216,14 +217,16 @@ export function recallDisplay(recall: RecallCheck | null): Record<string, unknow
 }
 
 /** Where the facts shown come from, as one line (verified by a person never; checked against sources how). */
-function verificationStatus(facts: ProductFacts): string {
+function verificationStatus(facts: ProductFacts, identityVerified: boolean): string {
   const kinds = new Set(facts.sources.map((s) => s.sourceType));
   const parts: string[] = [];
   if (kinds.has('database')) parts.push('database record');
   if (kinds.has('manufacturer') || kinds.has('retailer_or_web')) parts.push('web page, each fact found on it');
   if (kinds.has('database_image')) parts.push('database label image read by AI');
-  if (kinds.has('user_label')) parts.push('your label photo read by AI (product identity not independently verified)');
-  return parts.length ? `Based on: ${parts.join('; ')}. Not reviewed by a person.` : 'No product record yet.';
+  if (kinds.has('verified_label')) parts.push('a label photo matched to this barcode, read by AI');
+  if (kinds.has('user_label')) parts.push(identityVerified ? 'your label photo, matched to this barcode, read by AI' : 'your label photo read by AI');
+  const based = parts.length ? `Based on: ${parts.join('; ')}. Not reviewed by a person.` : 'No product record yet.';
+  return kinds.has('user_label') && !identityVerified ? `Label-based assessment with product identity not yet independently verified. ${based}` : based;
 }
 
 /** The concise result: up to two positives and two cautions, and the short verdict for the pet. */

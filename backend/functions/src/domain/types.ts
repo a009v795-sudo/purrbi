@@ -27,6 +27,7 @@ export type SourceType =
   | 'manufacturer' // manufacturer web page
   | 'retailer_or_web' // other web page found by research
   | 'official_notice' // FDA / openFDA
+  | 'verified_label' // an owner's label photo tied to this barcode (shared by the backend; unreviewed)
   | 'user_label'; // the owner's own label photo (private, unreviewed)
 
 export type MatchConfidence = 'exact_barcode' | 'brand_and_product' | 'brand_only' | 'none';

@@ -23,6 +23,8 @@ export interface RuntimeConfig {
   databaseImagesEnabled: boolean;
   explanationsEnabled: boolean;
   verdictsEnabled: boolean;
+  /** Owners' verified label photos may fill gaps in the shared product record (backend only). */
+  promoteLabelPhotos?: boolean;
   productFreshDays: number;
   recallFreshHours: number;
   limits: Limits;
@@ -53,6 +55,11 @@ export const SCAN_STATUS = {
   outOfScope: 'out_of_scope',
   failed: 'failed',
 } as const;
+
+/** States in which a job is still working on the scan. */
+export const WORKING_STATUSES: readonly string[] = [SCAN_STATUS.queued, SCAN_STATUS.identifying, SCAN_STATUS.researching, SCAN_STATUS.checkingAlerts, SCAN_STATUS.assessing, SCAN_STATUS.processingPhoto];
+/** A working scan with no update for this long has stopped without a result (jobs time out after 5 minutes); the owner may retry it. */
+export const STUCK_AFTER_MS = 6 * 60 * 1000;
 
 export type ErrorCode =
   | 'invalid_barcode'

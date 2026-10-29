@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { gs1CheckDigit, lookupVariants, normalizeBarcode, sameGtin, textContainsGtin } from '../../src/domain/barcode';
+import { expandUpcE, gs1CheckDigit, lookupVariants, normalizeBarcode, sameGtin, textContainsGtin } from '../../src/domain/barcode';
 import { parseIngredientList } from '../../src/domain/ingredients';
 import { parseAdequacyStatement } from '../../src/domain/adequacy';
 import { parseCalorieText, validateGuaranteedAnalysis, dryMatterPercent } from '../../src/domain/nutrition';
@@ -21,6 +21,15 @@ describe('barcode', () => {
     expect(b.digits).toBe('036000291452');
     expect(b.gtin14).toBe('00036000291452');
     expect(lookupVariants(b)).toEqual(['036000291452', '0036000291452']);
+  });
+  it('reads an 8-digit UPC-E (small US packages) as its UPC-A, and keeps a valid EAN-8 as EAN-8', () => {
+    const b = normalizeBarcode('04252614');
+    expect(b).toMatchObject({ ok: true, kind: 'UPC-E', digits: '04252614', expanded: '042100005264', gtin14: '00042100005264' });
+    expect(lookupVariants(b)).toEqual(['042100005264', '0042100005264', '04252614']);
+    expect(expandUpcE('01234565')).toBe('012345000065'); // last digit 5-9: manufacturer 5 digits, 0000, item digit
+    expect(expandUpcE('06543217')).toBe('065100004327'); // last digit 0-2
+    expect(normalizeBarcode('96385074')).toMatchObject({ ok: true, kind: 'EAN-8' });
+    expect(normalizeBarcode('04252615')).toMatchObject({ ok: false, reason: 'check_digit' });
   });
   it('rejects non-numeric and wrong-length codes', () => {
     expect(normalizeBarcode('https://example.com').reason).toBe('non_digit');

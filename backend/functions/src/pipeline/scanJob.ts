@@ -6,7 +6,7 @@
 // per freshness window. Each failure keeps its own error code: a timeout, a quota stop or a failed
 // save is never reported as "product not found", and partial findings are kept. Every outbound call
 // is recorded (sanitized) under the job's trace id.
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Firestore } from 'firebase-admin/firestore';
 import { extractLabel as extractLabelImpl, LABEL_EXTRACTION_VERSION, type ValidatedLabel } from '../ai/labelExtract';
 import { checkVerdict, ruleVerdict, verdictInput, verdictKey, withPetName, writeVerdict as verdictImpl } from '../ai/verdict';
@@ -26,7 +26,8 @@ import { RESEARCH_VERSION, researchProduct as researchImpl, type ResearchOutcome
 import { currentCalls, errorDetail, runWithCallLog } from '../util/diagnostics';
 import { SourceError } from '../util/http';
 import { rematchAnalysis } from '../domain/nutrition';
-import { SCAN_STATUS, type ErrorCode, type RuntimeConfig } from './config';
+import { SCAN_STATUS, STUCK_AFTER_MS, WORKING_STATUSES, type ErrorCode, type RuntimeConfig } from './config';
+import { corroborateLabel } from './corroborate';
 import { dropStaleImageReads, enrichmentFacts, fillMissing, labelToFacts, missingInfo, type PhotoRequest } from './facts';
 import { explanationFields, highlightFields, jobFields, resultFields, type JobInfo } from './serialize';
 import {
@@ -40,6 +41,7 @@ import {
   readProduct,
   readProductMeta,
   readVerdict,
+  recordContribution,
   saveLabelExtraction,
   saveVerdict,
   stripPrivate,
@@ -100,6 +102,12 @@ class JobError extends Error {
 const scanPath = (uid: string, scanId: string) => `users/${uid}/scans/${scanId}`;
 const ageDays = (d: Date | null | undefined, now: Date) => (d ? (now.getTime() - d.getTime()) / 86400000 : Infinity);
 
+/** A scan still marked as working that has not been updated for STUCK_AFTER_MS: its job stopped without a result. */
+function isStuck(d: Record<string, unknown>, now: Date): boolean {
+  const at = (d.updatedAt ?? d.createdAt) as Timestamp | undefined;
+  return WORKING_STATUSES.includes(String(d.status)) && !!at && typeof at.toMillis === 'function' && now.getTime() - at.toMillis() > STUCK_AFTER_MS;
+}
+
 function newJob(kind: JobInfo['kind'], traceId: string, now: Date): JobInfo {
   return { kind, traceId, runId: randomUUID().slice(0, 12), startedAt: now, productCache: 'none', recallCache: 'skipped', explanationsCached: 0, explanationsNew: 0, evidenceNotes: [], diagnosticNotes: [] };
 }
@@ -147,7 +155,9 @@ async function claimAndRun(deps: Deps, uid: string, scanId: string, kind: 'scan'
     const snap = await tx.get(ref);
     if (!snap.exists) return null;
     const d = snap.data()!;
-    const retry = d.status === SCAN_STATUS.failed && d.retryRequested === true && d.errorRetryable === true;
+    // An owner retry of a failed scan, or of one whose job stopped without a result (a queued scan
+    // that was never claimed is simply claimed now).
+    const retry = d.retryRequested === true && ((d.status === SCAN_STATUS.failed && d.errorRetryable === true) || (d.status !== SCAN_STATUS.queued && isStuck(d, deps.now())));
     if (d.status !== SCAN_STATUS.queued && !retry) return { duplicate: true as const };
     tx.update(ref, {
       status: SCAN_STATUS.identifying,
@@ -331,6 +341,26 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
     rewriteProduct = true;
     job.evidenceNotes.push(unusable);
   }
+  // Owners' label photos. When this run read its private inputs (photos, then the pet): a result from
+  // inputs read later is never overwritten by it.
+  const inputsAt = deps.now();
+  const extractions = (await readLabelExtractions(db, o.uid, gtin)).filter((e) => e.label.status === 'processed');
+  const current = extractions.filter((e) => e.label.version === LABEL_EXTRACTION_VERSION);
+  // A reading verified against this barcode fills gaps in the shared record (backend only, no account id).
+  const promoted: { photoKey: string; fields: string[]; agreements: string[] }[] = [];
+  if (config.promoteLabelPhotos !== false) {
+    for (const e of current.filter((x) => x.stage === 'verified')) {
+      const photoKey = createHash('sha256').update(`${o.uid}/${e.photoId}`).digest('hex').slice(0, 16);
+      const src: SourceRef = { sourceId: `photo:${photoKey}`, sourceType: 'verified_label', sourceName: 'A label photo matched to this barcode', retrievedAt: e.processedAt.toISOString(), matchConfidence: e.label.barcodeMatch ? 'exact_barcode' : 'brand_and_product', readerVersion: e.label.version };
+      const merged = fillMissing(facts, labelToFacts(e.label, src));
+      facts = merged.facts;
+      if (merged.filled.length) {
+        fetchedPublic = true;
+        promoted.push({ photoKey, fields: merged.filled, agreements: e.agreements ?? [] });
+      }
+    }
+  }
+  if (promoted.length) job.evidenceNotes.push(`Added ${[...new Set(promoted.flatMap((p) => p.fields))].map(fieldLabel).join(', ')} to Purrbi’s shared record for this barcode from a label photo matched to it (${promoted[0].agreements[0] ?? 'barcode on the photo'}).`);
   let scope = scopeOf(facts, origin);
 
   // 2. Optional enrichment for missing public facts (pet products only; at most once per freshness window).
@@ -392,7 +422,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
     try {
       await consumeQuota(db, o.uid, 'research', config.limits, now);
       await consumeAiBudget(db, config.limits, now);
-      const r = await deps.sources.research({ apiKey: config.openaiApiKey(), model: config.researchModel, gtin14: gtin, barcode: o.barcode.digits, knownName: facts.productName?.value, knownBrand: facts.brand?.value, knownIngredients: facts.ingredients?.value, knownSpecies: scope.species, userAgent: config.userAgent, now });
+      const r = await deps.sources.research({ apiKey: config.openaiApiKey(), model: config.researchModel, gtin14: gtin, barcode: o.barcode.expanded ?? o.barcode.digits, knownName: facts.productName?.value, knownBrand: facts.brand?.value, knownIngredients: facts.ingredients?.value, knownSpecies: scope.species, userAgent: config.userAgent, now });
       let filled: string[] = [];
       if (r.facts) {
         // "Active ingredients" are a supplement's; a food page's additive list is not used as such.
@@ -436,22 +466,30 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   if (reclassified && stored?.scope === 'out_of_scope' && scope.status !== 'out_of_scope') job.evidenceNotes.push('An earlier classification of this product as “not a cat or dog product” was reviewed against the product’s own evidence and replaced; the earlier one is kept in its history.');
   if ((fetchedPublic || rewriteProduct || reclassified || !stored) && facts.sources.length) factsVersion = await writeProduct(db, { facts, scope, origin, previous: stored, now, traceId: job.traceId });
   if (metaChanged) await writeProductMeta(db, gtin, meta, now);
+  const contributor = createHash('sha256').update(o.uid).digest('hex').slice(0, 16);
+  for (const p of promoted) await recordContribution(db, gtin, { ...p, contributor, traceId: job.traceId, now });
 
-  // 4. The owner's own label photos fill remaining gaps (private, unreviewed).
-  // When this run read its private inputs (photos, then the pet): a result from inputs read later is never overwritten by it.
-  const inputsAt = deps.now();
-  const extractions = await readLabelExtractions(db, o.uid, gtin);
+  // 4. The owner's other label photos fill remaining gaps (private, unreviewed). A disputed reading
+  // (another recipe or analysis than this barcode's record) is not used.
   let labelUsed = false;
-  const olderReads = extractions.filter((e) => e.label.status === 'processed' && e.label.version !== LABEL_EXTRACTION_VERSION).length;
+  let labelTied = true; // every private reading used is tied to this barcode
+  const olderReads = extractions.length - current.length;
   if (olderReads) job.diagnosticNotes.push(`${olderReads} label photo reading${olderReads === 1 ? ' was' : 's were'} made by an older label reader and not used; the photo is asked for again if still needed.`);
-  for (const e of extractions) {
-    if (e.label.status !== 'processed' || e.label.version !== LABEL_EXTRACTION_VERSION) continue;
-    const src: SourceRef = { sourceId: `label:${e.photoId}`, sourceType: 'user_label', sourceName: 'Your label photo', retrievedAt: e.processedAt.toISOString(), matchConfidence: 'exact_barcode' };
+  for (const e of current) {
+    if (e.stage === 'disputed') {
+      job.evidenceNotes.push(`A label photo was not used: ${e.conflicts?.[0] ?? 'it conflicts with this barcode’s record'}. Check that it shows this package.`);
+      continue;
+    }
+    if (e.stage === 'verified' && config.promoteLabelPhotos !== false) continue; // already in the shared facts above
+    const src: SourceRef = { sourceId: `label:${e.photoId}`, sourceType: 'user_label', sourceName: 'Your label photo', retrievedAt: e.processedAt.toISOString(), matchConfidence: e.stage === 'verified' ? 'exact_barcode' : 'none' };
     const merged = fillMissing(facts, labelToFacts(e.label, src));
-    if (merged.filled.length) labelUsed = true;
+    if (merged.filled.length) {
+      labelUsed = true;
+      if (e.stage !== 'verified') labelTied = false;
+    }
     facts = merged.facts;
   }
-  if (labelUsed) job.evidenceNotes.push('Used details read from your label photo (AI, not reviewed).');
+  if (labelUsed) job.evidenceNotes.push(labelTied ? 'Used details read from your label photo, matched to this barcode (AI, not reviewed).' : 'Used details read from your label photo (AI, not reviewed). The photo is not yet tied to this barcode, so this is a label-based assessment.');
   facts = rederive(facts);
   scope = scopeOf(facts, origin);
 
@@ -531,7 +569,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   let superseded = false;
   try {
     const fields = {
-      ...resultFields({ facts, scope, general, personal, recall, summary, state, photoRequests: requests, factsVersion, labelEvidenceUsed: labelUsed }),
+      ...resultFields({ facts, scope, general, personal, recall, summary, state, photoRequests: requests, factsVersion, labelEvidenceUsed: labelUsed, labelIdentityVerified: !labelUsed || labelTied }),
       ...explanationFields(general, pending ? 'pending' : explain.status),
       ...highlightFields(highlights, verdict),
       ...jobFields(job, currentCalls(), deps.now()),
@@ -541,7 +579,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       statusMessage,
       progress: 100,
       identitySource: origin,
-      productFound: facts.sources.some((s) => ['database', 'database_image', 'manufacturer', 'retailer_or_web'].includes(s.sourceType)),
+      productFound: facts.sources.some((s) => ['database', 'database_image', 'manufacturer', 'retailer_or_web', 'verified_label'].includes(s.sourceType)),
       errorCode: '',
       errorMessage: '',
       errorRetryable: false,
@@ -773,10 +811,15 @@ async function photoJob(deps: Deps, uid: string, photoId: string): Promise<void>
         deps.log.info('label extracted', { traceId, uid, scanId, photoId, status: label.status, panels: label.panels, rejected: label.rejected });
         job.diagnosticNotes.push(`Label photo (${label.model}): ${label.status}${label.rejected.length ? `; not kept: ${label.rejected.slice(0, 4).join('; ')}` : ''}`);
         if (label.status === 'processed') {
-          await saveLabelExtraction(db, uid, gtin, { photoId, scanId, purpose, processedAt: deps.now(), label });
+          // How far the reading can be trusted beyond this owner: compared with this barcode's public record.
+          const c = corroborateLabel(label, (await readProduct(db, gtin))?.facts);
+          job.diagnosticNotes.push(`Label photo stage: ${c.stage}${c.agreements.length ? `; agrees: ${c.agreements.join('; ')}` : ''}${c.conflicts.length ? `; conflicts: ${c.conflicts.join('; ')}` : ''}`);
+          await saveLabelExtraction(db, uid, gtin, { photoId, scanId, purpose, processedAt: deps.now(), label, stage: c.stage, agreements: c.agreements, conflicts: c.conflicts });
           await photoRef.update({
             status: 'processed',
-            statusMessage: 'Label read',
+            statusMessage: c.stage === 'disputed' ? 'Label read, but it doesn’t match this barcode’s record' : 'Label read',
+            stage: c.stage,
+            stageNote: c.note,
             panels: label.panels,
             fieldsFound: [
               label.ingredients.length ? 'ingredients' : '',
@@ -823,8 +866,8 @@ function purposeText(purpose: string): string {
 export async function handleScanUpdate(deps: Deps, uid: string, scanId: string, before: Record<string, unknown>, after: Record<string, unknown>): Promise<void> {
   const ref = deps.db.doc(scanPath(uid, scanId));
   const rising = (k: string) => before[k] !== true && after[k] === true;
-  if (rising('retryRequested') && after.status === SCAN_STATUS.failed) {
-    await processScan(deps, uid, scanId, 'retry');
+  if (rising('retryRequested') && (after.status === SCAN_STATUS.failed || isStuck(after, deps.now()))) {
+    await processScan(deps, uid, scanId, after.status === SCAN_STATUS.queued ? 'scan' : 'retry');
     return;
   }
   const barcode = normalizeBarcode(after.barcode);
@@ -838,8 +881,11 @@ export async function handleScanUpdate(deps: Deps, uid: string, scanId: string, 
     await runWithCallLog(async () => {
       try {
         await runAssessment(deps, job, { uid, scanId, barcode, petId: (after.petId as string) ?? null, allowFetch: false, allowExplain: false, skipPhotos: after.skipPhotos === true || after.status === SCAN_STATUS.complete });
-      } finally {
         await ref.update({ refreshPersonalRequested: false });
+      } catch (err) {
+        // The earlier result stays: the scan is never left "assessing".
+        deps.log.error('personal refresh failed', { traceId: job.traceId, uid, scanId, error: (err as Error).message });
+        await ref.update({ refreshPersonalRequested: false, status: after.status, statusMessage: 'Couldn’t check it for this pet just now; the earlier result is shown. Try again.', progress: 100, updatedAt: Timestamp.fromDate(deps.now()) });
       }
     });
   }

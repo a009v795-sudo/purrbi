@@ -79,7 +79,10 @@ service cloud.firestore {
              (changedOnly(['favorite']) && data().favorite is bool)
           || (changedOnly(['skipPhotos']) && data().skipPhotos == true && resource.data.status == 'needs_photos')
           || (changedOnly(['retryRequested']) && data().retryRequested == true
-                && resource.data.status == 'failed' && resource.data.errorRetryable == true)
+                && ((resource.data.status == 'failed' && resource.data.errorRetryable == true)
+                    // a job that stopped without a result (no update for 6 minutes; jobs time out after 5)
+                    || (resource.data.status in ['queued', 'identifying', 'researching', 'checking_alerts', 'assessing', 'processing_photo']
+                        && resource.data.get('updatedAt', resource.data.get('createdAt', request.time)) < request.time - duration.value(6, 'm'))))
           || (changedOnly(['refreshPersonalRequested', 'petId']) && data().refreshPersonalRequested == true
                 && data().petId is string && data().petId.size() <= 128
                 && resource.data.status in ['complete', 'needs_photos'])
@@ -87,8 +90,9 @@ service cloud.firestore {
         allow delete: if isOwner(uid);
       }
 
-      // Label photo requests: the owner adds one for a scan that is waiting for photos (or complete);
-      // only the backend updates it. The image must be in the owner's own Storage folder.
+      // Label photo requests: the owner adds one for a scan that is waiting for photos, complete, or judged
+      // not a cat or dog product (the owner can show the package); only the backend updates it. The image
+      // must be in the owner's own Storage folder.
       match /photos/{photoId} {
         allow read: if isOwner(uid);
         allow create: if isOwner(uid)
@@ -99,7 +103,7 @@ service cloud.firestore {
           && data().createdAt == request.time
           && data().imageUrl is string && data().imageUrl.size() <= 2000
           && data().imageUrl.matches('^https://firebasestorage[.]googleapis[.]com/v0/b/[^/]+/o/users%2F' + uid + '%2F[^?#]+([?].*)?$')
-          && get(/databases/$(database)/documents/users/$(uid)/scans/$(data().scanId)).data.status in ['needs_photos', 'complete'];
+          && get(/databases/$(database)/documents/users/$(uid)/scans/$(data().scanId)).data.status in ['needs_photos', 'complete', 'out_of_scope'];
         allow update: if false;
         allow delete: if isOwner(uid);
       }
