@@ -45,7 +45,7 @@ async function testPermissions(url, permissions) {
  * keeps a "default bucket" record for it (this project has none; deploys name the bucket), and its
  * location when the deploy identity may read it (it may not by design; the owner's setup run reports it).
  */
-async function storageInfo() {
+async function storageInfo(ruleReleases = []) {
   const bucket = config.storageBucket;
   const linked = await api('GET', `https://firebasestorage.googleapis.com/v1beta/projects/${project}/buckets/${encodeURIComponent(bucket)}`);
   const dflt = await api('GET', `https://firebasestorage.googleapis.com/v1alpha/projects/${project}/defaultBucket`);
@@ -53,7 +53,9 @@ async function storageInfo() {
   const location = meta.json?.location ?? null;
   return {
     bucket,
-    linkedToFirebase: linked.status === 200,
+    // The deploy identity may not read the link record (403); a Storage rules release for the bucket
+    // shows Firebase serves it.
+    linkedToFirebase: linked.status === 200 || ruleReleases.includes(`firebase.storage/${bucket}`),
     linkHttpStatus: linked.status,
     linkError: linked.error,
     defaultBucketRecord: dflt.status === 200 ? dflt.json?.bucket?.name?.split('/buckets/')[1] ?? null : `none (HTTP ${dflt.status})`,
@@ -86,7 +88,8 @@ async function preflight() {
     `https://artifactregistry.googleapis.com/v1/projects/${project}/locations/${region}/repositories/gcf-artifacts:testIamPermissions`,
     ['artifactregistry.repositories.get'],
   );
-  report.storage = await storageInfo();
+  const releases = await api('GET', `https://firebaserules.googleapis.com/v1/projects/${project}/releases?pageSize=50`);
+  report.storage = await storageInfo((releases.json?.releases ?? []).map((r) => r.name.split('/releases/')[1]));
   const expectMissing = new Set(['resourcemanager.projects.setIamPolicy', 'serviceusage.services.enable', 'datastore.entities.get', 'storage.objects.get', 'secretmanager.versions.access']);
   const unexpected = [];
   const needed = [];
@@ -177,12 +180,11 @@ async function verify() {
     if (!row.enabledVersions) problem(`secret ${secret} has no enabled version`);
   }
 
-  report.storage = await storageInfo();
-  if (!report.storage.linkedToFirebase) problem(`Storage bucket ${config.storageBucket} is not linked to Firebase (HTTP ${report.storage.linkHttpStatus})`);
-  if (!report.storage.locationMatches) problem(`Storage bucket location is ${report.storage.location}, expected ${config.storageLocation}`);
-
   const bucketRel = await api('GET', `https://firebaserules.googleapis.com/v1/projects/${project}/releases?pageSize=50`);
   const storageReleases = (bucketRel.json?.releases ?? []).map((r) => r.name.split('/releases/')[1]).filter((n) => n?.startsWith('firebase.storage/'));
+  report.storage = await storageInfo(storageReleases);
+  if (!report.storage.linkedToFirebase) problem(`Storage bucket ${config.storageBucket} is not linked to Firebase (HTTP ${report.storage.linkHttpStatus})`);
+  if (!report.storage.locationMatches) problem(`Storage bucket location is ${report.storage.location}, expected ${config.storageLocation}`);
   report.storageRuleReleases = storageReleases;
   const storageRelease = storageReleases.find((n) => n === `firebase.storage/${config.storageBucket}`);
   report.rules = [await rulesCheck('cloud.firestore', 'firestore.rules')];

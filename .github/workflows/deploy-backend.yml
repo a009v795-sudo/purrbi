@@ -82,6 +82,12 @@ jobs:
       - run: npm install -g firebase-tools@15.34.1
       - name: Deploy (functions:purrbi, Firestore rules + indexes, Storage rules)
         working-directory: backend
+        env:
+          # The CLI's client-side "informational" permission tests include one for acting as the App
+          # Engine default account (purrbi-49c21@appspot), which these functions never use; granting it
+          # would give the deployer Editor-level reach. Google's servers still enforce every real
+          # permission (e.g. acting as purrbi-functions), and the preflight above checks them.
+          FIREBASE_SKIP_INFORMATIONAL_IAM: 'true'
         # No --force: anything not in this repository (functions, indexes) is never deleted; the CLI
         # stops or lists it instead, so a deletion is always a reviewed, separate step.
         run: |
