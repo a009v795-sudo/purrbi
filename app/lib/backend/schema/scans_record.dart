@@ -532,6 +532,16 @@ class ScansRecord extends FirestoreRecord {
   String get recallCheckedLabel => _recallCheckedLabel ?? '';
   bool hasRecallCheckedLabel() => _recallCheckedLabel != null;
 
+  // "scoreMinPossible" field.
+  int? _scoreMinPossible;
+  int get scoreMinPossible => _scoreMinPossible ?? 0;
+  bool hasScoreMinPossible() => _scoreMinPossible != null;
+
+  // "missingForScore" field.
+  List<String>? _missingForScore;
+  List<String> get missingForScore => _missingForScore ?? const [];
+  bool hasMissingForScore() => _missingForScore != null;
+
   DocumentReference get parentReference => reference.parent.parent!;
 
   void _initializeFields() {
@@ -688,6 +698,8 @@ class ScansRecord extends FirestoreRecord {
     _recallStatusLabel = snapshotData['recallStatusLabel'] as String?;
     _recallSeverity = snapshotData['recallSeverity'] as String?;
     _recallCheckedLabel = snapshotData['recallCheckedLabel'] as String?;
+    _scoreMinPossible = castToType<int>(snapshotData['scoreMinPossible']);
+    _missingForScore = getDataList(snapshotData['missingForScore']);
   }
 
   static Query<Map<String, dynamic>> collection([DocumentReference? parent]) =>
@@ -808,6 +820,7 @@ Map<String, dynamic> createScansRecordData({
   String? recallStatusLabel,
   String? recallSeverity,
   String? recallCheckedLabel,
+  int? scoreMinPossible,
 }) {
   final firestoreData = mapToFirestore(
     <String, dynamic>{
@@ -891,6 +904,7 @@ Map<String, dynamic> createScansRecordData({
       'recallStatusLabel': recallStatusLabel,
       'recallSeverity': recallSeverity,
       'recallCheckedLabel': recallCheckedLabel,
+      'scoreMinPossible': scoreMinPossible,
     }.withoutNulls,
   );
 
@@ -1009,7 +1023,9 @@ class ScansRecordDocumentEquality implements Equality<ScansRecord> {
         e1?.verificationStatus == e2?.verificationStatus &&
         e1?.recallStatusLabel == e2?.recallStatusLabel &&
         e1?.recallSeverity == e2?.recallSeverity &&
-        e1?.recallCheckedLabel == e2?.recallCheckedLabel;
+        e1?.recallCheckedLabel == e2?.recallCheckedLabel &&
+        e1?.scoreMinPossible == e2?.scoreMinPossible &&
+        listEquality.equals(e1?.missingForScore, e2?.missingForScore);
   }
 
   @override
@@ -1115,7 +1131,9 @@ class ScansRecordDocumentEquality implements Equality<ScansRecord> {
         e?.verificationStatus,
         e?.recallStatusLabel,
         e?.recallSeverity,
-        e?.recallCheckedLabel
+        e?.recallCheckedLabel,
+        e?.scoreMinPossible,
+        const ListEquality().hash(e?.missingForScore)
       ]);
 
   @override

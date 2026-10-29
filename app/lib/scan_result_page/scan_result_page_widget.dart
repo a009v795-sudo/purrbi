@@ -329,9 +329,11 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                                             .fontStyle,
                                                   ),
                                             ),
-                                          if (containerScansRecord
-                                                  .productCategoryLabel !=
-                                              '')
+                                          if ((containerScansRecord
+                                                      .productCategoryLabel !=
+                                                  '') &&
+                                              (containerScansRecord.scope ==
+                                                  'supported'))
                                             Text(
                                               containerScansRecord
                                                   .productCategoryLabel,
@@ -512,7 +514,7 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                           containerScansRecord.updatedAt,
                                           containerScansRecord.createdAt))
                                         Text(
-                                          'This usually takes a few seconds. You can leave this screen: the result is saved to your history.',
+                                          'This can take up to a minute. You can leave this screen: the result is saved to your history.',
                                           style: FlutterFlowTheme.of(context)
                                               .bodySmall
                                               .override(
@@ -1856,7 +1858,7 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                             ),
                                       ),
                                       Text(
-                                        'These details aren’t in the product database, its label images or the manufacturer’s pages. A clear photo of the package fills them in.',
+                                        'Purrbi couldn’t find these details in the sources it checked. A clear photo of the package fills them in.',
                                         style: FlutterFlowTheme.of(context)
                                             .bodyMedium
                                             .override(
@@ -3240,6 +3242,42 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                                       ].divide(
                                                           SizedBox(width: 8.0)),
                                                     ),
+                                                    if (ingredientItemItem
+                                                            .role !=
+                                                        '')
+                                                      Text(
+                                                        ingredientItemItem.role,
+                                                        style:
+                                                            FlutterFlowTheme.of(
+                                                                    context)
+                                                                .labelSmall
+                                                                .override(
+                                                                  font: GoogleFonts
+                                                                      .nunito(
+                                                                    fontWeight: FlutterFlowTheme.of(
+                                                                            context)
+                                                                        .labelSmall
+                                                                        .fontWeight,
+                                                                    fontStyle: FlutterFlowTheme.of(
+                                                                            context)
+                                                                        .labelSmall
+                                                                        .fontStyle,
+                                                                  ),
+                                                                  color: FlutterFlowTheme.of(
+                                                                          context)
+                                                                      .primary,
+                                                                  letterSpacing:
+                                                                      0.0,
+                                                                  fontWeight: FlutterFlowTheme.of(
+                                                                          context)
+                                                                      .labelSmall
+                                                                      .fontWeight,
+                                                                  fontStyle: FlutterFlowTheme.of(
+                                                                          context)
+                                                                      .labelSmall
+                                                                      .fontStyle,
+                                                                ),
+                                                      ),
                                                     if (ingredientItemItem
                                                             .explanationKind ==
                                                         'cited_ai')

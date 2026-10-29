@@ -43,6 +43,9 @@ class IngredientNoteStruct extends FFFirebaseStruct {
 
     /// IngredientNote.explanationQuote
     String? explanationQuote,
+
+    /// IngredientNote.role
+    String? role,
     FirestoreUtilData firestoreUtilData = const FirestoreUtilData(),
   })  : _name = name,
         _position = position,
@@ -55,6 +58,7 @@ class IngredientNoteStruct extends FFFirebaseStruct {
         _explanationSourceTitle = explanationSourceTitle,
         _explanationSourceUrl = explanationSourceUrl,
         _explanationQuote = explanationQuote,
+        _role = role,
         super(firestoreUtilData);
 
   // "name" field.
@@ -136,6 +140,13 @@ class IngredientNoteStruct extends FFFirebaseStruct {
 
   bool hasExplanationQuote() => _explanationQuote != null;
 
+  // "role" field.
+  String? _role;
+  String get role => _role ?? '';
+  set role(String? val) => _role = val;
+
+  bool hasRole() => _role != null;
+
   static IngredientNoteStruct fromMap(Map<String, dynamic> data) =>
       IngredientNoteStruct(
         name: data['name'] as String?,
@@ -149,6 +160,7 @@ class IngredientNoteStruct extends FFFirebaseStruct {
         explanationSourceTitle: data['explanationSourceTitle'] as String?,
         explanationSourceUrl: data['explanationSourceUrl'] as String?,
         explanationQuote: data['explanationQuote'] as String?,
+        role: data['role'] as String?,
       );
 
   static IngredientNoteStruct? maybeFromMap(dynamic data) => data is Map
@@ -167,6 +179,7 @@ class IngredientNoteStruct extends FFFirebaseStruct {
         'explanationSourceTitle': _explanationSourceTitle,
         'explanationSourceUrl': _explanationSourceUrl,
         'explanationQuote': _explanationQuote,
+        'role': _role,
       }.withoutNulls;
 
   @override
@@ -213,6 +226,10 @@ class IngredientNoteStruct extends FFFirebaseStruct {
         ),
         'explanationQuote': serializeParam(
           _explanationQuote,
+          ParamType.String,
+        ),
+        'role': serializeParam(
+          _role,
           ParamType.String,
         ),
       }.withoutNulls;
@@ -274,6 +291,11 @@ class IngredientNoteStruct extends FFFirebaseStruct {
           ParamType.String,
           false,
         ),
+        role: deserializeParam(
+          data['role'],
+          ParamType.String,
+          false,
+        ),
       );
 
   @override
@@ -292,7 +314,8 @@ class IngredientNoteStruct extends FFFirebaseStruct {
         explanation == other.explanation &&
         explanationSourceTitle == other.explanationSourceTitle &&
         explanationSourceUrl == other.explanationSourceUrl &&
-        explanationQuote == other.explanationQuote;
+        explanationQuote == other.explanationQuote &&
+        role == other.role;
   }
 
   @override
@@ -307,7 +330,8 @@ class IngredientNoteStruct extends FFFirebaseStruct {
         explanation,
         explanationSourceTitle,
         explanationSourceUrl,
-        explanationQuote
+        explanationQuote,
+        role
       ]);
 }
 
@@ -323,6 +347,7 @@ IngredientNoteStruct createIngredientNoteStruct({
   String? explanationSourceTitle,
   String? explanationSourceUrl,
   String? explanationQuote,
+  String? role,
   Map<String, dynamic> fieldValues = const {},
   bool clearUnsetFields = true,
   bool create = false,
@@ -340,6 +365,7 @@ IngredientNoteStruct createIngredientNoteStruct({
       explanationSourceTitle: explanationSourceTitle,
       explanationSourceUrl: explanationSourceUrl,
       explanationQuote: explanationQuote,
+      role: role,
       firestoreUtilData: FirestoreUtilData(
         clearUnsetFields: clearUnsetFields,
         create: create,
