@@ -1984,130 +1984,147 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                         ),
                                       if (containerScansRecord.personalState !=
                                           'not_applicable')
-                                        StreamBuilder<List<PetsRecord>>(
-                                          stream: queryPetsRecord(
-                                            parent: currentUserReference,
-                                            queryBuilder: (petsRecord) =>
-                                                petsRecord.where(
-                                              'onboardingComplete',
-                                              isEqualTo: true,
+                                        Container(
+                                          height: 44.0,
+                                          child:
+                                              StreamBuilder<List<PetsRecord>>(
+                                            stream: queryPetsRecord(
+                                              parent: currentUserReference,
+                                              queryBuilder: (petsRecord) =>
+                                                  petsRecord.where(
+                                                'onboardingComplete',
+                                                isEqualTo: true,
+                                              ),
                                             ),
-                                          ),
-                                          builder: (context, snapshot) {
-                                            // Customize what your widget looks like when it's loading.
-                                            if (!snapshot.hasData) {
-                                              return Center(
-                                                child: SizedBox(
-                                                  width: 40.0,
-                                                  height: 40.0,
-                                                  child:
-                                                      CircularProgressIndicator(
-                                                    valueColor:
-                                                        AlwaysStoppedAnimation<
-                                                            Color>(
-                                                      FlutterFlowTheme.of(
-                                                              context)
-                                                          .primary,
+                                            builder: (context, snapshot) {
+                                              // Customize what your widget looks like when it's loading.
+                                              if (!snapshot.hasData) {
+                                                return Center(
+                                                  child: SizedBox(
+                                                    width: 40.0,
+                                                    height: 40.0,
+                                                    child:
+                                                        CircularProgressIndicator(
+                                                      valueColor:
+                                                          AlwaysStoppedAnimation<
+                                                              Color>(
+                                                        FlutterFlowTheme.of(
+                                                                context)
+                                                            .primary,
+                                                      ),
                                                     ),
                                                   ),
-                                                ),
-                                              );
-                                            }
-                                            List<PetsRecord>
-                                                listViewPetsRecordList =
-                                                snapshot.data!;
+                                                );
+                                              }
+                                              List<PetsRecord>
+                                                  listViewPetsRecordList =
+                                                  snapshot.data!;
 
-                                            return Builder(
-                                              builder: (context) {
-                                                final pet =
-                                                    listViewPetsRecordList
-                                                        .toList();
+                                              return Builder(
+                                                builder: (context) {
+                                                  final pet =
+                                                      listViewPetsRecordList
+                                                          .toList();
 
-                                                return ListView.separated(
-                                                  padding: EdgeInsets.zero,
-                                                  primary: false,
-                                                  shrinkWrap: true,
-                                                  scrollDirection:
-                                                      Axis.horizontal,
-                                                  itemCount: pet.length,
-                                                  separatorBuilder: (_, __) =>
-                                                      SizedBox(width: 8.0),
-                                                  itemBuilder:
-                                                      (context, petIndex) {
-                                                    final petItem =
-                                                        pet[petIndex];
-                                                    return InkWell(
-                                                      splashColor:
-                                                          Colors.transparent,
-                                                      focusColor:
-                                                          Colors.transparent,
-                                                      hoverColor:
-                                                          Colors.transparent,
-                                                      highlightColor:
-                                                          Colors.transparent,
-                                                      onTap: () async {
-                                                        _model.chosenPet =
-                                                            petItem.reference;
-                                                        safeSetState(() {});
+                                                  return ListView.separated(
+                                                    padding: EdgeInsets.zero,
+                                                    primary: false,
+                                                    shrinkWrap: true,
+                                                    scrollDirection:
+                                                        Axis.horizontal,
+                                                    itemCount: pet.length,
+                                                    separatorBuilder: (_, __) =>
+                                                        SizedBox(width: 8.0),
+                                                    itemBuilder:
+                                                        (context, petIndex) {
+                                                      final petItem =
+                                                          pet[petIndex];
+                                                      return InkWell(
+                                                        splashColor:
+                                                            Colors.transparent,
+                                                        focusColor:
+                                                            Colors.transparent,
+                                                        hoverColor:
+                                                            Colors.transparent,
+                                                        highlightColor:
+                                                            Colors.transparent,
+                                                        onTap: () async {
+                                                          _model.chosenPet =
+                                                              petItem.reference;
+                                                          safeSetState(() {});
 
-                                                        await widget!.scanRef!
-                                                            .update(
-                                                                createScansRecordData(
-                                                          refreshPersonalRequested:
-                                                              true,
-                                                          petId: ((_model
-                                                                  .chosenPet!))
-                                                              .id
-                                                              .trim(),
-                                                        ));
-                                                        ScaffoldMessenger.of(
-                                                                context)
-                                                            .showSnackBar(
-                                                          SnackBar(
-                                                            content: Text(
-                                                              'Checking it for ${petItem.name}…',
-                                                              style:
-                                                                  TextStyle(),
+                                                          await widget!.scanRef!
+                                                              .update(
+                                                                  createScansRecordData(
+                                                            refreshPersonalRequested:
+                                                                true,
+                                                            petId: ((_model
+                                                                    .chosenPet!))
+                                                                .id
+                                                                .trim(),
+                                                          ));
+                                                          ScaffoldMessenger.of(
+                                                                  context)
+                                                              .showSnackBar(
+                                                            SnackBar(
+                                                              content: Text(
+                                                                'Checking it for ${petItem.name}…',
+                                                                style:
+                                                                    TextStyle(),
+                                                              ),
+                                                              duration: Duration(
+                                                                  milliseconds:
+                                                                      4000),
                                                             ),
-                                                            duration: Duration(
-                                                                milliseconds:
-                                                                    4000),
-                                                          ),
-                                                        );
-                                                      },
-                                                      child: Container(
-                                                        decoration:
-                                                            BoxDecoration(
-                                                          color: FlutterFlowTheme
-                                                                  .of(context)
-                                                              .secondaryBackground,
-                                                          borderRadius:
-                                                              BorderRadius
-                                                                  .circular(
-                                                                      99.0),
-                                                          border: Border.all(
+                                                          );
+                                                        },
+                                                        child: Container(
+                                                          decoration:
+                                                              BoxDecoration(
                                                             color: FlutterFlowTheme
                                                                     .of(context)
-                                                                .primary,
-                                                            width: 1.0,
+                                                                .secondaryBackground,
+                                                            borderRadius:
+                                                                BorderRadius
+                                                                    .circular(
+                                                                        99.0),
+                                                            border: Border.all(
+                                                              color: FlutterFlowTheme
+                                                                      .of(context)
+                                                                  .primary,
+                                                              width: 1.0,
+                                                            ),
                                                           ),
-                                                        ),
-                                                        child: Padding(
-                                                          padding:
-                                                              EdgeInsetsDirectional
-                                                                  .fromSTEB(
-                                                                      14.0,
-                                                                      8.0,
-                                                                      14.0,
-                                                                      8.0),
-                                                          child: Text(
-                                                            petItem.name,
-                                                            style: FlutterFlowTheme
-                                                                    .of(context)
-                                                                .labelLarge
-                                                                .override(
-                                                                  font: GoogleFonts
-                                                                      .nunito(
+                                                          child: Padding(
+                                                            padding:
+                                                                EdgeInsetsDirectional
+                                                                    .fromSTEB(
+                                                                        14.0,
+                                                                        8.0,
+                                                                        14.0,
+                                                                        8.0),
+                                                            child: Text(
+                                                              petItem.name,
+                                                              style: FlutterFlowTheme
+                                                                      .of(context)
+                                                                  .labelLarge
+                                                                  .override(
+                                                                    font: GoogleFonts
+                                                                        .nunito(
+                                                                      fontWeight: FlutterFlowTheme.of(
+                                                                              context)
+                                                                          .labelLarge
+                                                                          .fontWeight,
+                                                                      fontStyle: FlutterFlowTheme.of(
+                                                                              context)
+                                                                          .labelLarge
+                                                                          .fontStyle,
+                                                                    ),
+                                                                    color: FlutterFlowTheme.of(
+                                                                            context)
+                                                                        .primary,
+                                                                    letterSpacing:
+                                                                        0.0,
                                                                     fontWeight: FlutterFlowTheme.of(
                                                                             context)
                                                                         .labelLarge
@@ -2117,29 +2134,16 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                                                         .labelLarge
                                                                         .fontStyle,
                                                                   ),
-                                                                  color: FlutterFlowTheme.of(
-                                                                          context)
-                                                                      .primary,
-                                                                  letterSpacing:
-                                                                      0.0,
-                                                                  fontWeight: FlutterFlowTheme.of(
-                                                                          context)
-                                                                      .labelLarge
-                                                                      .fontWeight,
-                                                                  fontStyle: FlutterFlowTheme.of(
-                                                                          context)
-                                                                      .labelLarge
-                                                                      .fontStyle,
-                                                                ),
+                                                            ),
                                                           ),
                                                         ),
-                                                      ),
-                                                    );
-                                                  },
-                                                );
-                                              },
-                                            );
-                                          },
+                                                      );
+                                                    },
+                                                  );
+                                                },
+                                              );
+                                            },
+                                          ),
                                         ),
                                     ].divide(SizedBox(height: 10.0)),
                                   ),
