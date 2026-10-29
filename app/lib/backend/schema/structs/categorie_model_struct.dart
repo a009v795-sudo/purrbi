@@ -1,16 +1,21 @@
 // ignore_for_file: unnecessary_getters_setters
 
+import 'package:cloud_firestore/cloud_firestore.dart' hide Type;
+
+import '/backend/schema/util/firestore_util.dart';
 import '/backend/schema/util/schema_util.dart';
 
 import 'index.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 
-class CategorieModelStruct extends BaseStruct {
+class CategorieModelStruct extends FFFirebaseStruct {
   CategorieModelStruct({
     String? name,
     String? img,
+    FirestoreUtilData firestoreUtilData = const FirestoreUtilData(),
   })  : _name = name,
-        _img = img;
+        _img = img,
+        super(firestoreUtilData);
 
   // "name" field.
   String? _name;
@@ -84,8 +89,82 @@ class CategorieModelStruct extends BaseStruct {
 CategorieModelStruct createCategorieModelStruct({
   String? name,
   String? img,
+  Map<String, dynamic> fieldValues = const {},
+  bool clearUnsetFields = true,
+  bool create = false,
+  bool delete = false,
 }) =>
     CategorieModelStruct(
       name: name,
       img: img,
+      firestoreUtilData: FirestoreUtilData(
+        clearUnsetFields: clearUnsetFields,
+        create: create,
+        delete: delete,
+        fieldValues: fieldValues,
+      ),
     );
+
+CategorieModelStruct? updateCategorieModelStruct(
+  CategorieModelStruct? categorieModel, {
+  bool clearUnsetFields = true,
+  bool create = false,
+}) =>
+    categorieModel
+      ?..firestoreUtilData = FirestoreUtilData(
+        clearUnsetFields: clearUnsetFields,
+        create: create,
+      );
+
+void addCategorieModelStructData(
+  Map<String, dynamic> firestoreData,
+  CategorieModelStruct? categorieModel,
+  String fieldName, [
+  bool forFieldValue = false,
+]) {
+  firestoreData.remove(fieldName);
+  if (categorieModel == null) {
+    return;
+  }
+  if (categorieModel.firestoreUtilData.delete) {
+    firestoreData[fieldName] = FieldValue.delete();
+    return;
+  }
+  final clearFields =
+      !forFieldValue && categorieModel.firestoreUtilData.clearUnsetFields;
+  if (clearFields) {
+    firestoreData[fieldName] = <String, dynamic>{};
+  }
+  final categorieModelData =
+      getCategorieModelFirestoreData(categorieModel, forFieldValue);
+  final nestedData =
+      categorieModelData.map((k, v) => MapEntry('$fieldName.$k', v));
+
+  final mergeFields = categorieModel.firestoreUtilData.create || clearFields;
+  firestoreData
+      .addAll(mergeFields ? mergeNestedFields(nestedData) : nestedData);
+}
+
+Map<String, dynamic> getCategorieModelFirestoreData(
+  CategorieModelStruct? categorieModel, [
+  bool forFieldValue = false,
+]) {
+  if (categorieModel == null) {
+    return {};
+  }
+  final firestoreData = mapToFirestore(categorieModel.toMap());
+
+  // Add any Firestore field values
+  mapToFirestore(categorieModel.firestoreUtilData.fieldValues)
+      .forEach((k, v) => firestoreData[k] = v);
+
+  return forFieldValue ? mergeNestedFields(firestoreData) : firestoreData;
+}
+
+List<Map<String, dynamic>> getCategorieModelListFirestoreData(
+  List<CategorieModelStruct>? categorieModels,
+) =>
+    categorieModels
+        ?.map((e) => getCategorieModelFirestoreData(e, true))
+        .toList() ??
+    [];

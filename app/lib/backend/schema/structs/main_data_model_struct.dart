@@ -1,11 +1,14 @@
 // ignore_for_file: unnecessary_getters_setters
 
+import 'package:cloud_firestore/cloud_firestore.dart' hide Type;
+
+import '/backend/schema/util/firestore_util.dart';
 import '/backend/schema/util/schema_util.dart';
 
 import 'index.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 
-class MainDataModelStruct extends BaseStruct {
+class MainDataModelStruct extends FFFirebaseStruct {
   MainDataModelStruct({
     int? id,
     String? image,
@@ -17,6 +20,7 @@ class MainDataModelStruct extends BaseStruct {
     String? barcode,
     String? date,
     String? time,
+    FirestoreUtilData firestoreUtilData = const FirestoreUtilData(),
   })  : _id = id,
         _image = image,
         _name = name,
@@ -26,7 +30,8 @@ class MainDataModelStruct extends BaseStruct {
         _subName = subName,
         _barcode = barcode,
         _date = date,
-        _time = time;
+        _time = time,
+        super(firestoreUtilData);
 
   // "id" field.
   int? _id;
@@ -278,6 +283,10 @@ MainDataModelStruct createMainDataModelStruct({
   String? barcode,
   String? date,
   String? time,
+  Map<String, dynamic> fieldValues = const {},
+  bool clearUnsetFields = true,
+  bool create = false,
+  bool delete = false,
 }) =>
     MainDataModelStruct(
       id: id,
@@ -289,4 +298,74 @@ MainDataModelStruct createMainDataModelStruct({
       barcode: barcode,
       date: date,
       time: time,
+      firestoreUtilData: FirestoreUtilData(
+        clearUnsetFields: clearUnsetFields,
+        create: create,
+        delete: delete,
+        fieldValues: fieldValues,
+      ),
     );
+
+MainDataModelStruct? updateMainDataModelStruct(
+  MainDataModelStruct? mainDataModel, {
+  bool clearUnsetFields = true,
+  bool create = false,
+}) =>
+    mainDataModel
+      ?..firestoreUtilData = FirestoreUtilData(
+        clearUnsetFields: clearUnsetFields,
+        create: create,
+      );
+
+void addMainDataModelStructData(
+  Map<String, dynamic> firestoreData,
+  MainDataModelStruct? mainDataModel,
+  String fieldName, [
+  bool forFieldValue = false,
+]) {
+  firestoreData.remove(fieldName);
+  if (mainDataModel == null) {
+    return;
+  }
+  if (mainDataModel.firestoreUtilData.delete) {
+    firestoreData[fieldName] = FieldValue.delete();
+    return;
+  }
+  final clearFields =
+      !forFieldValue && mainDataModel.firestoreUtilData.clearUnsetFields;
+  if (clearFields) {
+    firestoreData[fieldName] = <String, dynamic>{};
+  }
+  final mainDataModelData =
+      getMainDataModelFirestoreData(mainDataModel, forFieldValue);
+  final nestedData =
+      mainDataModelData.map((k, v) => MapEntry('$fieldName.$k', v));
+
+  final mergeFields = mainDataModel.firestoreUtilData.create || clearFields;
+  firestoreData
+      .addAll(mergeFields ? mergeNestedFields(nestedData) : nestedData);
+}
+
+Map<String, dynamic> getMainDataModelFirestoreData(
+  MainDataModelStruct? mainDataModel, [
+  bool forFieldValue = false,
+]) {
+  if (mainDataModel == null) {
+    return {};
+  }
+  final firestoreData = mapToFirestore(mainDataModel.toMap());
+
+  // Add any Firestore field values
+  mapToFirestore(mainDataModel.firestoreUtilData.fieldValues)
+      .forEach((k, v) => firestoreData[k] = v);
+
+  return forFieldValue ? mergeNestedFields(firestoreData) : firestoreData;
+}
+
+List<Map<String, dynamic>> getMainDataModelListFirestoreData(
+  List<MainDataModelStruct>? mainDataModels,
+) =>
+    mainDataModels
+        ?.map((e) => getMainDataModelFirestoreData(e, true))
+        .toList() ??
+    [];

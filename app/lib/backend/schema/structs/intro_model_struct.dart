@@ -1,22 +1,27 @@
 // ignore_for_file: unnecessary_getters_setters
 
+import 'package:cloud_firestore/cloud_firestore.dart' hide Type;
+
+import '/backend/schema/util/firestore_util.dart';
 import '/backend/schema/util/schema_util.dart';
 
 import 'index.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 
-class IntroModelStruct extends BaseStruct {
+class IntroModelStruct extends FFFirebaseStruct {
   IntroModelStruct({
     String? image,
     String? darkImage,
     String? title,
     String? title2,
     String? subTitle,
+    FirestoreUtilData firestoreUtilData = const FirestoreUtilData(),
   })  : _image = image,
         _darkImage = darkImage,
         _title = title,
         _title2 = title2,
-        _subTitle = subTitle;
+        _subTitle = subTitle,
+        super(firestoreUtilData);
 
   // "image" field.
   String? _image;
@@ -151,6 +156,10 @@ IntroModelStruct createIntroModelStruct({
   String? title,
   String? title2,
   String? subTitle,
+  Map<String, dynamic> fieldValues = const {},
+  bool clearUnsetFields = true,
+  bool create = false,
+  bool delete = false,
 }) =>
     IntroModelStruct(
       image: image,
@@ -158,4 +167,69 @@ IntroModelStruct createIntroModelStruct({
       title: title,
       title2: title2,
       subTitle: subTitle,
+      firestoreUtilData: FirestoreUtilData(
+        clearUnsetFields: clearUnsetFields,
+        create: create,
+        delete: delete,
+        fieldValues: fieldValues,
+      ),
     );
+
+IntroModelStruct? updateIntroModelStruct(
+  IntroModelStruct? introModel, {
+  bool clearUnsetFields = true,
+  bool create = false,
+}) =>
+    introModel
+      ?..firestoreUtilData = FirestoreUtilData(
+        clearUnsetFields: clearUnsetFields,
+        create: create,
+      );
+
+void addIntroModelStructData(
+  Map<String, dynamic> firestoreData,
+  IntroModelStruct? introModel,
+  String fieldName, [
+  bool forFieldValue = false,
+]) {
+  firestoreData.remove(fieldName);
+  if (introModel == null) {
+    return;
+  }
+  if (introModel.firestoreUtilData.delete) {
+    firestoreData[fieldName] = FieldValue.delete();
+    return;
+  }
+  final clearFields =
+      !forFieldValue && introModel.firestoreUtilData.clearUnsetFields;
+  if (clearFields) {
+    firestoreData[fieldName] = <String, dynamic>{};
+  }
+  final introModelData = getIntroModelFirestoreData(introModel, forFieldValue);
+  final nestedData = introModelData.map((k, v) => MapEntry('$fieldName.$k', v));
+
+  final mergeFields = introModel.firestoreUtilData.create || clearFields;
+  firestoreData
+      .addAll(mergeFields ? mergeNestedFields(nestedData) : nestedData);
+}
+
+Map<String, dynamic> getIntroModelFirestoreData(
+  IntroModelStruct? introModel, [
+  bool forFieldValue = false,
+]) {
+  if (introModel == null) {
+    return {};
+  }
+  final firestoreData = mapToFirestore(introModel.toMap());
+
+  // Add any Firestore field values
+  mapToFirestore(introModel.firestoreUtilData.fieldValues)
+      .forEach((k, v) => firestoreData[k] = v);
+
+  return forFieldValue ? mergeNestedFields(firestoreData) : firestoreData;
+}
+
+List<Map<String, dynamic>> getIntroModelListFirestoreData(
+  List<IntroModelStruct>? introModels,
+) =>
+    introModels?.map((e) => getIntroModelFirestoreData(e, true)).toList() ?? [];

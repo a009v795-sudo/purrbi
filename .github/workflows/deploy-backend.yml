@@ -1,6 +1,7 @@
 name: deploy-backend
 # Manually started DEVELOPMENT deploy of Purrbi's backend to Firebase project purrbi-49c21:
-# functions (codebase "purrbi"), Firestore rules and indexes, Storage rules.
+# functions (codebase "purrbi"), Firestore rules and indexes, Storage rules (bucket from
+# backend/deploy-config.json storageBucket).
 # GitHub signs in to Google Cloud with a short-lived OIDC token (Workload Identity Federation) as
 # purrbi-deployer; there is no service-account key. One-time setup by the project Owner:
 # backend/tools/gcp/setup-dev-access.sh. The Google side only accepts manually started runs of this
@@ -41,6 +42,13 @@ jobs:
           if [ -z "$PROJECT_NUMBER" ]; then
             echo "::error::projectNumber is empty in backend/deploy-config.json (run backend/tools/gcp/setup-dev-access.sh first)"; exit 1
           fi
+          STORAGE_BUCKET=$(jq -r '.storageBucket // empty' deploy-config.json)
+          if [ -z "$STORAGE_BUCKET" ]; then
+            echo "::error::storageBucket is empty in backend/deploy-config.json"; exit 1
+          fi
+          # Functions parameters for this project (read by firebase deploy); no secrets here.
+          printf 'STORAGE_BUCKET=%s\n' "$STORAGE_BUCKET" > "functions/.env.$PROJECT_ID"
+          echo "Functions parameters (functions/.env.$PROJECT_ID):"; cat "functions/.env.$PROJECT_ID"
           echo "project_id=$PROJECT_ID" >> "$GITHUB_OUTPUT"
           echo "provider=$(jq -r .workloadIdentityProvider deploy-config.json | sed "s/{projectNumber}/$PROJECT_NUMBER/")" >> "$GITHUB_OUTPUT"
           echo "deployer=$(jq -r .deployerServiceAccount deploy-config.json)" >> "$GITHUB_OUTPUT"

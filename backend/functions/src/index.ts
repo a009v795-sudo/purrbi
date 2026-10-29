@@ -30,6 +30,10 @@ const VISION_MODEL = defineString('OPENAI_VISION_MODEL', { default: 'gpt-4o-mini
 const RESEARCH_MODEL = defineString('OPENAI_RESEARCH_MODEL', { default: 'gpt-4.1-mini' });
 const EXPLAIN_MODEL = defineString('OPENAI_EXPLAIN_MODEL', { default: 'gpt-4.1-mini' });
 const USER_AGENT = defineString('SOURCE_USER_AGENT', { default: 'Purrbi/0.1 (development build; contact@valenciainnovations.com)' });
+// The project's Storage bucket (deploy-config.json storageBucket, written to .env.<projectId> by the deploy
+// workflow). Empty means the default bucket, which is what the emulators use.
+const STORAGE_BUCKET = defineString('STORAGE_BUCKET', { default: '' });
+const storageBucket = () => getStorage().bucket(STORAGE_BUCKET.value() || undefined);
 
 function config(): RuntimeConfig {
   return {
@@ -56,7 +60,7 @@ async function readImage(url: string, uid: string) {
   const m = STORAGE_URL.exec(url);
   if (!m) throw new Error('unsupported image URL');
   if (m[0].startsWith('http://') && process.env.FUNCTIONS_EMULATOR !== 'true') throw new Error('insecure image URL');
-  const bucket = getStorage().bucket();
+  const bucket = storageBucket();
   if (decodeURIComponent(m[1]) !== bucket.name) throw new Error('image is not in this project’s bucket');
   const path = decodeURIComponent(m[2]);
   if (!path.startsWith(`users/${uid}/`) || path.includes('..')) throw new Error('image is not in the owner’s folder');
@@ -95,7 +99,7 @@ export const onScanRequestUpdated = onDocumentUpdated({ document: 'users/{uid}/s
 export const onScanDeleted = onDocumentDeleted({ document: 'users/{uid}/scans/{scanId}', region: REGION }, async (event) => {
   const { uid, scanId } = event.params;
   const photos = await db.collection(`users/${uid}/photos`).where('scanId', '==', scanId).get();
-  const bucket = getStorage().bucket();
+  const bucket = storageBucket();
   for (const p of photos.docs) {
     const m = STORAGE_URL.exec(String(p.get('imageUrl') ?? ''));
     const path = m ? decodeURIComponent(m[2]) : '';
@@ -114,7 +118,7 @@ export const onScanDeleted = onDocumentDeleted({ document: 'users/{uid}/scans/{s
 /** Account deletion removes the owner's documents, photos and usage counters. */
 export const cleanupDeletedUser = functionsV1.runWith({ serviceAccount: RUNTIME_SERVICE_ACCOUNT }).region(REGION).auth.user().onDelete(async (user) => {
   await db.recursiveDelete(db.doc(`users/${user.uid}`));
-  await getStorage().bucket().deleteFiles({ prefix: `users/${user.uid}/` });
+  await storageBucket().deleteFiles({ prefix: `users/${user.uid}/` });
   const usage = await db.collection('usage').where('uid', '==', user.uid).get();
   await Promise.all(usage.docs.map((d) => d.ref.delete()));
   logger.info('user data deleted', { uid: user.uid, usageDocs: usage.size });

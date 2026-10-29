@@ -1,3 +1,4 @@
+import '/auth/firebase_auth/auth_util.dart';
 import '/flutter_flow/flutter_flow_animations.dart';
 import '/flutter_flow/flutter_flow_theme.dart';
 import '/flutter_flow/flutter_flow_util.dart';
@@ -782,11 +783,17 @@ class _SettingsPageWidgetState extends State<SettingsPageWidget>
                                                       child:
                                                           DeleteAccountDialogWidget(
                                                         onTapOk: () async {
+                                                          Navigator.pop(
+                                                              context);
+                                                          await authManager
+                                                              .deleteUser(
+                                                                  context);
                                                           await action_blocks
                                                               .dataClearBlock(
                                                                   context);
-                                                          Navigator.pop(
-                                                              context);
+                                                          FFAppState()
+                                                              .homePageIndex = 0;
+                                                          safeSetState(() {});
 
                                                           context.goNamed(
                                                               DeleteAccountPageWidget

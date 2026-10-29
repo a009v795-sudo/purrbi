@@ -140,7 +140,7 @@ class _NoHistoryYetComponentWidgetState
                 Padding(
                   padding: EdgeInsetsDirectional.fromSTEB(0.0, 0.0, 0.0, 12.0),
                   child: Text(
-                    'We couldn’t identify your  item. Please check your connection or try again.',
+                    'Scan a cat or dog product and its assessment is saved here.',
                     textAlign: TextAlign.center,
                     style: FlutterFlowTheme.of(context).bodyMedium.override(
                           font: GoogleFonts.nunito(

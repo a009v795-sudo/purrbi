@@ -1,7 +1,7 @@
 // Read-only checks of the development Firebase project, run in GitHub Actions with the short-lived
 // OIDC credentials of the deploy identity (never a key):
 //   node gcp-check.mjs preflight   which deploy permissions the identity has (and lacks, by design)
-//   node gcp-check.mjs verify      deployed functions, runtime identity, secret binding, rules, indexes
+//   node gcp-check.mjs verify      deployed functions, runtime identity, secret binding, Storage bucket, rules, indexes
 // Needs GCP_ACCESS_TOKEN (from `gcloud auth print-access-token`). Prints and publishes a report with
 // ids, states and hashes only; secret values are never requested.
 import { createHash } from 'node:crypto';
@@ -40,6 +40,24 @@ async function testPermissions(url, permissions) {
   return { httpStatus: r.status, error: r.error, granted: permissions.filter((p) => granted.has(p)), missing: permissions.filter((p) => !granted.has(p)) };
 }
 
+/** The project's default Storage bucket (name and location), compared with deploy-config.json. */
+async function storageInfo() {
+  const r = await api('GET', `https://firebasestorage.googleapis.com/v1alpha/projects/${project}/defaultBucket`);
+  const bucket = r.json?.bucket?.name?.split('/buckets/')[1] ?? null;
+  const location = r.json?.location ?? null;
+  return {
+    defaultBucket: bucket,
+    location,
+    storageClass: r.json?.storageClass ?? null,
+    httpStatus: r.status,
+    error: r.error,
+    expectedBucket: config.storageBucket,
+    expectedLocation: config.storageLocation,
+    bucketMatches: bucket === config.storageBucket,
+    locationMatches: (location ?? '').toUpperCase() === (config.storageLocation ?? '').toUpperCase(),
+  };
+}
+
 async function preflight() {
   const report = { kind: 'preflight', project, at: new Date().toISOString(), identity: config.deployerServiceAccount, checks: {} };
   report.checks.project = await testPermissions(`https://cloudresourcemanager.googleapis.com/v1/projects/${project}:testIamPermissions`, [
@@ -64,6 +82,7 @@ async function preflight() {
     `https://artifactregistry.googleapis.com/v1/projects/${project}/locations/${region}/repositories/gcf-artifacts:testIamPermissions`,
     ['artifactregistry.repositories.get'],
   );
+  report.storage = await storageInfo();
   const expectMissing = new Set(['resourcemanager.projects.setIamPolicy', 'serviceusage.services.enable', 'datastore.entities.get', 'storage.objects.get', 'secretmanager.versions.access']);
   const unexpected = [];
   const needed = [];
@@ -71,7 +90,10 @@ async function preflight() {
     for (const p of c.granted) if (expectMissing.has(p)) unexpected.push(`${name}: ${p}`);
     for (const p of c.missing) if (!expectMissing.has(p)) needed.push(`${name}: ${p}`);
   }
-  report.summary = { missingForDeploy: needed, broaderThanIntended: unexpected };
+  const storageIssues = [];
+  if (!report.storage.bucketMatches) storageIssues.push(`default bucket ${report.storage.defaultBucket ?? 'not found'}, expected ${config.storageBucket}`);
+  if (report.storage.bucketMatches && !report.storage.locationMatches) storageIssues.push(`bucket location ${report.storage.location}, expected ${config.storageLocation}`);
+  report.summary = { missingForDeploy: needed, broaderThanIntended: unexpected, storage: storageIssues };
   return report;
 }
 
@@ -124,10 +146,12 @@ async function verify() {
       eventType: f.eventTrigger?.eventType,
       triggerRegion: f.eventTrigger?.triggerRegion ?? null,
       secrets,
+      storageBucket: f.serviceConfig?.environmentVariables?.STORAGE_BUCKET ?? null,
       updateTime: f.updateTime,
     };
     report.functions.push(row);
     if (f.state !== 'ACTIVE') problem(`function ${id} state ${f.state}`);
+    if (row.storageBucket !== config.storageBucket) problem(`function ${id} STORAGE_BUCKET is ${row.storageBucket ?? 'unset'}, expected ${config.storageBucket}`);
     if (row.serviceAccount !== config.runtimeServiceAccount) problem(`function ${id} runs as ${row.serviceAccount}, expected ${config.runtimeServiceAccount}`);
     if (row.triggerServiceAccount && row.triggerServiceAccount !== config.runtimeServiceAccount) problem(`function ${id} trigger identity ${row.triggerServiceAccount}`);
     const names = secrets.map((s) => s.split('@')[0]).sort();
@@ -149,11 +173,17 @@ async function verify() {
     if (!row.enabledVersions) problem(`secret ${secret} has no enabled version`);
   }
 
+  report.storage = await storageInfo();
+  if (!report.storage.bucketMatches) problem(`default Storage bucket is ${report.storage.defaultBucket ?? 'not found'}, expected ${config.storageBucket}`);
+  else if (!report.storage.locationMatches) problem(`Storage bucket location is ${report.storage.location}, expected ${config.storageLocation}`);
+
   const bucketRel = await api('GET', `https://firebaserules.googleapis.com/v1/projects/${project}/releases?pageSize=50`);
-  const storageRelease = (bucketRel.json?.releases ?? []).map((r) => r.name.split('/releases/')[1]).find((n) => n?.startsWith('firebase.storage/'));
+  const storageReleases = (bucketRel.json?.releases ?? []).map((r) => r.name.split('/releases/')[1]).filter((n) => n?.startsWith('firebase.storage/'));
+  report.storageRuleReleases = storageReleases;
+  const storageRelease = storageReleases.find((n) => n === `firebase.storage/${config.storageBucket}`);
   report.rules = [await rulesCheck('cloud.firestore', 'firestore.rules')];
   if (storageRelease) report.rules.push(await rulesCheck(storageRelease, 'storage.rules'));
-  else problem('no Storage rules release found');
+  else problem(`no Storage rules release for ${config.storageBucket} (found: ${storageReleases.join(', ') || 'none'})`);
   for (const r of report.rules) if (!r.matchesRepository) problem(`deployed ${r.release} rules differ from the repository`);
 
   const want = JSON.parse(readFileSync(join(backendDir, 'firestore.indexes.json'), 'utf8')).indexes ?? [];

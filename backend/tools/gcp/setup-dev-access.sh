@@ -18,12 +18,17 @@
 #   5. GitHub OIDC sign-in (Workload Identity Federation): only manually started runs of the
 #      "deploy-backend" workflow on the main branch of the Purrbi repository can act as
 #      purrbi-deployer. No key file exists anywhere.
-#   6. A cleanup policy so old function container images are deleted automatically.
+#   6. Bindings that Firebase's deploy tool expects for event-driven functions on Google-managed
+#      identities (default compute account, Pub/Sub agent, Cloud Build's identity if it lacks one).
+#   7. A cleanup policy so function container images older than 1 day are deleted automatically.
+# It only adds: no IAM binding, resource or file in the project is removed or replaced, and it
+# does not change billing. It does not touch any other project (every command names this one).
 set -euo pipefail
 
 PROJECT_ID="${PROJECT_ID:-purrbi-49c21}"
 REGION="${REGION:-us-central1}"
 FIRESTORE_LOCATION="${FIRESTORE_LOCATION:-us-central1}"
+STORAGE_BUCKET="${STORAGE_BUCKET:-purrbi-49c21.firebasestorage.app}"   # the app's Firebase Storage bucket
 GITHUB_REPO="${GITHUB_REPO:-a009v795-sudo/purrbi}"
 GITHUB_REPO_ID="${GITHUB_REPO_ID:-1437698791}"     # numeric ids survive repository renames
 GITHUB_OWNER_ID="${GITHUB_OWNER_ID:-325066336}"
@@ -45,7 +50,6 @@ ACCOUNT="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' | h
 [ -n "$ACCOUNT" ] || fail "Not signed in. Open Cloud Shell from the Google Cloud console and try again."
 PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)' 2>/dev/null)" ||
   fail "Project $PROJECT_ID is not visible to $ACCOUNT."
-gcloud config set project "$PROJECT_ID" >/dev/null 2>&1
 ok "$PROJECT_ID (number $PROJECT_NUMBER), signed in as $ACCOUNT"
 
 RUNTIME_SA="${RUNTIME_SA_ID}@${PROJECT_ID}.iam.gserviceaccount.com"
@@ -95,14 +99,13 @@ for role in roles/datastore.user roles/eventarc.eventReceiver roles/run.invoker 
 done
 
 BUCKET=""
-for candidate in "${PROJECT_ID}.firebasestorage.app" "${PROJECT_ID}.appspot.com"; do
-  if quiet gcloud storage buckets describe "gs://$candidate" --project "$PROJECT_ID"; then BUCKET="$candidate"; break; fi
-done
-if [ -n "$BUCKET" ]; then
+BUCKET_LOCATION="$(gcloud storage buckets describe "gs://$STORAGE_BUCKET" --project "$PROJECT_ID" --format='value(location)' 2>/dev/null || true)"
+if [ -n "$BUCKET_LOCATION" ]; then
+  BUCKET="$STORAGE_BUCKET"
   gcloud storage buckets add-iam-policy-binding "gs://$BUCKET" --member="serviceAccount:$RUNTIME_SA" --role=roles/storage.objectUser --quiet >/dev/null
-  ok "roles/storage.objectUser on gs://$BUCKET only"
+  ok "roles/storage.objectUser on gs://$BUCKET only (location $BUCKET_LOCATION)"
 else
-  note "No Firebase Storage bucket yet. Create it (Firebase console → Storage → Get started, location US-CENTRAL1), then run this script again."
+  note "Storage bucket gs://$STORAGE_BUCKET was not found. Create it (Firebase console → Storage → Get started), then run this script again."
 fi
 
 SECRET_OK=false
@@ -165,10 +168,11 @@ grant_project "serviceAccount:service-${PROJECT_NUMBER}@gcp-sa-pubsub.iam.gservi
 BUILD_SA="$(gcloud builds get-default-service-account --project "$PROJECT_ID" --format='value(serviceAccountEmail)' 2>/dev/null | sed 's#.*/##' || true)"
 if [ -n "$BUILD_SA" ]; then
   BUILD_ROLES="$(gcloud projects get-iam-policy "$PROJECT_ID" --flatten=bindings --filter="bindings.members:serviceAccount:$BUILD_SA" --format='value(bindings.role)' 2>/dev/null | tr '\n' ' ')"
-  if [ -z "${BUILD_ROLES// /}" ]; then
-    grant_project "serviceAccount:$BUILD_SA" roles/cloudbuild.builds.builder
+  # Function builds need the builder role (or Editor/Owner, which new projects often no longer grant).
+  if grep -qE 'roles/(cloudbuild\.builds\.builder|editor|owner)( |$)' <<<"$BUILD_ROLES"; then
+    ok "build identity $BUILD_SA can already build ($BUILD_ROLES)"
   else
-    ok "build identity $BUILD_SA already has: $BUILD_ROLES"
+    grant_project "serviceAccount:$BUILD_SA" roles/cloudbuild.builds.builder
   fi
 else
   note "Could not read Cloud Build's default identity; the first deploy will report any build permission problem."
@@ -179,15 +183,21 @@ if ! quiet gcloud artifacts repositories describe gcf-artifacts --location="$REG
   gcloud artifacts repositories create gcf-artifacts --repository-format=docker --location="$REGION" --project "$PROJECT_ID" \
     --description="Cloud Functions container images (Purrbi)" --quiet >/dev/null
 fi
-POLICY_FILE="$(mktemp)"
-cat >"$POLICY_FILE" <<'JSON'
+EXISTING_POLICIES="$(gcloud artifacts repositories describe gcf-artifacts --location="$REGION" --project "$PROJECT_ID" --format='value(cleanupPolicies)' 2>/dev/null || true)"
+if [ -z "$EXISTING_POLICIES" ]; then
+  POLICY_FILE="$(mktemp)"
+  cat >"$POLICY_FILE" <<'JSON'
 [{"name": "firebase-functions-cleanup", "action": {"type": "Delete"}, "condition": {"tagState": "any", "olderThan": "1d"}}]
 JSON
-gcloud artifacts repositories set-cleanup-policies gcf-artifacts --location="$REGION" --project "$PROJECT_ID" --policy="$POLICY_FILE" --no-dry-run --quiet >/dev/null
-rm -f "$POLICY_FILE"
+  gcloud artifacts repositories set-cleanup-policies gcf-artifacts --location="$REGION" --project "$PROJECT_ID" --policy="$POLICY_FILE" --no-dry-run --quiet >/dev/null
+  rm -f "$POLICY_FILE"
+  ok "gcf-artifacts in $REGION deletes function images older than 1 day"
+else
+  note "gcf-artifacts already has cleanup policies; left unchanged."
+fi
 gcloud artifacts repositories add-iam-policy-binding gcf-artifacts --location="$REGION" --project "$PROJECT_ID" \
   --member="serviceAccount:$DEPLOYER_SA" --role=roles/artifactregistry.reader --quiet >/dev/null
-ok "gcf-artifacts in $REGION deletes images older than 1 day; deployer can read the policy"
+ok "deployer can read the image repository and its cleanup policy"
 
 step "GitHub OIDC (Workload Identity Federation)"
 quiet gcloud iam workload-identity-pools describe "$POOL_ID" --location=global --project "$PROJECT_ID" ||
@@ -216,7 +226,7 @@ cat <<EOF
      WIF provider:      projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL_ID}/providers/${PROVIDER_ID}
      Deploy identity:   ${DEPLOYER_SA}
      Runtime identity:  ${RUNTIME_SA}
-     Storage bucket:    ${BUCKET:-not created yet}
+     Storage bucket:    ${BUCKET:-not found} ${BUCKET_LOCATION}
      Firestore:         ${DB_LOCATION:-$FIRESTORE_LOCATION}
      OpenAI secret:     ${SECRET_NAME} $($SECRET_OK && echo "(found)" || echo "(NOT FOUND)")
 EOF

@@ -3,6 +3,8 @@
   "projectNumber": "1078394588658",
   "region": "us-central1",
   "firestoreLocation": "us-central1",
+  "storageBucket": "purrbi-49c21.firebasestorage.app",
+  "storageLocation": "US-EAST1",
   "workloadIdentityProvider": "projects/{projectNumber}/locations/global/workloadIdentityPools/github/providers/purrbi-github",
   "deployerServiceAccount": "purrbi-deployer@purrbi-49c21.iam.gserviceaccount.com",
   "runtimeServiceAccount": "purrbi-functions@purrbi-49c21.iam.gserviceaccount.com",

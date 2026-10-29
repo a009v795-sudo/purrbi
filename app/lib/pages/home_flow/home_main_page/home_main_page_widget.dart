@@ -1,7 +1,7 @@
+import '/components/pets_component_widget.dart';
 import '/flutter_flow/flutter_flow_theme.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 import '/flutter_flow/flutter_flow_widgets.dart';
-import '/pages/bottom_flow/explore_component/explore_component_widget.dart';
 import '/pages/bottom_flow/history_component/history_component_widget.dart';
 import '/pages/bottom_flow/home_component/home_component_widget.dart';
 import '/pages/bottom_flow/profile_component/profile_component_widget.dart';
@@ -97,9 +97,9 @@ class _HomeMainPageWidgetState extends State<HomeMainPageWidget> {
                             );
                           } else if (FFAppState().homePageIndex == 1) {
                             return wrapWithModel(
-                              model: _model.exploreComponentModel,
+                              model: _model.petsComponentModel,
                               updateCallback: () => safeSetState(() {}),
-                              child: ExploreComponentWidget(),
+                              child: PetsComponentWidget(),
                             );
                           } else if (FFAppState().homePageIndex == 2) {
                             return wrapWithModel(
@@ -221,14 +221,14 @@ class _HomeMainPageWidgetState extends State<HomeMainPageWidget> {
                                       builder: (context) {
                                         if (FFAppState().homePageIndex == 1) {
                                           return Icon(
-                                            Icons.explore_rounded,
+                                            Icons.pets,
                                             color: FlutterFlowTheme.of(context)
                                                 .primary,
                                             size: 24.0,
                                           );
                                         } else {
                                           return Icon(
-                                            FFIcons.kexploreuyp,
+                                            Icons.pets,
                                             color: FlutterFlowTheme.of(context)
                                                 .iconColor,
                                             size: 24.0,
@@ -240,7 +240,7 @@ class _HomeMainPageWidgetState extends State<HomeMainPageWidget> {
                                       padding: EdgeInsetsDirectional.fromSTEB(
                                           0.0, 4.0, 0.0, 14.0),
                                       child: Text(
-                                        'Explore',
+                                        'Pets',
                                         textAlign: TextAlign.center,
                                         maxLines: 1,
                                         style: FlutterFlowTheme.of(context)

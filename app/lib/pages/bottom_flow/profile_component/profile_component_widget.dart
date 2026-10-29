@@ -1,3 +1,4 @@
+import '/auth/firebase_auth/auth_util.dart';
 import '/flutter_flow/flutter_flow_animations.dart';
 import '/flutter_flow/flutter_flow_theme.dart';
 import '/flutter_flow/flutter_flow_util.dart';
@@ -1573,8 +1574,14 @@ class _ProfileComponentWidgetState extends State<ProfileComponentWidget>
                       isLogOutTap: () async {
                         await action_blocks.dataClearBlock(context);
                         Navigator.pop(context);
+                        FFAppState().homePageIndex = 0;
+                        safeSetState(() {});
+                        GoRouter.of(context).prepareAuthEvent();
+                        await authManager.signOut();
+                        GoRouter.of(context).clearRedirectLocation();
 
-                        context.goNamed(WelcomeScreenPageWidget.routeName);
+                        context.goNamedAuth(
+                            WelcomeScreenPageWidget.routeName, context.mounted);
                       },
                     ),
                   );

@@ -1,4 +1,5 @@
-import '/backend/schema/structs/index.dart';
+import '/auth/firebase_auth/auth_util.dart';
+import '/backend/backend.dart';
 import '/flutter_flow/flutter_flow_theme.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 import '/flutter_flow/flutter_flow_widgets.dart';
@@ -6,6 +7,7 @@ import '/pages/components/mini_logo/mini_logo_widget.dart';
 import 'dart:ui';
 import '/actions/actions.dart' as action_blocks;
 import '/index.dart';
+import 'package:cloud_firestore/cloud_firestore.dart' hide Type;
 import 'sign_up_page_widget.dart' show SignUpPageWidget;
 import 'package:easy_debounce/easy_debounce.dart';
 import 'package:flutter/gestures.dart';
@@ -18,7 +20,9 @@ import 'package:provider/provider.dart';
 class SignUpPageModel extends FlutterFlowModel<SignUpPageWidget> {
   ///  Local state fields for this page.
 
-  bool isCheck = true;
+  bool isCheck = false;
+
+  String? displayName = '';
 
   ///  State fields for stateful widgets in this page.
 
@@ -31,7 +35,7 @@ class SignUpPageModel extends FlutterFlowModel<SignUpPageWidget> {
   String? Function(BuildContext, String?)? textController1Validator;
   String? _textController1Validator(BuildContext context, String? val) {
     if (val == null || val.isEmpty) {
-      return 'Please enter first name';
+      return 'Please enter your name';
     }
 
     return null;
@@ -43,30 +47,6 @@ class SignUpPageModel extends FlutterFlowModel<SignUpPageWidget> {
   String? Function(BuildContext, String?)? textController2Validator;
   String? _textController2Validator(BuildContext context, String? val) {
     if (val == null || val.isEmpty) {
-      return 'Please enter last name';
-    }
-
-    return null;
-  }
-
-  // State field(s) for TextField widget.
-  FocusNode? textFieldFocusNode3;
-  TextEditingController? textController3;
-  String? Function(BuildContext, String?)? textController3Validator;
-  String? _textController3Validator(BuildContext context, String? val) {
-    if (val == null || val.isEmpty) {
-      return 'Please enter username';
-    }
-
-    return null;
-  }
-
-  // State field(s) for TextField widget.
-  FocusNode? textFieldFocusNode4;
-  TextEditingController? textController4;
-  String? Function(BuildContext, String?)? textController4Validator;
-  String? _textController4Validator(BuildContext context, String? val) {
-    if (val == null || val.isEmpty) {
       return 'Please enter email address';
     }
 
@@ -77,12 +57,12 @@ class SignUpPageModel extends FlutterFlowModel<SignUpPageWidget> {
   }
 
   // State field(s) for TextField widget.
-  late FocusNode textFieldPasswordVisibilityFocusNode5;
-  FocusNode? textFieldFocusNode5;
-  TextEditingController? textController5;
+  late FocusNode textFieldPasswordVisibilityFocusNode3;
+  FocusNode? textFieldFocusNode3;
+  TextEditingController? textController3;
   late bool passwordVisibility;
-  String? Function(BuildContext, String?)? textController5Validator;
-  String? _textController5Validator(BuildContext context, String? val) {
+  String? Function(BuildContext, String?)? textController3Validator;
+  String? _textController3Validator(BuildContext context, String? val) {
     if (val == null || val.isEmpty) {
       return 'Please enter password';
     }
@@ -95,11 +75,9 @@ class SignUpPageModel extends FlutterFlowModel<SignUpPageWidget> {
     miniLogoModel = createModel(context, () => MiniLogoModel());
     textController1Validator = _textController1Validator;
     textController2Validator = _textController2Validator;
-    textController3Validator = _textController3Validator;
-    textController4Validator = _textController4Validator;
-    textFieldPasswordVisibilityFocusNode5 = FocusNode();
+    textFieldPasswordVisibilityFocusNode3 = FocusNode();
     passwordVisibility = false;
-    textController5Validator = _textController5Validator;
+    textController3Validator = _textController3Validator;
   }
 
   @override
@@ -113,12 +91,6 @@ class SignUpPageModel extends FlutterFlowModel<SignUpPageWidget> {
 
     textFieldFocusNode3?.dispose();
     textController3?.dispose();
-
-    textFieldFocusNode4?.dispose();
-    textController4?.dispose();
-
-    textFieldFocusNode5?.dispose();
-    textController5?.dispose();
-    textFieldPasswordVisibilityFocusNode5.dispose();
+    textFieldPasswordVisibilityFocusNode3.dispose();
   }
 }

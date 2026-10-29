@@ -1,4 +1,5 @@
-import '/backend/schema/structs/index.dart';
+import '/auth/firebase_auth/auth_util.dart';
+import '/backend/backend.dart';
 import '/flutter_flow/flutter_flow_theme.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 import '/flutter_flow/flutter_flow_widgets.dart';
@@ -6,6 +7,7 @@ import '/pages/components/mini_logo/mini_logo_widget.dart';
 import 'dart:ui';
 import '/actions/actions.dart' as action_blocks;
 import '/index.dart';
+import 'package:cloud_firestore/cloud_firestore.dart' hide Type;
 import 'package:easy_debounce/easy_debounce.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -36,25 +38,14 @@ class _SignUpPageWidgetState extends State<SignUpPageWidget> {
     super.initState();
     _model = createModel(context, () => SignUpPageModel());
 
-    _model.textController1 ??=
-        TextEditingController(text: FFAppState().userDetail.firstName);
+    _model.textController1 ??= TextEditingController();
     _model.textFieldFocusNode1 ??= FocusNode();
 
-    _model.textController2 ??=
-        TextEditingController(text: FFAppState().userDetail.lastName);
+    _model.textController2 ??= TextEditingController();
     _model.textFieldFocusNode2 ??= FocusNode();
 
-    _model.textController3 ??=
-        TextEditingController(text: FFAppState().userDetail.userName);
+    _model.textController3 ??= TextEditingController();
     _model.textFieldFocusNode3 ??= FocusNode();
-
-    _model.textController4 ??=
-        TextEditingController(text: FFAppState().userDetail.email);
-    _model.textFieldFocusNode4 ??= FocusNode();
-
-    _model.textController5 ??=
-        TextEditingController(text: FFAppState().userDetail.password);
-    _model.textFieldFocusNode5 ??= FocusNode();
 
     WidgetsBinding.instance.addPostFrameCallback((_) => safeSetState(() {}));
   }
@@ -220,7 +211,7 @@ class _SignUpPageWidgetState extends State<SignUpPageWidget> {
                                     ),
                                     0.0),
                                 child: Text(
-                                  'First name',
+                                  'Your name',
                                   textAlign: TextAlign.start,
                                   style: FlutterFlowTheme.of(context)
                                       .bodyMedium
@@ -271,7 +262,7 @@ class _SignUpPageWidgetState extends State<SignUpPageWidget> {
                                     obscureText: false,
                                     decoration: InputDecoration(
                                       isDense: false,
-                                      hintText: 'Enter first name',
+                                      hintText: 'e.g. Alex',
                                       hintStyle: FlutterFlowTheme.of(context)
                                           .labelMedium
                                           .override(
@@ -421,7 +412,7 @@ class _SignUpPageWidgetState extends State<SignUpPageWidget> {
                                     ),
                                     0.0),
                                 child: Text(
-                                  'Last name',
+                                  'Email address',
                                   textAlign: TextAlign.start,
                                   style: FlutterFlowTheme.of(context)
                                       .bodyMedium
@@ -462,393 +453,6 @@ class _SignUpPageWidgetState extends State<SignUpPageWidget> {
                                     focusNode: _model.textFieldFocusNode2,
                                     onChanged: (_) => EasyDebounce.debounce(
                                       '_model.textController2',
-                                      Duration(milliseconds: 100),
-                                      () => safeSetState(() {}),
-                                    ),
-                                    autofocus: false,
-                                    textCapitalization:
-                                        TextCapitalization.sentences,
-                                    textInputAction: TextInputAction.next,
-                                    obscureText: false,
-                                    decoration: InputDecoration(
-                                      isDense: false,
-                                      hintText: 'Enter last name',
-                                      hintStyle: FlutterFlowTheme.of(context)
-                                          .labelMedium
-                                          .override(
-                                            font: GoogleFonts.nunito(
-                                              fontWeight: FontWeight.normal,
-                                              fontStyle:
-                                                  FlutterFlowTheme.of(context)
-                                                      .labelMedium
-                                                      .fontStyle,
-                                            ),
-                                            color: FlutterFlowTheme.of(context)
-                                                .secondaryText,
-                                            fontSize: 17.0,
-                                            letterSpacing: 0.0,
-                                            fontWeight: FontWeight.normal,
-                                            fontStyle:
-                                                FlutterFlowTheme.of(context)
-                                                    .labelMedium
-                                                    .fontStyle,
-                                            lineHeight: 1.0,
-                                          ),
-                                      errorStyle: FlutterFlowTheme.of(context)
-                                          .bodyMedium
-                                          .override(
-                                            font: GoogleFonts.nunito(
-                                              fontWeight:
-                                                  FlutterFlowTheme.of(context)
-                                                      .bodyMedium
-                                                      .fontWeight,
-                                              fontStyle:
-                                                  FlutterFlowTheme.of(context)
-                                                      .bodyMedium
-                                                      .fontStyle,
-                                            ),
-                                            color: FlutterFlowTheme.of(context)
-                                                .error,
-                                            fontSize: 15.0,
-                                            letterSpacing: 0.0,
-                                            fontWeight:
-                                                FlutterFlowTheme.of(context)
-                                                    .bodyMedium
-                                                    .fontWeight,
-                                            fontStyle:
-                                                FlutterFlowTheme.of(context)
-                                                    .bodyMedium
-                                                    .fontStyle,
-                                            lineHeight: 1.0,
-                                          ),
-                                      enabledBorder: OutlineInputBorder(
-                                        borderSide: BorderSide(
-                                          color: FlutterFlowTheme.of(context)
-                                              .borderColor,
-                                          width: 1.0,
-                                        ),
-                                        borderRadius:
-                                            BorderRadius.circular(12.0),
-                                      ),
-                                      focusedBorder: OutlineInputBorder(
-                                        borderSide: BorderSide(
-                                          color: FlutterFlowTheme.of(context)
-                                              .primary,
-                                          width: 1.0,
-                                        ),
-                                        borderRadius:
-                                            BorderRadius.circular(12.0),
-                                      ),
-                                      errorBorder: OutlineInputBorder(
-                                        borderSide: BorderSide(
-                                          color: FlutterFlowTheme.of(context)
-                                              .error,
-                                          width: 1.0,
-                                        ),
-                                        borderRadius:
-                                            BorderRadius.circular(12.0),
-                                      ),
-                                      focusedErrorBorder: OutlineInputBorder(
-                                        borderSide: BorderSide(
-                                          color: FlutterFlowTheme.of(context)
-                                              .error,
-                                          width: 1.0,
-                                        ),
-                                        borderRadius:
-                                            BorderRadius.circular(12.0),
-                                      ),
-                                      filled: true,
-                                      fillColor:
-                                          FlutterFlowTheme.of(context).buttonBg,
-                                      contentPadding:
-                                          EdgeInsetsDirectional.fromSTEB(
-                                              16.0, 15.0, 16.0, 15.0),
-                                    ),
-                                    style: FlutterFlowTheme.of(context)
-                                        .bodyMedium
-                                        .override(
-                                          font: GoogleFonts.nunito(
-                                            fontWeight:
-                                                FlutterFlowTheme.of(context)
-                                                    .bodyMedium
-                                                    .fontWeight,
-                                            fontStyle:
-                                                FlutterFlowTheme.of(context)
-                                                    .bodyMedium
-                                                    .fontStyle,
-                                          ),
-                                          fontSize: 17.0,
-                                          letterSpacing: 0.0,
-                                          fontWeight:
-                                              FlutterFlowTheme.of(context)
-                                                  .bodyMedium
-                                                  .fontWeight,
-                                          fontStyle:
-                                              FlutterFlowTheme.of(context)
-                                                  .bodyMedium
-                                                  .fontStyle,
-                                          lineHeight: 1.0,
-                                        ),
-                                    cursorColor: FlutterFlowTheme.of(context)
-                                        .primaryText,
-                                    validator: _model.textController2Validator
-                                        .asValidator(context),
-                                    inputFormatters: [
-                                      if (!isAndroid && !isiOS)
-                                        TextInputFormatter.withFunction(
-                                            (oldValue, newValue) {
-                                          return TextEditingValue(
-                                            selection: newValue.selection,
-                                            text: newValue.text
-                                                .toCapitalization(
-                                                    TextCapitalization
-                                                        .sentences),
-                                          );
-                                        }),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                              Padding(
-                                padding: EdgeInsetsDirectional.fromSTEB(
-                                    valueOrDefault<double>(
-                                      FFAppConstants.mainPadding,
-                                      0.0,
-                                    ),
-                                    0.0,
-                                    valueOrDefault<double>(
-                                      FFAppConstants.mainPadding,
-                                      0.0,
-                                    ),
-                                    0.0),
-                                child: Text(
-                                  'Username',
-                                  textAlign: TextAlign.start,
-                                  style: FlutterFlowTheme.of(context)
-                                      .bodyMedium
-                                      .override(
-                                        font: GoogleFonts.nunito(
-                                          fontWeight: FontWeight.normal,
-                                          fontStyle:
-                                              FlutterFlowTheme.of(context)
-                                                  .bodyMedium
-                                                  .fontStyle,
-                                        ),
-                                        fontSize: 15.0,
-                                        letterSpacing: 0.0,
-                                        fontWeight: FontWeight.normal,
-                                        fontStyle: FlutterFlowTheme.of(context)
-                                            .bodyMedium
-                                            .fontStyle,
-                                        lineHeight: 1.46,
-                                      ),
-                                ),
-                              ),
-                              Padding(
-                                padding: EdgeInsetsDirectional.fromSTEB(
-                                    valueOrDefault<double>(
-                                      FFAppConstants.mainPadding,
-                                      0.0,
-                                    ),
-                                    8.0,
-                                    valueOrDefault<double>(
-                                      FFAppConstants.mainPadding,
-                                      0.0,
-                                    ),
-                                    16.0),
-                                child: Container(
-                                  width: double.infinity,
-                                  child: TextFormField(
-                                    controller: _model.textController3,
-                                    focusNode: _model.textFieldFocusNode3,
-                                    onChanged: (_) => EasyDebounce.debounce(
-                                      '_model.textController3',
-                                      Duration(milliseconds: 100),
-                                      () => safeSetState(() {}),
-                                    ),
-                                    autofocus: false,
-                                    textInputAction: TextInputAction.next,
-                                    obscureText: false,
-                                    decoration: InputDecoration(
-                                      isDense: false,
-                                      hintText: 'Enter username',
-                                      hintStyle: FlutterFlowTheme.of(context)
-                                          .labelMedium
-                                          .override(
-                                            font: GoogleFonts.nunito(
-                                              fontWeight: FontWeight.normal,
-                                              fontStyle:
-                                                  FlutterFlowTheme.of(context)
-                                                      .labelMedium
-                                                      .fontStyle,
-                                            ),
-                                            color: FlutterFlowTheme.of(context)
-                                                .secondaryText,
-                                            fontSize: 17.0,
-                                            letterSpacing: 0.0,
-                                            fontWeight: FontWeight.normal,
-                                            fontStyle:
-                                                FlutterFlowTheme.of(context)
-                                                    .labelMedium
-                                                    .fontStyle,
-                                            lineHeight: 1.0,
-                                          ),
-                                      errorStyle: FlutterFlowTheme.of(context)
-                                          .bodyMedium
-                                          .override(
-                                            font: GoogleFonts.nunito(
-                                              fontWeight:
-                                                  FlutterFlowTheme.of(context)
-                                                      .bodyMedium
-                                                      .fontWeight,
-                                              fontStyle:
-                                                  FlutterFlowTheme.of(context)
-                                                      .bodyMedium
-                                                      .fontStyle,
-                                            ),
-                                            color: FlutterFlowTheme.of(context)
-                                                .error,
-                                            fontSize: 15.0,
-                                            letterSpacing: 0.0,
-                                            fontWeight:
-                                                FlutterFlowTheme.of(context)
-                                                    .bodyMedium
-                                                    .fontWeight,
-                                            fontStyle:
-                                                FlutterFlowTheme.of(context)
-                                                    .bodyMedium
-                                                    .fontStyle,
-                                            lineHeight: 1.0,
-                                          ),
-                                      enabledBorder: OutlineInputBorder(
-                                        borderSide: BorderSide(
-                                          color: FlutterFlowTheme.of(context)
-                                              .borderColor,
-                                          width: 1.0,
-                                        ),
-                                        borderRadius:
-                                            BorderRadius.circular(12.0),
-                                      ),
-                                      focusedBorder: OutlineInputBorder(
-                                        borderSide: BorderSide(
-                                          color: FlutterFlowTheme.of(context)
-                                              .primary,
-                                          width: 1.0,
-                                        ),
-                                        borderRadius:
-                                            BorderRadius.circular(12.0),
-                                      ),
-                                      errorBorder: OutlineInputBorder(
-                                        borderSide: BorderSide(
-                                          color: FlutterFlowTheme.of(context)
-                                              .error,
-                                          width: 1.0,
-                                        ),
-                                        borderRadius:
-                                            BorderRadius.circular(12.0),
-                                      ),
-                                      focusedErrorBorder: OutlineInputBorder(
-                                        borderSide: BorderSide(
-                                          color: FlutterFlowTheme.of(context)
-                                              .error,
-                                          width: 1.0,
-                                        ),
-                                        borderRadius:
-                                            BorderRadius.circular(12.0),
-                                      ),
-                                      filled: true,
-                                      fillColor:
-                                          FlutterFlowTheme.of(context).buttonBg,
-                                      contentPadding:
-                                          EdgeInsetsDirectional.fromSTEB(
-                                              16.0, 15.0, 16.0, 15.0),
-                                    ),
-                                    style: FlutterFlowTheme.of(context)
-                                        .bodyMedium
-                                        .override(
-                                          font: GoogleFonts.nunito(
-                                            fontWeight:
-                                                FlutterFlowTheme.of(context)
-                                                    .bodyMedium
-                                                    .fontWeight,
-                                            fontStyle:
-                                                FlutterFlowTheme.of(context)
-                                                    .bodyMedium
-                                                    .fontStyle,
-                                          ),
-                                          fontSize: 17.0,
-                                          letterSpacing: 0.0,
-                                          fontWeight:
-                                              FlutterFlowTheme.of(context)
-                                                  .bodyMedium
-                                                  .fontWeight,
-                                          fontStyle:
-                                              FlutterFlowTheme.of(context)
-                                                  .bodyMedium
-                                                  .fontStyle,
-                                          lineHeight: 1.0,
-                                        ),
-                                    cursorColor: FlutterFlowTheme.of(context)
-                                        .primaryText,
-                                    validator: _model.textController3Validator
-                                        .asValidator(context),
-                                  ),
-                                ),
-                              ),
-                              Padding(
-                                padding: EdgeInsetsDirectional.fromSTEB(
-                                    valueOrDefault<double>(
-                                      FFAppConstants.mainPadding,
-                                      0.0,
-                                    ),
-                                    0.0,
-                                    valueOrDefault<double>(
-                                      FFAppConstants.mainPadding,
-                                      0.0,
-                                    ),
-                                    0.0),
-                                child: Text(
-                                  'Email address',
-                                  textAlign: TextAlign.start,
-                                  style: FlutterFlowTheme.of(context)
-                                      .bodyMedium
-                                      .override(
-                                        font: GoogleFonts.nunito(
-                                          fontWeight: FontWeight.normal,
-                                          fontStyle:
-                                              FlutterFlowTheme.of(context)
-                                                  .bodyMedium
-                                                  .fontStyle,
-                                        ),
-                                        fontSize: 15.0,
-                                        letterSpacing: 0.0,
-                                        fontWeight: FontWeight.normal,
-                                        fontStyle: FlutterFlowTheme.of(context)
-                                            .bodyMedium
-                                            .fontStyle,
-                                        lineHeight: 1.46,
-                                      ),
-                                ),
-                              ),
-                              Padding(
-                                padding: EdgeInsetsDirectional.fromSTEB(
-                                    valueOrDefault<double>(
-                                      FFAppConstants.mainPadding,
-                                      0.0,
-                                    ),
-                                    8.0,
-                                    valueOrDefault<double>(
-                                      FFAppConstants.mainPadding,
-                                      0.0,
-                                    ),
-                                    16.0),
-                                child: Container(
-                                  width: double.infinity,
-                                  child: TextFormField(
-                                    controller: _model.textController4,
-                                    focusNode: _model.textFieldFocusNode4,
-                                    onChanged: (_) => EasyDebounce.debounce(
-                                      '_model.textController4',
                                       Duration(milliseconds: 100),
                                       () => safeSetState(() {}),
                                     ),
@@ -978,7 +582,7 @@ class _SignUpPageWidgetState extends State<SignUpPageWidget> {
                                     keyboardType: TextInputType.emailAddress,
                                     cursorColor: FlutterFlowTheme.of(context)
                                         .primaryText,
-                                    validator: _model.textController4Validator
+                                    validator: _model.textController2Validator
                                         .asValidator(context),
                                     inputFormatters: [
                                       if (!isAndroid && !isiOS)
@@ -1045,10 +649,10 @@ class _SignUpPageWidgetState extends State<SignUpPageWidget> {
                                 child: Container(
                                   width: double.infinity,
                                   child: TextFormField(
-                                    controller: _model.textController5,
-                                    focusNode: _model.textFieldFocusNode5,
+                                    controller: _model.textController3,
+                                    focusNode: _model.textFieldFocusNode3,
                                     onChanged: (_) => EasyDebounce.debounce(
-                                      '_model.textController5',
+                                      '_model.textController3',
                                       Duration(milliseconds: 100),
                                       () => safeSetState(() {}),
                                     ),
@@ -1155,7 +759,7 @@ class _SignUpPageWidgetState extends State<SignUpPageWidget> {
                                                   !_model.passwordVisibility);
                                         },
                                         focusNode: _model
-                                            .textFieldPasswordVisibilityFocusNode5
+                                            .textFieldPasswordVisibilityFocusNode3
                                           ..skipTraversal = !(false),
                                         child: Icon(
                                           _model.passwordVisibility
@@ -1195,7 +799,7 @@ class _SignUpPageWidgetState extends State<SignUpPageWidget> {
                                     keyboardType: TextInputType.visiblePassword,
                                     cursorColor: FlutterFlowTheme.of(context)
                                         .primaryText,
-                                    validator: _model.textController5Validator
+                                    validator: _model.textController3Validator
                                         .asValidator(context),
                                   ),
                                 ),
@@ -1311,7 +915,7 @@ class _SignUpPageWidgetState extends State<SignUpPageWidget> {
                                                       ),
                                             ),
                                             TextSpan(
-                                              text: 'terms and conditions',
+                                              text: 'terms',
                                               style: FlutterFlowTheme.of(
                                                       context)
                                                   .bodyMedium
@@ -1351,6 +955,84 @@ class _SignUpPageWidgetState extends State<SignUpPageWidget> {
                                                 ..onTap = () async {
                                                   context.pushNamed(
                                                       TermsConditionPageWidget
+                                                          .routeName);
+                                                },
+                                            ),
+                                            TextSpan(
+                                              text: ' and the ',
+                                              style:
+                                                  FlutterFlowTheme.of(context)
+                                                      .bodyMedium
+                                                      .override(
+                                                        font:
+                                                            GoogleFonts.nunito(
+                                                          fontWeight:
+                                                              FlutterFlowTheme.of(
+                                                                      context)
+                                                                  .bodyMedium
+                                                                  .fontWeight,
+                                                          fontStyle:
+                                                              FlutterFlowTheme.of(
+                                                                      context)
+                                                                  .bodyMedium
+                                                                  .fontStyle,
+                                                        ),
+                                                        fontSize: 15.0,
+                                                        letterSpacing: 0.0,
+                                                        fontWeight:
+                                                            FlutterFlowTheme.of(
+                                                                    context)
+                                                                .bodyMedium
+                                                                .fontWeight,
+                                                        fontStyle:
+                                                            FlutterFlowTheme.of(
+                                                                    context)
+                                                                .bodyMedium
+                                                                .fontStyle,
+                                                        lineHeight: 1.33,
+                                                      ),
+                                            ),
+                                            TextSpan(
+                                              text: 'privacy policy',
+                                              style: FlutterFlowTheme.of(
+                                                      context)
+                                                  .bodyMedium
+                                                  .override(
+                                                    font: GoogleFonts.nunito(
+                                                      fontWeight:
+                                                          FlutterFlowTheme.of(
+                                                                  context)
+                                                              .bodyMedium
+                                                              .fontWeight,
+                                                      fontStyle:
+                                                          FlutterFlowTheme.of(
+                                                                  context)
+                                                              .bodyMedium
+                                                              .fontStyle,
+                                                    ),
+                                                    color: FlutterFlowTheme.of(
+                                                            context)
+                                                        .primary,
+                                                    fontSize: 15.0,
+                                                    letterSpacing: 0.0,
+                                                    fontWeight:
+                                                        FlutterFlowTheme.of(
+                                                                context)
+                                                            .bodyMedium
+                                                            .fontWeight,
+                                                    fontStyle:
+                                                        FlutterFlowTheme.of(
+                                                                context)
+                                                            .bodyMedium
+                                                            .fontStyle,
+                                                    lineHeight: 1.33,
+                                                  ),
+                                              mouseCursor:
+                                                  SystemMouseCursors.click,
+                                              recognizer: TapGestureRecognizer()
+                                                ..onTap = () async {
+                                                  context.pushNamed(
+                                                      PrivacyPolicyPageWidget
                                                           .routeName);
                                                 },
                                             )
@@ -1408,41 +1090,45 @@ class _SignUpPageWidgetState extends State<SignUpPageWidget> {
                                         return;
                                       }
                                       if (_model.isCheck) {
-                                        await Future.delayed(
-                                          Duration(
-                                            milliseconds: 1000,
-                                          ),
-                                        );
-                                        FFAppState().isLogin = true;
-                                        FFAppState().updateUserDetailStruct(
-                                          (e) => e
-                                            ..firstName =
-                                                _model.textController1.text
-                                            ..lastName =
-                                                _model.textController2.text
-                                            ..email =
-                                                _model.textController4.text
-                                            ..password =
-                                                _model.textController5.text
-                                            ..userName =
-                                                _model.textController3.text,
-                                        );
-                                        FFAppState().update(() {});
+                                        _model.displayName =
+                                            _model.textController1.text;
+                                        safeSetState(() {});
+                                        GoRouter.of(context).prepareAuthEvent();
 
-                                        context.pushNamed(
-                                          VerificationsPageWidget.routeName,
-                                          queryParameters: {
-                                            'email': serializeParam(
-                                              _model.textController4.text,
-                                              ParamType.String,
-                                            ),
-                                          }.withoutNulls,
+                                        final user = await authManager
+                                            .createAccountWithEmail(
+                                          context,
+                                          _model.textController2.text,
+                                          _model.textController3.text,
                                         );
+                                        if (user == null) {
+                                          return;
+                                        }
+
+                                        await currentUserReference!.update({
+                                          ...createUsersRecordData(
+                                            displayName: _model.displayName,
+                                            consentVersion: '2026-10-28-draft',
+                                            onboardingComplete: false,
+                                          ),
+                                          ...mapToFirestore(
+                                            {
+                                              'consentAcceptedAt':
+                                                  FieldValue.serverTimestamp(),
+                                            },
+                                          ),
+                                        });
+                                        FFAppState().homePageIndex = 0;
+                                        safeSetState(() {});
+
+                                        context.goNamedAuth(
+                                            PetOnboardingPageWidget.routeName,
+                                            context.mounted);
                                       } else {
                                         await action_blocks.mainSanckbar(
                                           context,
                                           title:
-                                              'Please agree to the terms and conditions',
+                                              'Please agree to the terms and the privacy policy',
                                         );
                                         safeSetState(() {});
                                       }
@@ -1486,128 +1172,143 @@ class _SignUpPageWidgetState extends State<SignUpPageWidget> {
                                   ),
                                 ),
                               ),
-                              Padding(
-                                padding: EdgeInsetsDirectional.fromSTEB(
-                                    valueOrDefault<double>(
-                                      FFAppConstants.mainPadding,
-                                      0.0,
-                                    ),
-                                    16.0,
-                                    valueOrDefault<double>(
-                                      FFAppConstants.mainPadding,
-                                      0.0,
-                                    ),
-                                    0.0),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.max,
-                                  children: [
-                                    Expanded(
-                                      child: Container(
-                                        width: double.infinity,
-                                        height: 1.0,
-                                        decoration: BoxDecoration(
-                                          color: FlutterFlowTheme.of(context)
-                                              .borderColor,
+                              if (FFAppConstants.featureSocialSignIn)
+                                Padding(
+                                  padding: EdgeInsetsDirectional.fromSTEB(
+                                      valueOrDefault<double>(
+                                        FFAppConstants.mainPadding,
+                                        0.0,
+                                      ),
+                                      16.0,
+                                      valueOrDefault<double>(
+                                        FFAppConstants.mainPadding,
+                                        0.0,
+                                      ),
+                                      0.0),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.max,
+                                    children: [
+                                      Expanded(
+                                        child: Container(
+                                          width: double.infinity,
+                                          height: 1.0,
+                                          decoration: BoxDecoration(
+                                            color: FlutterFlowTheme.of(context)
+                                                .borderColor,
+                                          ),
                                         ),
                                       ),
-                                    ),
-                                    Text(
-                                      'Or',
-                                      textAlign: TextAlign.start,
-                                      style: FlutterFlowTheme.of(context)
-                                          .bodyMedium
-                                          .override(
-                                            font: GoogleFonts.nunito(
+                                      Text(
+                                        'Or',
+                                        textAlign: TextAlign.start,
+                                        style: FlutterFlowTheme.of(context)
+                                            .bodyMedium
+                                            .override(
+                                              font: GoogleFonts.nunito(
+                                                fontWeight: FontWeight.w600,
+                                                fontStyle:
+                                                    FlutterFlowTheme.of(context)
+                                                        .bodyMedium
+                                                        .fontStyle,
+                                              ),
+                                              fontSize: 15.0,
+                                              letterSpacing: 0.0,
                                               fontWeight: FontWeight.w600,
                                               fontStyle:
                                                   FlutterFlowTheme.of(context)
                                                       .bodyMedium
                                                       .fontStyle,
+                                              lineHeight: 1.46,
                                             ),
-                                            fontSize: 15.0,
-                                            letterSpacing: 0.0,
-                                            fontWeight: FontWeight.w600,
-                                            fontStyle:
-                                                FlutterFlowTheme.of(context)
-                                                    .bodyMedium
-                                                    .fontStyle,
-                                            lineHeight: 1.46,
-                                          ),
-                                    ),
-                                    Expanded(
-                                      child: Container(
-                                        width: double.infinity,
-                                        height: 1.0,
-                                        decoration: BoxDecoration(
-                                          color: FlutterFlowTheme.of(context)
-                                              .borderColor,
-                                        ),
                                       ),
-                                    ),
-                                  ].divide(SizedBox(width: 7.0)),
-                                ),
-                              ),
-                              Padding(
-                                padding: EdgeInsetsDirectional.fromSTEB(
-                                    valueOrDefault<double>(
-                                      FFAppConstants.mainPadding,
-                                      0.0,
-                                    ),
-                                    16.0,
-                                    valueOrDefault<double>(
-                                      FFAppConstants.mainPadding,
-                                      0.0,
-                                    ),
-                                    0.0),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.max,
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Expanded(
-                                      child: Container(
-                                        height: 56.0,
-                                        decoration: BoxDecoration(
-                                          color: FlutterFlowTheme.of(context)
-                                              .buttonBg,
-                                          borderRadius:
-                                              BorderRadius.circular(99.0),
-                                          border: Border.all(
+                                      Expanded(
+                                        child: Container(
+                                          width: double.infinity,
+                                          height: 1.0,
+                                          decoration: BoxDecoration(
                                             color: FlutterFlowTheme.of(context)
                                                 .borderColor,
-                                            width: 1.0,
                                           ),
                                         ),
-                                        alignment:
-                                            AlignmentDirectional(0.0, 0.0),
-                                        child: Padding(
-                                          padding:
-                                              EdgeInsetsDirectional.fromSTEB(
-                                                  16.0, 16.0, 16.0, 16.0),
-                                          child: Row(
-                                            mainAxisSize: MainAxisSize.max,
-                                            mainAxisAlignment:
-                                                MainAxisAlignment.center,
-                                            children: [
-                                              ClipRRect(
-                                                borderRadius:
-                                                    BorderRadius.circular(0.0),
-                                                child: SvgPicture.asset(
-                                                  'assets/images/google_ic.svg',
-                                                  width: 24.0,
-                                                  height: 24.0,
-                                                  fit: BoxFit.contain,
+                                      ),
+                                    ].divide(SizedBox(width: 7.0)),
+                                  ),
+                                ),
+                              if (FFAppConstants.featureSocialSignIn)
+                                Padding(
+                                  padding: EdgeInsetsDirectional.fromSTEB(
+                                      valueOrDefault<double>(
+                                        FFAppConstants.mainPadding,
+                                        0.0,
+                                      ),
+                                      16.0,
+                                      valueOrDefault<double>(
+                                        FFAppConstants.mainPadding,
+                                        0.0,
+                                      ),
+                                      0.0),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.max,
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Expanded(
+                                        child: Container(
+                                          height: 56.0,
+                                          decoration: BoxDecoration(
+                                            color: FlutterFlowTheme.of(context)
+                                                .buttonBg,
+                                            borderRadius:
+                                                BorderRadius.circular(99.0),
+                                            border: Border.all(
+                                              color:
+                                                  FlutterFlowTheme.of(context)
+                                                      .borderColor,
+                                              width: 1.0,
+                                            ),
+                                          ),
+                                          alignment:
+                                              AlignmentDirectional(0.0, 0.0),
+                                          child: Padding(
+                                            padding:
+                                                EdgeInsetsDirectional.fromSTEB(
+                                                    16.0, 16.0, 16.0, 16.0),
+                                            child: Row(
+                                              mainAxisSize: MainAxisSize.max,
+                                              mainAxisAlignment:
+                                                  MainAxisAlignment.center,
+                                              children: [
+                                                ClipRRect(
+                                                  borderRadius:
+                                                      BorderRadius.circular(
+                                                          0.0),
+                                                  child: SvgPicture.asset(
+                                                    'assets/images/google_ic.svg',
+                                                    width: 24.0,
+                                                    height: 24.0,
+                                                    fit: BoxFit.contain,
+                                                  ),
                                                 ),
-                                              ),
-                                              Text(
-                                                'Google',
-                                                textAlign: TextAlign.start,
-                                                maxLines: 1,
-                                                style: FlutterFlowTheme.of(
-                                                        context)
-                                                    .bodyMedium
-                                                    .override(
-                                                      font: GoogleFonts.nunito(
+                                                Text(
+                                                  'Google',
+                                                  textAlign: TextAlign.start,
+                                                  maxLines: 1,
+                                                  style: FlutterFlowTheme.of(
+                                                          context)
+                                                      .bodyMedium
+                                                      .override(
+                                                        font:
+                                                            GoogleFonts.nunito(
+                                                          fontWeight:
+                                                              FontWeight.w600,
+                                                          fontStyle:
+                                                              FlutterFlowTheme.of(
+                                                                      context)
+                                                                  .bodyMedium
+                                                                  .fontStyle,
+                                                        ),
+                                                        fontSize: 18.0,
+                                                        letterSpacing: 0.0,
                                                         fontWeight:
                                                             FontWeight.w600,
                                                         fontStyle:
@@ -1615,67 +1316,70 @@ class _SignUpPageWidgetState extends State<SignUpPageWidget> {
                                                                     context)
                                                                 .bodyMedium
                                                                 .fontStyle,
+                                                        lineHeight: 1.33,
                                                       ),
-                                                      fontSize: 18.0,
-                                                      letterSpacing: 0.0,
-                                                      fontWeight:
-                                                          FontWeight.w600,
-                                                      fontStyle:
-                                                          FlutterFlowTheme.of(
-                                                                  context)
-                                                              .bodyMedium
-                                                              .fontStyle,
-                                                      lineHeight: 1.33,
-                                                    ),
-                                                overflow: TextOverflow.ellipsis,
-                                              ),
-                                            ].divide(SizedBox(width: 8.0)),
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                ),
+                                              ].divide(SizedBox(width: 8.0)),
+                                            ),
                                           ),
                                         ),
                                       ),
-                                    ),
-                                    Expanded(
-                                      child: Container(
-                                        width: double.infinity,
-                                        height: 56.0,
-                                        decoration: BoxDecoration(
-                                          color: FlutterFlowTheme.of(context)
-                                              .buttonBg,
-                                          borderRadius:
-                                              BorderRadius.circular(99.0),
-                                          border: Border.all(
+                                      Expanded(
+                                        child: Container(
+                                          width: double.infinity,
+                                          height: 56.0,
+                                          decoration: BoxDecoration(
                                             color: FlutterFlowTheme.of(context)
-                                                .borderColor,
-                                            width: 1.0,
+                                                .buttonBg,
+                                            borderRadius:
+                                                BorderRadius.circular(99.0),
+                                            border: Border.all(
+                                              color:
+                                                  FlutterFlowTheme.of(context)
+                                                      .borderColor,
+                                              width: 1.0,
+                                            ),
                                           ),
-                                        ),
-                                        alignment:
-                                            AlignmentDirectional(0.0, 0.0),
-                                        child: Padding(
-                                          padding:
-                                              EdgeInsetsDirectional.fromSTEB(
-                                                  16.0, 16.0, 16.0, 16.0),
-                                          child: Row(
-                                            mainAxisSize: MainAxisSize.max,
-                                            mainAxisAlignment:
-                                                MainAxisAlignment.center,
-                                            children: [
-                                              Icon(
-                                                Icons.apple_sharp,
-                                                color:
-                                                    FlutterFlowTheme.of(context)
-                                                        .primaryText,
-                                                size: 24.0,
-                                              ),
-                                              Text(
-                                                'Apple',
-                                                textAlign: TextAlign.start,
-                                                maxLines: 1,
-                                                style: FlutterFlowTheme.of(
-                                                        context)
-                                                    .bodyMedium
-                                                    .override(
-                                                      font: GoogleFonts.nunito(
+                                          alignment:
+                                              AlignmentDirectional(0.0, 0.0),
+                                          child: Padding(
+                                            padding:
+                                                EdgeInsetsDirectional.fromSTEB(
+                                                    16.0, 16.0, 16.0, 16.0),
+                                            child: Row(
+                                              mainAxisSize: MainAxisSize.max,
+                                              mainAxisAlignment:
+                                                  MainAxisAlignment.center,
+                                              children: [
+                                                Icon(
+                                                  Icons.apple_sharp,
+                                                  color: FlutterFlowTheme.of(
+                                                          context)
+                                                      .primaryText,
+                                                  size: 24.0,
+                                                ),
+                                                Text(
+                                                  'Apple',
+                                                  textAlign: TextAlign.start,
+                                                  maxLines: 1,
+                                                  style: FlutterFlowTheme.of(
+                                                          context)
+                                                      .bodyMedium
+                                                      .override(
+                                                        font:
+                                                            GoogleFonts.nunito(
+                                                          fontWeight:
+                                                              FontWeight.w600,
+                                                          fontStyle:
+                                                              FlutterFlowTheme.of(
+                                                                      context)
+                                                                  .bodyMedium
+                                                                  .fontStyle,
+                                                        ),
+                                                        fontSize: 18.0,
+                                                        letterSpacing: 0.0,
                                                         fontWeight:
                                                             FontWeight.w600,
                                                         fontStyle:
@@ -1683,28 +1387,19 @@ class _SignUpPageWidgetState extends State<SignUpPageWidget> {
                                                                     context)
                                                                 .bodyMedium
                                                                 .fontStyle,
+                                                        lineHeight: 1.33,
                                                       ),
-                                                      fontSize: 18.0,
-                                                      letterSpacing: 0.0,
-                                                      fontWeight:
-                                                          FontWeight.w600,
-                                                      fontStyle:
-                                                          FlutterFlowTheme.of(
-                                                                  context)
-                                                              .bodyMedium
-                                                              .fontStyle,
-                                                      lineHeight: 1.33,
-                                                    ),
-                                                overflow: TextOverflow.ellipsis,
-                                              ),
-                                            ].divide(SizedBox(width: 8.0)),
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                ),
+                                              ].divide(SizedBox(width: 8.0)),
+                                            ),
                                           ),
                                         ),
                                       ),
-                                    ),
-                                  ].divide(SizedBox(width: 16.0)),
+                                    ].divide(SizedBox(width: 16.0)),
+                                  ),
                                 ),
-                              ),
                             ],
                           ),
                         ),

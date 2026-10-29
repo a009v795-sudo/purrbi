@@ -8,7 +8,7 @@ Mocked tests and live tests are kept separate. "Mocked" = synthetic inputs label
 3. **Emulator + real network** — the real function code on emulators with real source adapters (GitHub Actions has open internet; this session does not).
 4. **Live public providers** — real Open Pet Food Facts / Open Food Facts / openFDA / citation pages from GitHub Actions; no Purrbi backend involved.
 5. **Live deployed backend** — the deployed Firebase project, driven by client requests (`live-e2e`). *Not run yet: nothing is deployed.*
-6. **Android compilation** — `android-apk` workflow. *Not run yet: needs the Firebase config files.*
+6. **Android compilation** — `android-apk` workflow. *Not run yet: the Firebase client config files are not committed (public repository); CI needs them provided another way.*
 7. **Physical device** — *pending; not possible in this environment.*
 
 ## Executed
@@ -26,8 +26,12 @@ Mocked tests and live tests are kept separate. "Mocked" = synthetic inputs label
 | 2026-10-28 | FlutterFlow check + push of foundations | FlutterFlow validator | sandbox | all pushes accepted |
 | 2026-10-28 | App compile (export → Flutter 3.47.8 web build) | build | sandbox | passed after removing the template's broken ad actions (before Firebase was connected) |
 | 2026-10-28 | Visual check of pushed screens (web build) | screenshots | sandbox | `docs/screens/01-04` |
+| 2026-10-29 | Unit, emulator and trigger E2E after pinning the Storage bucket (`STORAGE_BUCKET`) | 1, 2, 3 | sandbox (E2E with `loopback-no-proxy.cjs`) | **56/56, 29/29, 2/2 passed** |
+| 2026-10-29 | FlutterFlow validation + push of the remaining screens (sign-up, splash, onboarding, scan, result, history, pets) | FlutterFlow validator | sandbox | **accepted** (local and server validation, commit 2026-10-29 00:58Z) |
+| 2026-10-29 | App compile with Firebase connected (export → Flutter 3.47.8 web build) | build | sandbox | **passed** |
+| 2026-10-29 | Configuration read-back, unauthenticated and read-only | live configuration (not a functional test) | sandbox → `purrbi-49c21` | Firestore list `users`/`scans` **403** (database exists, closed rules); bucket `purrbi-49c21.firebasestorage.app` **403** (exists); `purrbi-49c21.appspot.com` **404**; Email/Password sign-up with a 1-character password → **`WEAK_PASSWORD`** (provider enabled, no account created); app config on web, Android and iOS → project `purrbi-49c21`, bucket `purrbi-49c21.firebasestorage.app` |
 | — | Live deployed backend (`live-e2e`, client requests only) | 5 | GitHub | **not run — nothing deployed yet** |
-| — | Android APK (`android-apk`) | 6 | GitHub | **not run — needs Firebase config files** |
+| — | Android APK (`android-apk`) | 6 | GitHub | **not run — Firebase client config not in the public repository** |
 | — | Physical device | 7 | — | **pending** |
 
 Notes:
@@ -38,7 +42,7 @@ Notes:
 
 | Test | Required evidence | Status |
 |---|---|---|
-| Real authentication | sign-up/login/logout/reset; owner access | Rules verified on the emulator; sign-up/delete verified on the Auth emulator. App screens: **blocked on config files**. Live: in `live-e2e` (pending deploy) |
+| Real authentication | sign-up/login/logout/reset; owner access | Rules verified on the emulator; sign-up/delete verified on the Auth emulator. App screens connected and compiled (2026-10-29). Live: **pending deploy** (the deployed rules today refuse the users document, so a live sign-up waits for the repository rules) |
 | Real cat food / dog food | identified → evidence → assessment → saved → visible → reopened | Database mapping live-verified (category 4); full chain **pending deploy** (`live-e2e`) |
 | Treat | category-specific treatment | Live-scored from real records (category 4); full chain pending deploy |
 | Supplement | informational assessment, not empty | Emulator verified; live pending deploy |
@@ -53,4 +57,4 @@ Notes:
 | Account isolation (client requests) | refused | Emulator; live `live-e2e` pending |
 | Deployed rules = repository | match | `deploy-backend` verify step; pending deploy |
 | Mobile experience | camera, layout, navigation, retry | **pending (no device here)** |
-| Android APK | installable build | **pending (config files)** |
+| Android APK | installable build | **pending (Firebase client config for CI)** |

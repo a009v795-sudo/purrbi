@@ -81,6 +81,7 @@ abstract class FlutterFlowTheme {
   late Color slate;
   late Color slateSoft;
   late Color aqua;
+  late Color onPrimary;
 
   FFDesignTokens get designToken => FFDesignTokens(this);
 
@@ -212,6 +213,7 @@ class LightModeTheme extends FlutterFlowTheme {
   late Color slate = const Color(0xFF8A93A0);
   late Color slateSoft = const Color(0xFFEEF0F2);
   late Color aqua = const Color(0xFF35B8A8);
+  late Color onPrimary = const Color(0xFFFFFFFF);
 }
 
 abstract class Typography {
@@ -424,6 +426,7 @@ class DarkModeTheme extends FlutterFlowTheme {
   late Color slate = const Color(0xFF9AA3AD);
   late Color slateSoft = const Color(0xFF262C33);
   late Color aqua = const Color(0xFF35B8A8);
+  late Color onPrimary = const Color(0xFF0B1A19);
 }
 
 class FFDesignTokens {

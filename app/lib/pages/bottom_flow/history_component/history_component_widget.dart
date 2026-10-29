@@ -1,9 +1,11 @@
-import '/backend/schema/structs/index.dart';
+import '/auth/firebase_auth/auth_util.dart';
+import '/backend/backend.dart';
+import '/flutter_flow/ff_builtin_enums.dart';
 import '/flutter_flow/flutter_flow_theme.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 import '/flutter_flow/flutter_flow_widgets.dart';
 import '/pages/components/center_appbar/center_appbar_widget.dart';
-import '/pages/components/recent_identifier/recent_identifier_widget.dart';
+import '/pages/empty_components/no_history_yet_component/no_history_yet_component_widget.dart';
 import 'dart:ui';
 import '/index.dart';
 import 'package:flutter/material.dart';
@@ -45,8 +47,6 @@ class _HistoryComponentWidgetState extends State<HistoryComponentWidget> {
 
   @override
   Widget build(BuildContext context) {
-    context.watch<FFAppState>();
-
     return Column(
       mainAxisSize: MainAxisSize.max,
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -100,7 +100,7 @@ class _HistoryComponentWidgetState extends State<HistoryComponentWidget> {
                         ),
                         alignment: AlignmentDirectional(0.0, 0.0),
                         child: Text(
-                          'Saved result',
+                          'All scans',
                           style: FlutterFlowTheme.of(context)
                               .bodyMedium
                               .override(
@@ -113,9 +113,8 @@ class _HistoryComponentWidgetState extends State<HistoryComponentWidget> {
                                       .fontStyle,
                                 ),
                                 color: _model.tabIndex == 0
-                                    ? Colors.white
+                                    ? FlutterFlowTheme.of(context).onPrimary
                                     : FlutterFlowTheme.of(context).primaryText,
-                                fontSize: 15.0,
                                 letterSpacing: 0.0,
                                 fontWeight: FlutterFlowTheme.of(context)
                                     .bodyMedium
@@ -123,7 +122,6 @@ class _HistoryComponentWidgetState extends State<HistoryComponentWidget> {
                                 fontStyle: FlutterFlowTheme.of(context)
                                     .bodyMedium
                                     .fontStyle,
-                                lineHeight: 1.47,
                               ),
                         ),
                       ),
@@ -151,22 +149,25 @@ class _HistoryComponentWidgetState extends State<HistoryComponentWidget> {
                         ),
                         alignment: AlignmentDirectional(0.0, 0.0),
                         child: Text(
-                          'History',
+                          'Favorites',
                           style: FlutterFlowTheme.of(context)
                               .bodyMedium
                               .override(
                                 font: GoogleFonts.nunito(
-                                  fontWeight: FontWeight.normal,
+                                  fontWeight: FlutterFlowTheme.of(context)
+                                      .bodyMedium
+                                      .fontWeight,
                                   fontStyle: FlutterFlowTheme.of(context)
                                       .bodyMedium
                                       .fontStyle,
                                 ),
                                 color: _model.tabIndex == 1
-                                    ? Colors.white
+                                    ? FlutterFlowTheme.of(context).onPrimary
                                     : FlutterFlowTheme.of(context).primaryText,
-                                fontSize: 15.0,
                                 letterSpacing: 0.0,
-                                fontWeight: FontWeight.normal,
+                                fontWeight: FlutterFlowTheme.of(context)
+                                    .bodyMedium
+                                    .fontWeight,
                                 fontStyle: FlutterFlowTheme.of(context)
                                     .bodyMedium
                                     .fontStyle,
@@ -181,56 +182,766 @@ class _HistoryComponentWidgetState extends State<HistoryComponentWidget> {
           ),
         ),
         Expanded(
-          child: Padding(
-            padding: EdgeInsetsDirectional.fromSTEB(16.0, 0.0, 16.0, 0.0),
-            child: Builder(
-              builder: (context) {
-                final item = FFAppState().RecentidentifierList.toList();
+          child: Stack(
+            alignment: AlignmentDirectional(0.0, 0.0),
+            children: [
+              if (_model.tabIndex == 0)
+                Padding(
+                  padding:
+                      EdgeInsetsDirectional.fromSTEB(16.0, 12.0, 16.0, 0.0),
+                  child: StreamBuilder<List<ScansRecord>>(
+                    stream: queryScansRecord(
+                      parent: currentUserReference,
+                      queryBuilder: (scansRecord) =>
+                          scansRecord.orderBy('createdAt', descending: true),
+                      limit: 100,
+                    ),
+                    builder: (context, snapshot) {
+                      // Customize what your widget looks like when it's loading.
+                      if (!snapshot.hasData) {
+                        return Center(
+                          child: SizedBox(
+                            width: 40.0,
+                            height: 40.0,
+                            child: CircularProgressIndicator(
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                FlutterFlowTheme.of(context).primary,
+                              ),
+                            ),
+                          ),
+                        );
+                      }
+                      List<ScansRecord> historyAllListScansRecordList =
+                          snapshot.data!;
+                      if (historyAllListScansRecordList.isEmpty) {
+                        return NoHistoryYetComponentWidget();
+                      }
 
-                return ListView.separated(
-                  padding: EdgeInsets.fromLTRB(
-                    0,
-                    12.0,
-                    0,
-                    0,
-                  ),
-                  scrollDirection: Axis.vertical,
-                  itemCount: item.length,
-                  separatorBuilder: (_, __) => SizedBox(height: 12.0),
-                  itemBuilder: (context, itemIndex) {
-                    final itemItem = item[itemIndex];
-                    return wrapWithModel(
-                      model: _model.historyRecentCardModels.getModel(
-                        itemIndex.toString(),
-                        itemIndex,
-                      ),
-                      updateCallback: () => safeSetState(() {}),
-                      child: RecentIdentifierWidget(
-                        key: Key(
-                          'Keyqkn_${itemIndex.toString()}',
-                        ),
-                        detail: itemItem,
-                        onTapAction: () async {
-                          context.pushNamed(
-                            HistorySaveDetailsPageWidget.routeName,
-                            queryParameters: {
-                              'images': serializeParam(
-                                itemItem.img,
-                                ParamType.String,
-                              ),
-                              'title': serializeParam(
-                                itemItem.title,
-                                ParamType.String,
-                              ),
-                            }.withoutNulls,
+                      return Builder(
+                        builder: (context) {
+                          final listItem =
+                              historyAllListScansRecordList.toList();
+                          if (listItem.isEmpty) {
+                            return NoHistoryYetComponentWidget();
+                          }
+
+                          return ListView.separated(
+                            padding: EdgeInsets.zero,
+                            primary: false,
+                            scrollDirection: Axis.vertical,
+                            itemCount: listItem.length,
+                            separatorBuilder: (_, __) => SizedBox(height: 12.0),
+                            itemBuilder: (context, listItemIndex) {
+                              final listItemItem = listItem[listItemIndex];
+                              return InkWell(
+                                splashColor: Colors.transparent,
+                                focusColor: Colors.transparent,
+                                hoverColor: Colors.transparent,
+                                highlightColor: Colors.transparent,
+                                onTap: () async {
+                                  context.pushNamed(
+                                    ScanResultPageWidget.routeName,
+                                    queryParameters: {
+                                      'scanRef': serializeParam(
+                                        listItemItem.reference,
+                                        ParamType.DocumentReference,
+                                      ),
+                                      'scanId': serializeParam(
+                                        listItemItem.reference.id,
+                                        ParamType.String,
+                                      ),
+                                    }.withoutNulls,
+                                  );
+                                },
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    color: FlutterFlowTheme.of(context)
+                                        .secondaryBackground,
+                                    borderRadius: BorderRadius.circular(16.0),
+                                    border: Border.all(
+                                      color: FlutterFlowTheme.of(context)
+                                          .borderColor,
+                                      width: 1.0,
+                                    ),
+                                  ),
+                                  child: Padding(
+                                    padding: EdgeInsets.all(12.0),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.max,
+                                      mainAxisAlignment:
+                                          (FFMainAxisAlignment.start)
+                                              .flutterValue,
+                                      crossAxisAlignment:
+                                          (FFCrossAxisAlignment.center)
+                                              .flutterValue,
+                                      textBaseline: TextBaseline.alphabetic,
+                                      children: [
+                                        if (listItemItem.scoreAvailable)
+                                          Container(
+                                            width: 44.0,
+                                            height: 44.0,
+                                            decoration: BoxDecoration(
+                                              color:
+                                                  FlutterFlowTheme.of(context)
+                                                      .primary,
+                                              shape: BoxShape.circle,
+                                            ),
+                                            alignment:
+                                                AlignmentDirectional(0.0, 0.0),
+                                            child: Text(
+                                              '${listItemItem.score.toString()}',
+                                              style: FlutterFlowTheme.of(
+                                                      context)
+                                                  .titleSmall
+                                                  .override(
+                                                    font: GoogleFonts.nunito(
+                                                      fontWeight:
+                                                          FlutterFlowTheme.of(
+                                                                  context)
+                                                              .titleSmall
+                                                              .fontWeight,
+                                                      fontStyle:
+                                                          FlutterFlowTheme.of(
+                                                                  context)
+                                                              .titleSmall
+                                                              .fontStyle,
+                                                    ),
+                                                    color: FlutterFlowTheme.of(
+                                                            context)
+                                                        .onPrimary,
+                                                    letterSpacing: 0.0,
+                                                    fontWeight:
+                                                        FlutterFlowTheme.of(
+                                                                context)
+                                                            .titleSmall
+                                                            .fontWeight,
+                                                    fontStyle:
+                                                        FlutterFlowTheme.of(
+                                                                context)
+                                                            .titleSmall
+                                                            .fontStyle,
+                                                  ),
+                                            ),
+                                          ),
+                                        if (!listItemItem.scoreAvailable)
+                                          Container(
+                                            width: 44.0,
+                                            height: 44.0,
+                                            decoration: BoxDecoration(
+                                              color:
+                                                  FlutterFlowTheme.of(context)
+                                                      .primaryLightColor,
+                                              shape: BoxShape.circle,
+                                            ),
+                                            alignment:
+                                                AlignmentDirectional(0.0, 0.0),
+                                            child: Icon(
+                                              Icons.qr_code_2_rounded,
+                                              color:
+                                                  FlutterFlowTheme.of(context)
+                                                      .primary,
+                                              size: 22.0,
+                                            ),
+                                          ),
+                                        Expanded(
+                                          child: Column(
+                                            mainAxisSize: MainAxisSize.max,
+                                            mainAxisAlignment:
+                                                (FFMainAxisAlignment.start)
+                                                    .flutterValue,
+                                            crossAxisAlignment:
+                                                (FFCrossAxisAlignment.start)
+                                                    .flutterValue,
+                                            textBaseline:
+                                                TextBaseline.alphabetic,
+                                            children: [
+                                              if (listItemItem.productName !=
+                                                  '')
+                                                Text(
+                                                  listItemItem.productName,
+                                                  maxLines: 1,
+                                                  style: FlutterFlowTheme.of(
+                                                          context)
+                                                      .titleSmall
+                                                      .override(
+                                                        font:
+                                                            GoogleFonts.nunito(
+                                                          fontWeight:
+                                                              FlutterFlowTheme.of(
+                                                                      context)
+                                                                  .titleSmall
+                                                                  .fontWeight,
+                                                          fontStyle:
+                                                              FlutterFlowTheme.of(
+                                                                      context)
+                                                                  .titleSmall
+                                                                  .fontStyle,
+                                                        ),
+                                                        letterSpacing: 0.0,
+                                                        fontWeight:
+                                                            FlutterFlowTheme.of(
+                                                                    context)
+                                                                .titleSmall
+                                                                .fontWeight,
+                                                        fontStyle:
+                                                            FlutterFlowTheme.of(
+                                                                    context)
+                                                                .titleSmall
+                                                                .fontStyle,
+                                                      ),
+                                                ),
+                                              if (listItemItem.productName ==
+                                                  '')
+                                                Text(
+                                                  'Barcode ${listItemItem.barcode}',
+                                                  maxLines: 1,
+                                                  style: FlutterFlowTheme.of(
+                                                          context)
+                                                      .titleSmall
+                                                      .override(
+                                                        font:
+                                                            GoogleFonts.nunito(
+                                                          fontWeight:
+                                                              FlutterFlowTheme.of(
+                                                                      context)
+                                                                  .titleSmall
+                                                                  .fontWeight,
+                                                          fontStyle:
+                                                              FlutterFlowTheme.of(
+                                                                      context)
+                                                                  .titleSmall
+                                                                  .fontStyle,
+                                                        ),
+                                                        letterSpacing: 0.0,
+                                                        fontWeight:
+                                                            FlutterFlowTheme.of(
+                                                                    context)
+                                                                .titleSmall
+                                                                .fontWeight,
+                                                        fontStyle:
+                                                            FlutterFlowTheme.of(
+                                                                    context)
+                                                                .titleSmall
+                                                                .fontStyle,
+                                                      ),
+                                                ),
+                                              if (listItemItem.resultLabel !=
+                                                  '')
+                                                Text(
+                                                  listItemItem.resultLabel,
+                                                  maxLines: 1,
+                                                  style: FlutterFlowTheme.of(
+                                                          context)
+                                                      .bodySmall
+                                                      .override(
+                                                        font:
+                                                            GoogleFonts.nunito(
+                                                          fontWeight:
+                                                              FlutterFlowTheme.of(
+                                                                      context)
+                                                                  .bodySmall
+                                                                  .fontWeight,
+                                                          fontStyle:
+                                                              FlutterFlowTheme.of(
+                                                                      context)
+                                                                  .bodySmall
+                                                                  .fontStyle,
+                                                        ),
+                                                        color:
+                                                            FlutterFlowTheme.of(
+                                                                    context)
+                                                                .secondaryText,
+                                                        letterSpacing: 0.0,
+                                                        fontWeight:
+                                                            FlutterFlowTheme.of(
+                                                                    context)
+                                                                .bodySmall
+                                                                .fontWeight,
+                                                        fontStyle:
+                                                            FlutterFlowTheme.of(
+                                                                    context)
+                                                                .bodySmall
+                                                                .fontStyle,
+                                                      ),
+                                                ),
+                                              if (listItemItem.resultLabel ==
+                                                  '')
+                                                Text(
+                                                  listItemItem.statusMessage,
+                                                  maxLines: 1,
+                                                  style: FlutterFlowTheme.of(
+                                                          context)
+                                                      .bodySmall
+                                                      .override(
+                                                        font:
+                                                            GoogleFonts.nunito(
+                                                          fontWeight:
+                                                              FlutterFlowTheme.of(
+                                                                      context)
+                                                                  .bodySmall
+                                                                  .fontWeight,
+                                                          fontStyle:
+                                                              FlutterFlowTheme.of(
+                                                                      context)
+                                                                  .bodySmall
+                                                                  .fontStyle,
+                                                        ),
+                                                        color:
+                                                            FlutterFlowTheme.of(
+                                                                    context)
+                                                                .secondaryText,
+                                                        letterSpacing: 0.0,
+                                                        fontWeight:
+                                                            FlutterFlowTheme.of(
+                                                                    context)
+                                                                .bodySmall
+                                                                .fontWeight,
+                                                        fontStyle:
+                                                            FlutterFlowTheme.of(
+                                                                    context)
+                                                                .bodySmall
+                                                                .fontStyle,
+                                                      ),
+                                                ),
+                                              Text(
+                                                dateTimeFormat("yMMMd",
+                                                    listItemItem.createdAt!),
+                                                style: FlutterFlowTheme.of(
+                                                        context)
+                                                    .labelSmall
+                                                    .override(
+                                                      font: GoogleFonts.nunito(
+                                                        fontWeight:
+                                                            FlutterFlowTheme.of(
+                                                                    context)
+                                                                .labelSmall
+                                                                .fontWeight,
+                                                        fontStyle:
+                                                            FlutterFlowTheme.of(
+                                                                    context)
+                                                                .labelSmall
+                                                                .fontStyle,
+                                                      ),
+                                                      color:
+                                                          FlutterFlowTheme.of(
+                                                                  context)
+                                                              .secondaryText,
+                                                      letterSpacing: 0.0,
+                                                      fontWeight:
+                                                          FlutterFlowTheme.of(
+                                                                  context)
+                                                              .labelSmall
+                                                              .fontWeight,
+                                                      fontStyle:
+                                                          FlutterFlowTheme.of(
+                                                                  context)
+                                                              .labelSmall
+                                                              .fontStyle,
+                                                    ),
+                                              ),
+                                            ].divide(SizedBox(height: 2.0)),
+                                          ),
+                                        ),
+                                        if (listItemItem.favorite)
+                                          Icon(
+                                            Icons.favorite_rounded,
+                                            color: FlutterFlowTheme.of(context)
+                                                .tertiary,
+                                            size: 20.0,
+                                          ),
+                                      ].divide(SizedBox(width: 12.0)),
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
                           );
                         },
-                      ),
-                    );
-                  },
-                );
-              },
-            ),
+                      );
+                    },
+                  ),
+                ),
+              if (_model.tabIndex == 1)
+                Padding(
+                  padding:
+                      EdgeInsetsDirectional.fromSTEB(16.0, 12.0, 16.0, 0.0),
+                  child: StreamBuilder<List<ScansRecord>>(
+                    stream: queryScansRecord(
+                      parent: currentUserReference,
+                      queryBuilder: (scansRecord) => scansRecord
+                          .where(
+                            'favorite',
+                            isEqualTo: true,
+                          )
+                          .orderBy('createdAt', descending: true),
+                      limit: 100,
+                    ),
+                    builder: (context, snapshot) {
+                      // Customize what your widget looks like when it's loading.
+                      if (!snapshot.hasData) {
+                        return Center(
+                          child: SizedBox(
+                            width: 40.0,
+                            height: 40.0,
+                            child: CircularProgressIndicator(
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                FlutterFlowTheme.of(context).primary,
+                              ),
+                            ),
+                          ),
+                        );
+                      }
+                      List<ScansRecord> historyFavoritesListScansRecordList =
+                          snapshot.data!;
+                      if (historyFavoritesListScansRecordList.isEmpty) {
+                        return NoHistoryYetComponentWidget();
+                      }
+
+                      return Builder(
+                        builder: (context) {
+                          final listItem =
+                              historyFavoritesListScansRecordList.toList();
+                          if (listItem.isEmpty) {
+                            return NoHistoryYetComponentWidget();
+                          }
+
+                          return ListView.separated(
+                            padding: EdgeInsets.zero,
+                            primary: false,
+                            scrollDirection: Axis.vertical,
+                            itemCount: listItem.length,
+                            separatorBuilder: (_, __) => SizedBox(height: 12.0),
+                            itemBuilder: (context, listItemIndex) {
+                              final listItemItem = listItem[listItemIndex];
+                              return InkWell(
+                                splashColor: Colors.transparent,
+                                focusColor: Colors.transparent,
+                                hoverColor: Colors.transparent,
+                                highlightColor: Colors.transparent,
+                                onTap: () async {
+                                  context.pushNamed(
+                                    ScanResultPageWidget.routeName,
+                                    queryParameters: {
+                                      'scanRef': serializeParam(
+                                        listItemItem.reference,
+                                        ParamType.DocumentReference,
+                                      ),
+                                      'scanId': serializeParam(
+                                        listItemItem.reference.id,
+                                        ParamType.String,
+                                      ),
+                                    }.withoutNulls,
+                                  );
+                                },
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    color: FlutterFlowTheme.of(context)
+                                        .secondaryBackground,
+                                    borderRadius: BorderRadius.circular(16.0),
+                                    border: Border.all(
+                                      color: FlutterFlowTheme.of(context)
+                                          .borderColor,
+                                      width: 1.0,
+                                    ),
+                                  ),
+                                  child: Padding(
+                                    padding: EdgeInsets.all(12.0),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.max,
+                                      mainAxisAlignment:
+                                          (FFMainAxisAlignment.start)
+                                              .flutterValue,
+                                      crossAxisAlignment:
+                                          (FFCrossAxisAlignment.center)
+                                              .flutterValue,
+                                      textBaseline: TextBaseline.alphabetic,
+                                      children: [
+                                        if (listItemItem.scoreAvailable)
+                                          Container(
+                                            width: 44.0,
+                                            height: 44.0,
+                                            decoration: BoxDecoration(
+                                              color:
+                                                  FlutterFlowTheme.of(context)
+                                                      .primary,
+                                              shape: BoxShape.circle,
+                                            ),
+                                            alignment:
+                                                AlignmentDirectional(0.0, 0.0),
+                                            child: Text(
+                                              '${listItemItem.score.toString()}',
+                                              style: FlutterFlowTheme.of(
+                                                      context)
+                                                  .titleSmall
+                                                  .override(
+                                                    font: GoogleFonts.nunito(
+                                                      fontWeight:
+                                                          FlutterFlowTheme.of(
+                                                                  context)
+                                                              .titleSmall
+                                                              .fontWeight,
+                                                      fontStyle:
+                                                          FlutterFlowTheme.of(
+                                                                  context)
+                                                              .titleSmall
+                                                              .fontStyle,
+                                                    ),
+                                                    color: FlutterFlowTheme.of(
+                                                            context)
+                                                        .onPrimary,
+                                                    letterSpacing: 0.0,
+                                                    fontWeight:
+                                                        FlutterFlowTheme.of(
+                                                                context)
+                                                            .titleSmall
+                                                            .fontWeight,
+                                                    fontStyle:
+                                                        FlutterFlowTheme.of(
+                                                                context)
+                                                            .titleSmall
+                                                            .fontStyle,
+                                                  ),
+                                            ),
+                                          ),
+                                        if (!listItemItem.scoreAvailable)
+                                          Container(
+                                            width: 44.0,
+                                            height: 44.0,
+                                            decoration: BoxDecoration(
+                                              color:
+                                                  FlutterFlowTheme.of(context)
+                                                      .primaryLightColor,
+                                              shape: BoxShape.circle,
+                                            ),
+                                            alignment:
+                                                AlignmentDirectional(0.0, 0.0),
+                                            child: Icon(
+                                              Icons.qr_code_2_rounded,
+                                              color:
+                                                  FlutterFlowTheme.of(context)
+                                                      .primary,
+                                              size: 22.0,
+                                            ),
+                                          ),
+                                        Expanded(
+                                          child: Column(
+                                            mainAxisSize: MainAxisSize.max,
+                                            mainAxisAlignment:
+                                                (FFMainAxisAlignment.start)
+                                                    .flutterValue,
+                                            crossAxisAlignment:
+                                                (FFCrossAxisAlignment.start)
+                                                    .flutterValue,
+                                            textBaseline:
+                                                TextBaseline.alphabetic,
+                                            children: [
+                                              if (listItemItem.productName !=
+                                                  '')
+                                                Text(
+                                                  listItemItem.productName,
+                                                  maxLines: 1,
+                                                  style: FlutterFlowTheme.of(
+                                                          context)
+                                                      .titleSmall
+                                                      .override(
+                                                        font:
+                                                            GoogleFonts.nunito(
+                                                          fontWeight:
+                                                              FlutterFlowTheme.of(
+                                                                      context)
+                                                                  .titleSmall
+                                                                  .fontWeight,
+                                                          fontStyle:
+                                                              FlutterFlowTheme.of(
+                                                                      context)
+                                                                  .titleSmall
+                                                                  .fontStyle,
+                                                        ),
+                                                        letterSpacing: 0.0,
+                                                        fontWeight:
+                                                            FlutterFlowTheme.of(
+                                                                    context)
+                                                                .titleSmall
+                                                                .fontWeight,
+                                                        fontStyle:
+                                                            FlutterFlowTheme.of(
+                                                                    context)
+                                                                .titleSmall
+                                                                .fontStyle,
+                                                      ),
+                                                ),
+                                              if (listItemItem.productName ==
+                                                  '')
+                                                Text(
+                                                  'Barcode ${listItemItem.barcode}',
+                                                  maxLines: 1,
+                                                  style: FlutterFlowTheme.of(
+                                                          context)
+                                                      .titleSmall
+                                                      .override(
+                                                        font:
+                                                            GoogleFonts.nunito(
+                                                          fontWeight:
+                                                              FlutterFlowTheme.of(
+                                                                      context)
+                                                                  .titleSmall
+                                                                  .fontWeight,
+                                                          fontStyle:
+                                                              FlutterFlowTheme.of(
+                                                                      context)
+                                                                  .titleSmall
+                                                                  .fontStyle,
+                                                        ),
+                                                        letterSpacing: 0.0,
+                                                        fontWeight:
+                                                            FlutterFlowTheme.of(
+                                                                    context)
+                                                                .titleSmall
+                                                                .fontWeight,
+                                                        fontStyle:
+                                                            FlutterFlowTheme.of(
+                                                                    context)
+                                                                .titleSmall
+                                                                .fontStyle,
+                                                      ),
+                                                ),
+                                              if (listItemItem.resultLabel !=
+                                                  '')
+                                                Text(
+                                                  listItemItem.resultLabel,
+                                                  maxLines: 1,
+                                                  style: FlutterFlowTheme.of(
+                                                          context)
+                                                      .bodySmall
+                                                      .override(
+                                                        font:
+                                                            GoogleFonts.nunito(
+                                                          fontWeight:
+                                                              FlutterFlowTheme.of(
+                                                                      context)
+                                                                  .bodySmall
+                                                                  .fontWeight,
+                                                          fontStyle:
+                                                              FlutterFlowTheme.of(
+                                                                      context)
+                                                                  .bodySmall
+                                                                  .fontStyle,
+                                                        ),
+                                                        color:
+                                                            FlutterFlowTheme.of(
+                                                                    context)
+                                                                .secondaryText,
+                                                        letterSpacing: 0.0,
+                                                        fontWeight:
+                                                            FlutterFlowTheme.of(
+                                                                    context)
+                                                                .bodySmall
+                                                                .fontWeight,
+                                                        fontStyle:
+                                                            FlutterFlowTheme.of(
+                                                                    context)
+                                                                .bodySmall
+                                                                .fontStyle,
+                                                      ),
+                                                ),
+                                              if (listItemItem.resultLabel ==
+                                                  '')
+                                                Text(
+                                                  listItemItem.statusMessage,
+                                                  maxLines: 1,
+                                                  style: FlutterFlowTheme.of(
+                                                          context)
+                                                      .bodySmall
+                                                      .override(
+                                                        font:
+                                                            GoogleFonts.nunito(
+                                                          fontWeight:
+                                                              FlutterFlowTheme.of(
+                                                                      context)
+                                                                  .bodySmall
+                                                                  .fontWeight,
+                                                          fontStyle:
+                                                              FlutterFlowTheme.of(
+                                                                      context)
+                                                                  .bodySmall
+                                                                  .fontStyle,
+                                                        ),
+                                                        color:
+                                                            FlutterFlowTheme.of(
+                                                                    context)
+                                                                .secondaryText,
+                                                        letterSpacing: 0.0,
+                                                        fontWeight:
+                                                            FlutterFlowTheme.of(
+                                                                    context)
+                                                                .bodySmall
+                                                                .fontWeight,
+                                                        fontStyle:
+                                                            FlutterFlowTheme.of(
+                                                                    context)
+                                                                .bodySmall
+                                                                .fontStyle,
+                                                      ),
+                                                ),
+                                              Text(
+                                                dateTimeFormat("yMMMd",
+                                                    listItemItem.createdAt!),
+                                                style: FlutterFlowTheme.of(
+                                                        context)
+                                                    .labelSmall
+                                                    .override(
+                                                      font: GoogleFonts.nunito(
+                                                        fontWeight:
+                                                            FlutterFlowTheme.of(
+                                                                    context)
+                                                                .labelSmall
+                                                                .fontWeight,
+                                                        fontStyle:
+                                                            FlutterFlowTheme.of(
+                                                                    context)
+                                                                .labelSmall
+                                                                .fontStyle,
+                                                      ),
+                                                      color:
+                                                          FlutterFlowTheme.of(
+                                                                  context)
+                                                              .secondaryText,
+                                                      letterSpacing: 0.0,
+                                                      fontWeight:
+                                                          FlutterFlowTheme.of(
+                                                                  context)
+                                                              .labelSmall
+                                                              .fontWeight,
+                                                      fontStyle:
+                                                          FlutterFlowTheme.of(
+                                                                  context)
+                                                              .labelSmall
+                                                              .fontStyle,
+                                                    ),
+                                              ),
+                                            ].divide(SizedBox(height: 2.0)),
+                                          ),
+                                        ),
+                                        if (listItemItem.favorite)
+                                          Icon(
+                                            Icons.favorite_rounded,
+                                            color: FlutterFlowTheme.of(context)
+                                                .tertiary,
+                                            size: 20.0,
+                                          ),
+                                      ].divide(SizedBox(width: 12.0)),
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
+                          );
+                        },
+                      );
+                    },
+                  ),
+                ),
+            ],
           ),
         ),
       ],

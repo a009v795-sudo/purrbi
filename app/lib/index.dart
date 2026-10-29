@@ -91,3 +91,7 @@ export '/pages/home_flow/blolg_detail_page/blolg_detail_page_widget.dart'
     show BlolgDetailPageWidget;
 export '/pages/result_flow/analysis_result_page/analysis_result_page_widget.dart'
     show AnalysisResultPageWidget;
+export '/pet_onboarding_page/pet_onboarding_page_widget.dart'
+    show PetOnboardingPageWidget;
+export '/scan_result_page/scan_result_page_widget.dart'
+    show ScanResultPageWidget;

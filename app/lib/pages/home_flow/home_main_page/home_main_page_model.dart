@@ -1,7 +1,7 @@
+import '/components/pets_component_widget.dart';
 import '/flutter_flow/flutter_flow_theme.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 import '/flutter_flow/flutter_flow_widgets.dart';
-import '/pages/bottom_flow/explore_component/explore_component_widget.dart';
 import '/pages/bottom_flow/history_component/history_component_widget.dart';
 import '/pages/bottom_flow/home_component/home_component_widget.dart';
 import '/pages/bottom_flow/profile_component/profile_component_widget.dart';
@@ -17,8 +17,8 @@ class HomeMainPageModel extends FlutterFlowModel<HomeMainPageWidget> {
 
   // Model for HomeComponent component.
   late HomeComponentModel homeComponentModel;
-  // Model for ExploreComponent component.
-  late ExploreComponentModel exploreComponentModel;
+  // Model for PetsComponent.
+  late PetsComponentModel petsComponentModel;
   // Model for HistoryComponent component.
   late HistoryComponentModel historyComponentModel;
   // Model for ProfileComponent component.
@@ -27,7 +27,7 @@ class HomeMainPageModel extends FlutterFlowModel<HomeMainPageWidget> {
   @override
   void initState(BuildContext context) {
     homeComponentModel = createModel(context, () => HomeComponentModel());
-    exploreComponentModel = createModel(context, () => ExploreComponentModel());
+    petsComponentModel = createModel(context, () => PetsComponentModel());
     historyComponentModel = createModel(context, () => HistoryComponentModel());
     profileComponentModel = createModel(context, () => ProfileComponentModel());
   }
@@ -35,7 +35,7 @@ class HomeMainPageModel extends FlutterFlowModel<HomeMainPageWidget> {
   @override
   void dispose() {
     homeComponentModel.dispose();
-    exploreComponentModel.dispose();
+    petsComponentModel.dispose();
     historyComponentModel.dispose();
     profileComponentModel.dispose();
   }

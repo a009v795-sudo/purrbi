@@ -1,20 +1,25 @@
 // ignore_for_file: unnecessary_getters_setters
 
+import 'package:cloud_firestore/cloud_firestore.dart' hide Type;
+
+import '/backend/schema/util/firestore_util.dart';
 import '/backend/schema/util/schema_util.dart';
 
 import 'index.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 
-class BolgModelStruct extends BaseStruct {
+class BolgModelStruct extends FFFirebaseStruct {
   BolgModelStruct({
     String? image,
     String? name,
     String? desc,
     String? time,
+    FirestoreUtilData firestoreUtilData = const FirestoreUtilData(),
   })  : _image = image,
         _name = name,
         _desc = desc,
-        _time = time;
+        _time = time,
+        super(firestoreUtilData);
 
   // "image" field.
   String? _image;
@@ -127,10 +132,79 @@ BolgModelStruct createBolgModelStruct({
   String? name,
   String? desc,
   String? time,
+  Map<String, dynamic> fieldValues = const {},
+  bool clearUnsetFields = true,
+  bool create = false,
+  bool delete = false,
 }) =>
     BolgModelStruct(
       image: image,
       name: name,
       desc: desc,
       time: time,
+      firestoreUtilData: FirestoreUtilData(
+        clearUnsetFields: clearUnsetFields,
+        create: create,
+        delete: delete,
+        fieldValues: fieldValues,
+      ),
     );
+
+BolgModelStruct? updateBolgModelStruct(
+  BolgModelStruct? bolgModel, {
+  bool clearUnsetFields = true,
+  bool create = false,
+}) =>
+    bolgModel
+      ?..firestoreUtilData = FirestoreUtilData(
+        clearUnsetFields: clearUnsetFields,
+        create: create,
+      );
+
+void addBolgModelStructData(
+  Map<String, dynamic> firestoreData,
+  BolgModelStruct? bolgModel,
+  String fieldName, [
+  bool forFieldValue = false,
+]) {
+  firestoreData.remove(fieldName);
+  if (bolgModel == null) {
+    return;
+  }
+  if (bolgModel.firestoreUtilData.delete) {
+    firestoreData[fieldName] = FieldValue.delete();
+    return;
+  }
+  final clearFields =
+      !forFieldValue && bolgModel.firestoreUtilData.clearUnsetFields;
+  if (clearFields) {
+    firestoreData[fieldName] = <String, dynamic>{};
+  }
+  final bolgModelData = getBolgModelFirestoreData(bolgModel, forFieldValue);
+  final nestedData = bolgModelData.map((k, v) => MapEntry('$fieldName.$k', v));
+
+  final mergeFields = bolgModel.firestoreUtilData.create || clearFields;
+  firestoreData
+      .addAll(mergeFields ? mergeNestedFields(nestedData) : nestedData);
+}
+
+Map<String, dynamic> getBolgModelFirestoreData(
+  BolgModelStruct? bolgModel, [
+  bool forFieldValue = false,
+]) {
+  if (bolgModel == null) {
+    return {};
+  }
+  final firestoreData = mapToFirestore(bolgModel.toMap());
+
+  // Add any Firestore field values
+  mapToFirestore(bolgModel.firestoreUtilData.fieldValues)
+      .forEach((k, v) => firestoreData[k] = v);
+
+  return forFieldValue ? mergeNestedFields(firestoreData) : firestoreData;
+}
+
+List<Map<String, dynamic>> getBolgModelListFirestoreData(
+  List<BolgModelStruct>? bolgModels,
+) =>
+    bolgModels?.map((e) => getBolgModelFirestoreData(e, true)).toList() ?? [];

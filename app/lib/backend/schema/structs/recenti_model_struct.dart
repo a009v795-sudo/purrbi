@@ -1,11 +1,14 @@
 // ignore_for_file: unnecessary_getters_setters
 
+import 'package:cloud_firestore/cloud_firestore.dart' hide Type;
+
+import '/backend/schema/util/firestore_util.dart';
 import '/backend/schema/util/schema_util.dart';
 
 import 'index.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 
-class RecentiModelStruct extends BaseStruct {
+class RecentiModelStruct extends FFFirebaseStruct {
   RecentiModelStruct({
     String? img,
     String? title,
@@ -14,13 +17,15 @@ class RecentiModelStruct extends BaseStruct {
     String? barcode,
     String? time,
     String? macth,
+    FirestoreUtilData firestoreUtilData = const FirestoreUtilData(),
   })  : _img = img,
         _title = title,
         _subtext = subtext,
         _date = date,
         _barcode = barcode,
         _time = time,
-        _macth = macth;
+        _macth = macth,
+        super(firestoreUtilData);
 
   // "img" field.
   String? _img;
@@ -195,6 +200,10 @@ RecentiModelStruct createRecentiModelStruct({
   String? barcode,
   String? time,
   String? macth,
+  Map<String, dynamic> fieldValues = const {},
+  bool clearUnsetFields = true,
+  bool create = false,
+  bool delete = false,
 }) =>
     RecentiModelStruct(
       img: img,
@@ -204,4 +213,72 @@ RecentiModelStruct createRecentiModelStruct({
       barcode: barcode,
       time: time,
       macth: macth,
+      firestoreUtilData: FirestoreUtilData(
+        clearUnsetFields: clearUnsetFields,
+        create: create,
+        delete: delete,
+        fieldValues: fieldValues,
+      ),
     );
+
+RecentiModelStruct? updateRecentiModelStruct(
+  RecentiModelStruct? recentiModel, {
+  bool clearUnsetFields = true,
+  bool create = false,
+}) =>
+    recentiModel
+      ?..firestoreUtilData = FirestoreUtilData(
+        clearUnsetFields: clearUnsetFields,
+        create: create,
+      );
+
+void addRecentiModelStructData(
+  Map<String, dynamic> firestoreData,
+  RecentiModelStruct? recentiModel,
+  String fieldName, [
+  bool forFieldValue = false,
+]) {
+  firestoreData.remove(fieldName);
+  if (recentiModel == null) {
+    return;
+  }
+  if (recentiModel.firestoreUtilData.delete) {
+    firestoreData[fieldName] = FieldValue.delete();
+    return;
+  }
+  final clearFields =
+      !forFieldValue && recentiModel.firestoreUtilData.clearUnsetFields;
+  if (clearFields) {
+    firestoreData[fieldName] = <String, dynamic>{};
+  }
+  final recentiModelData =
+      getRecentiModelFirestoreData(recentiModel, forFieldValue);
+  final nestedData =
+      recentiModelData.map((k, v) => MapEntry('$fieldName.$k', v));
+
+  final mergeFields = recentiModel.firestoreUtilData.create || clearFields;
+  firestoreData
+      .addAll(mergeFields ? mergeNestedFields(nestedData) : nestedData);
+}
+
+Map<String, dynamic> getRecentiModelFirestoreData(
+  RecentiModelStruct? recentiModel, [
+  bool forFieldValue = false,
+]) {
+  if (recentiModel == null) {
+    return {};
+  }
+  final firestoreData = mapToFirestore(recentiModel.toMap());
+
+  // Add any Firestore field values
+  mapToFirestore(recentiModel.firestoreUtilData.fieldValues)
+      .forEach((k, v) => firestoreData[k] = v);
+
+  return forFieldValue ? mergeNestedFields(firestoreData) : firestoreData;
+}
+
+List<Map<String, dynamic>> getRecentiModelListFirestoreData(
+  List<RecentiModelStruct>? recentiModels,
+) =>
+    recentiModels?.map((e) => getRecentiModelFirestoreData(e, true)).toList() ??
+    [];

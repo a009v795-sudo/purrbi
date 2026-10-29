@@ -1,9 +1,11 @@
-import '/backend/schema/structs/index.dart';
+import '/auth/firebase_auth/auth_util.dart';
+import '/backend/backend.dart';
+import '/flutter_flow/ff_builtin_enums.dart';
 import '/flutter_flow/flutter_flow_theme.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 import '/flutter_flow/flutter_flow_widgets.dart';
 import '/pages/components/center_appbar/center_appbar_widget.dart';
-import '/pages/components/recent_identifier/recent_identifier_widget.dart';
+import '/pages/empty_components/no_history_yet_component/no_history_yet_component_widget.dart';
 import 'dart:ui';
 import '/index.dart';
 import 'history_component_widget.dart' show HistoryComponentWidget;
@@ -20,19 +22,14 @@ class HistoryComponentModel extends FlutterFlowModel<HistoryComponentWidget> {
 
   // Model for CenterAppbar component.
   late CenterAppbarModel centerAppbarModel;
-  // Models for HistoryRecentCard.
-  late FlutterFlowDynamicModels<RecentIdentifierModel> historyRecentCardModels;
 
   @override
   void initState(BuildContext context) {
     centerAppbarModel = createModel(context, () => CenterAppbarModel());
-    historyRecentCardModels =
-        FlutterFlowDynamicModels(() => RecentIdentifierModel());
   }
 
   @override
   void dispose() {
     centerAppbarModel.dispose();
-    historyRecentCardModels.dispose();
   }
 }

@@ -177,8 +177,8 @@ class _DeleteAccountPageWidgetState extends State<DeleteAccountPageWidget> {
                                   ),
                                   FFButtonWidget(
                                     onPressed: () async {
-                                      context
-                                          .goNamed(SignInPageWidget.routeName);
+                                      context.goNamed(
+                                          WelcomeScreenPageWidget.routeName);
                                     },
                                     text: 'Done ',
                                     options: FFButtonOptions(

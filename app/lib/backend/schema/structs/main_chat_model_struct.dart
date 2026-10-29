@@ -1,18 +1,23 @@
 // ignore_for_file: unnecessary_getters_setters
 
+import 'package:cloud_firestore/cloud_firestore.dart' hide Type;
+
+import '/backend/schema/util/firestore_util.dart';
 import '/backend/schema/util/schema_util.dart';
 
 import 'index.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 
-class MainChatModelStruct extends BaseStruct {
+class MainChatModelStruct extends FFFirebaseStruct {
   MainChatModelStruct({
     int? id,
     String? title,
     List<ChatModelStruct>? chatModelList,
+    FirestoreUtilData firestoreUtilData = const FirestoreUtilData(),
   })  : _id = id,
         _title = title,
-        _chatModelList = chatModelList;
+        _chatModelList = chatModelList,
+        super(firestoreUtilData);
 
   // "id" field.
   int? _id;
@@ -118,8 +123,82 @@ class MainChatModelStruct extends BaseStruct {
 MainChatModelStruct createMainChatModelStruct({
   int? id,
   String? title,
+  Map<String, dynamic> fieldValues = const {},
+  bool clearUnsetFields = true,
+  bool create = false,
+  bool delete = false,
 }) =>
     MainChatModelStruct(
       id: id,
       title: title,
+      firestoreUtilData: FirestoreUtilData(
+        clearUnsetFields: clearUnsetFields,
+        create: create,
+        delete: delete,
+        fieldValues: fieldValues,
+      ),
     );
+
+MainChatModelStruct? updateMainChatModelStruct(
+  MainChatModelStruct? mainChatModel, {
+  bool clearUnsetFields = true,
+  bool create = false,
+}) =>
+    mainChatModel
+      ?..firestoreUtilData = FirestoreUtilData(
+        clearUnsetFields: clearUnsetFields,
+        create: create,
+      );
+
+void addMainChatModelStructData(
+  Map<String, dynamic> firestoreData,
+  MainChatModelStruct? mainChatModel,
+  String fieldName, [
+  bool forFieldValue = false,
+]) {
+  firestoreData.remove(fieldName);
+  if (mainChatModel == null) {
+    return;
+  }
+  if (mainChatModel.firestoreUtilData.delete) {
+    firestoreData[fieldName] = FieldValue.delete();
+    return;
+  }
+  final clearFields =
+      !forFieldValue && mainChatModel.firestoreUtilData.clearUnsetFields;
+  if (clearFields) {
+    firestoreData[fieldName] = <String, dynamic>{};
+  }
+  final mainChatModelData =
+      getMainChatModelFirestoreData(mainChatModel, forFieldValue);
+  final nestedData =
+      mainChatModelData.map((k, v) => MapEntry('$fieldName.$k', v));
+
+  final mergeFields = mainChatModel.firestoreUtilData.create || clearFields;
+  firestoreData
+      .addAll(mergeFields ? mergeNestedFields(nestedData) : nestedData);
+}
+
+Map<String, dynamic> getMainChatModelFirestoreData(
+  MainChatModelStruct? mainChatModel, [
+  bool forFieldValue = false,
+]) {
+  if (mainChatModel == null) {
+    return {};
+  }
+  final firestoreData = mapToFirestore(mainChatModel.toMap());
+
+  // Add any Firestore field values
+  mapToFirestore(mainChatModel.firestoreUtilData.fieldValues)
+      .forEach((k, v) => firestoreData[k] = v);
+
+  return forFieldValue ? mergeNestedFields(firestoreData) : firestoreData;
+}
+
+List<Map<String, dynamic>> getMainChatModelListFirestoreData(
+  List<MainChatModelStruct>? mainChatModels,
+) =>
+    mainChatModels
+        ?.map((e) => getMainChatModelFirestoreData(e, true))
+        .toList() ??
+    [];

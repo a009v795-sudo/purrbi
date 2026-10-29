@@ -1,16 +1,21 @@
 // ignore_for_file: unnecessary_getters_setters
 
+import 'package:cloud_firestore/cloud_firestore.dart' hide Type;
+
+import '/backend/schema/util/firestore_util.dart';
 import '/backend/schema/util/schema_util.dart';
 
 import 'index.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 
-class ChooseStyleModelStruct extends BaseStruct {
+class ChooseStyleModelStruct extends FFFirebaseStruct {
   ChooseStyleModelStruct({
     String? image,
     String? name,
+    FirestoreUtilData firestoreUtilData = const FirestoreUtilData(),
   })  : _image = image,
-        _name = name;
+        _name = name,
+        super(firestoreUtilData);
 
   // "image" field.
   String? _image;
@@ -85,8 +90,82 @@ class ChooseStyleModelStruct extends BaseStruct {
 ChooseStyleModelStruct createChooseStyleModelStruct({
   String? image,
   String? name,
+  Map<String, dynamic> fieldValues = const {},
+  bool clearUnsetFields = true,
+  bool create = false,
+  bool delete = false,
 }) =>
     ChooseStyleModelStruct(
       image: image,
       name: name,
+      firestoreUtilData: FirestoreUtilData(
+        clearUnsetFields: clearUnsetFields,
+        create: create,
+        delete: delete,
+        fieldValues: fieldValues,
+      ),
     );
+
+ChooseStyleModelStruct? updateChooseStyleModelStruct(
+  ChooseStyleModelStruct? chooseStyleModel, {
+  bool clearUnsetFields = true,
+  bool create = false,
+}) =>
+    chooseStyleModel
+      ?..firestoreUtilData = FirestoreUtilData(
+        clearUnsetFields: clearUnsetFields,
+        create: create,
+      );
+
+void addChooseStyleModelStructData(
+  Map<String, dynamic> firestoreData,
+  ChooseStyleModelStruct? chooseStyleModel,
+  String fieldName, [
+  bool forFieldValue = false,
+]) {
+  firestoreData.remove(fieldName);
+  if (chooseStyleModel == null) {
+    return;
+  }
+  if (chooseStyleModel.firestoreUtilData.delete) {
+    firestoreData[fieldName] = FieldValue.delete();
+    return;
+  }
+  final clearFields =
+      !forFieldValue && chooseStyleModel.firestoreUtilData.clearUnsetFields;
+  if (clearFields) {
+    firestoreData[fieldName] = <String, dynamic>{};
+  }
+  final chooseStyleModelData =
+      getChooseStyleModelFirestoreData(chooseStyleModel, forFieldValue);
+  final nestedData =
+      chooseStyleModelData.map((k, v) => MapEntry('$fieldName.$k', v));
+
+  final mergeFields = chooseStyleModel.firestoreUtilData.create || clearFields;
+  firestoreData
+      .addAll(mergeFields ? mergeNestedFields(nestedData) : nestedData);
+}
+
+Map<String, dynamic> getChooseStyleModelFirestoreData(
+  ChooseStyleModelStruct? chooseStyleModel, [
+  bool forFieldValue = false,
+]) {
+  if (chooseStyleModel == null) {
+    return {};
+  }
+  final firestoreData = mapToFirestore(chooseStyleModel.toMap());
+
+  // Add any Firestore field values
+  mapToFirestore(chooseStyleModel.firestoreUtilData.fieldValues)
+      .forEach((k, v) => firestoreData[k] = v);
+
+  return forFieldValue ? mergeNestedFields(firestoreData) : firestoreData;
+}
+
+List<Map<String, dynamic>> getChooseStyleModelListFirestoreData(
+  List<ChooseStyleModelStruct>? chooseStyleModels,
+) =>
+    chooseStyleModels
+        ?.map((e) => getChooseStyleModelFirestoreData(e, true))
+        .toList() ??
+    [];

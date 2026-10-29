@@ -1,4 +1,4 @@
-import '/backend/schema/structs/index.dart';
+import '/auth/firebase_auth/auth_util.dart';
 import '/flutter_flow/flutter_flow_theme.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 import '/flutter_flow/flutter_flow_widgets.dart';
@@ -35,12 +35,10 @@ class _SignInPageWidgetState extends State<SignInPageWidget> {
     super.initState();
     _model = createModel(context, () => SignInPageModel());
 
-    _model.textController1 ??=
-        TextEditingController(text: FFAppState().userDetail.email);
+    _model.textController1 ??= TextEditingController();
     _model.textFieldFocusNode1 ??= FocusNode();
 
-    _model.textController2 ??=
-        TextEditingController(text: FFAppState().userDetail.password);
+    _model.textController2 ??= TextEditingController();
     _model.textFieldFocusNode2 ??= FocusNode();
 
     WidgetsBinding.instance.addPostFrameCallback((_) => safeSetState(() {}));
@@ -653,35 +651,37 @@ class _SignInPageWidgetState extends State<SignInPageWidget> {
                                     0.0),
                                 child: FFButtonWidget(
                                   onPressed: () async {
+                                    Function() _navigate = () {};
                                     if (FFAppState().connected) {
                                       if (_model.formKey.currentState == null ||
                                           !_model.formKey.currentState!
                                               .validate()) {
                                         return;
                                       }
-                                      await Future.delayed(
-                                        Duration(
-                                          milliseconds: 1000,
-                                        ),
-                                      );
-                                      FFAppState().isLogin = true;
-                                      FFAppState().updateUserDetailStruct(
-                                        (e) => e
-                                          ..email = _model.textController1.text
-                                          ..password =
-                                              _model.textController2.text,
-                                      );
                                       FFAppState().homePageIndex = 0;
-                                      FFAppState().isPro = false;
-                                      FFAppState().update(() {});
+                                      safeSetState(() {});
+                                      GoRouter.of(context).prepareAuthEvent();
 
-                                      context.goNamed(
-                                          HomeMainPageWidget.routeName);
+                                      final user =
+                                          await authManager.signInWithEmail(
+                                        context,
+                                        _model.textController1.text,
+                                        _model.textController2.text,
+                                      );
+                                      if (user == null) {
+                                        return;
+                                      }
+
+                                      _navigate = () => context.goNamedAuth(
+                                          SplashPageWidget.routeName,
+                                          context.mounted);
                                     } else {
                                       await action_blocks
                                           .internetSnackbar(context);
                                       safeSetState(() {});
                                     }
+
+                                    _navigate();
                                   },
                                   text: 'Log in',
                                   options: FFButtonOptions(
@@ -717,128 +717,143 @@ class _SignInPageWidgetState extends State<SignInPageWidget> {
                                   ),
                                 ),
                               ),
-                              Padding(
-                                padding: EdgeInsetsDirectional.fromSTEB(
-                                    valueOrDefault<double>(
-                                      FFAppConstants.mainPadding,
-                                      0.0,
-                                    ),
-                                    16.0,
-                                    valueOrDefault<double>(
-                                      FFAppConstants.mainPadding,
-                                      0.0,
-                                    ),
-                                    0.0),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.max,
-                                  children: [
-                                    Expanded(
-                                      child: Container(
-                                        width: double.infinity,
-                                        height: 1.0,
-                                        decoration: BoxDecoration(
-                                          color: FlutterFlowTheme.of(context)
-                                              .borderColor,
+                              if (FFAppConstants.featureSocialSignIn)
+                                Padding(
+                                  padding: EdgeInsetsDirectional.fromSTEB(
+                                      valueOrDefault<double>(
+                                        FFAppConstants.mainPadding,
+                                        0.0,
+                                      ),
+                                      16.0,
+                                      valueOrDefault<double>(
+                                        FFAppConstants.mainPadding,
+                                        0.0,
+                                      ),
+                                      0.0),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.max,
+                                    children: [
+                                      Expanded(
+                                        child: Container(
+                                          width: double.infinity,
+                                          height: 1.0,
+                                          decoration: BoxDecoration(
+                                            color: FlutterFlowTheme.of(context)
+                                                .borderColor,
+                                          ),
                                         ),
                                       ),
-                                    ),
-                                    Text(
-                                      'Or',
-                                      textAlign: TextAlign.start,
-                                      style: FlutterFlowTheme.of(context)
-                                          .bodyMedium
-                                          .override(
-                                            font: GoogleFonts.nunito(
+                                      Text(
+                                        'Or',
+                                        textAlign: TextAlign.start,
+                                        style: FlutterFlowTheme.of(context)
+                                            .bodyMedium
+                                            .override(
+                                              font: GoogleFonts.nunito(
+                                                fontWeight: FontWeight.w600,
+                                                fontStyle:
+                                                    FlutterFlowTheme.of(context)
+                                                        .bodyMedium
+                                                        .fontStyle,
+                                              ),
+                                              fontSize: 15.0,
+                                              letterSpacing: 0.0,
                                               fontWeight: FontWeight.w600,
                                               fontStyle:
                                                   FlutterFlowTheme.of(context)
                                                       .bodyMedium
                                                       .fontStyle,
+                                              lineHeight: 1.46,
                                             ),
-                                            fontSize: 15.0,
-                                            letterSpacing: 0.0,
-                                            fontWeight: FontWeight.w600,
-                                            fontStyle:
-                                                FlutterFlowTheme.of(context)
-                                                    .bodyMedium
-                                                    .fontStyle,
-                                            lineHeight: 1.46,
-                                          ),
-                                    ),
-                                    Expanded(
-                                      child: Container(
-                                        width: double.infinity,
-                                        height: 1.0,
-                                        decoration: BoxDecoration(
-                                          color: FlutterFlowTheme.of(context)
-                                              .borderColor,
-                                        ),
                                       ),
-                                    ),
-                                  ].divide(SizedBox(width: 7.0)),
-                                ),
-                              ),
-                              Padding(
-                                padding: EdgeInsetsDirectional.fromSTEB(
-                                    valueOrDefault<double>(
-                                      FFAppConstants.mainPadding,
-                                      0.0,
-                                    ),
-                                    16.0,
-                                    valueOrDefault<double>(
-                                      FFAppConstants.mainPadding,
-                                      0.0,
-                                    ),
-                                    0.0),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.max,
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Expanded(
-                                      child: Container(
-                                        height: 56.0,
-                                        decoration: BoxDecoration(
-                                          color: FlutterFlowTheme.of(context)
-                                              .buttonBg,
-                                          borderRadius:
-                                              BorderRadius.circular(99.0),
-                                          border: Border.all(
+                                      Expanded(
+                                        child: Container(
+                                          width: double.infinity,
+                                          height: 1.0,
+                                          decoration: BoxDecoration(
                                             color: FlutterFlowTheme.of(context)
                                                 .borderColor,
-                                            width: 1.0,
                                           ),
                                         ),
-                                        alignment:
-                                            AlignmentDirectional(0.0, 0.0),
-                                        child: Padding(
-                                          padding:
-                                              EdgeInsetsDirectional.fromSTEB(
-                                                  16.0, 16.0, 16.0, 16.0),
-                                          child: Row(
-                                            mainAxisSize: MainAxisSize.max,
-                                            mainAxisAlignment:
-                                                MainAxisAlignment.center,
-                                            children: [
-                                              ClipRRect(
-                                                borderRadius:
-                                                    BorderRadius.circular(0.0),
-                                                child: SvgPicture.asset(
-                                                  'assets/images/google_ic.svg',
-                                                  width: 24.0,
-                                                  height: 24.0,
-                                                  fit: BoxFit.contain,
+                                      ),
+                                    ].divide(SizedBox(width: 7.0)),
+                                  ),
+                                ),
+                              if (FFAppConstants.featureSocialSignIn)
+                                Padding(
+                                  padding: EdgeInsetsDirectional.fromSTEB(
+                                      valueOrDefault<double>(
+                                        FFAppConstants.mainPadding,
+                                        0.0,
+                                      ),
+                                      16.0,
+                                      valueOrDefault<double>(
+                                        FFAppConstants.mainPadding,
+                                        0.0,
+                                      ),
+                                      0.0),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.max,
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Expanded(
+                                        child: Container(
+                                          height: 56.0,
+                                          decoration: BoxDecoration(
+                                            color: FlutterFlowTheme.of(context)
+                                                .buttonBg,
+                                            borderRadius:
+                                                BorderRadius.circular(99.0),
+                                            border: Border.all(
+                                              color:
+                                                  FlutterFlowTheme.of(context)
+                                                      .borderColor,
+                                              width: 1.0,
+                                            ),
+                                          ),
+                                          alignment:
+                                              AlignmentDirectional(0.0, 0.0),
+                                          child: Padding(
+                                            padding:
+                                                EdgeInsetsDirectional.fromSTEB(
+                                                    16.0, 16.0, 16.0, 16.0),
+                                            child: Row(
+                                              mainAxisSize: MainAxisSize.max,
+                                              mainAxisAlignment:
+                                                  MainAxisAlignment.center,
+                                              children: [
+                                                ClipRRect(
+                                                  borderRadius:
+                                                      BorderRadius.circular(
+                                                          0.0),
+                                                  child: SvgPicture.asset(
+                                                    'assets/images/google_ic.svg',
+                                                    width: 24.0,
+                                                    height: 24.0,
+                                                    fit: BoxFit.contain,
+                                                  ),
                                                 ),
-                                              ),
-                                              Text(
-                                                'Google',
-                                                textAlign: TextAlign.start,
-                                                maxLines: 1,
-                                                style: FlutterFlowTheme.of(
-                                                        context)
-                                                    .bodyMedium
-                                                    .override(
-                                                      font: GoogleFonts.nunito(
+                                                Text(
+                                                  'Google',
+                                                  textAlign: TextAlign.start,
+                                                  maxLines: 1,
+                                                  style: FlutterFlowTheme.of(
+                                                          context)
+                                                      .bodyMedium
+                                                      .override(
+                                                        font:
+                                                            GoogleFonts.nunito(
+                                                          fontWeight:
+                                                              FontWeight.w600,
+                                                          fontStyle:
+                                                              FlutterFlowTheme.of(
+                                                                      context)
+                                                                  .bodyMedium
+                                                                  .fontStyle,
+                                                        ),
+                                                        fontSize: 18.0,
+                                                        letterSpacing: 0.0,
                                                         fontWeight:
                                                             FontWeight.w600,
                                                         fontStyle:
@@ -846,66 +861,68 @@ class _SignInPageWidgetState extends State<SignInPageWidget> {
                                                                     context)
                                                                 .bodyMedium
                                                                 .fontStyle,
+                                                        lineHeight: 1.33,
                                                       ),
-                                                      fontSize: 18.0,
-                                                      letterSpacing: 0.0,
-                                                      fontWeight:
-                                                          FontWeight.w600,
-                                                      fontStyle:
-                                                          FlutterFlowTheme.of(
-                                                                  context)
-                                                              .bodyMedium
-                                                              .fontStyle,
-                                                      lineHeight: 1.33,
-                                                    ),
-                                              ),
-                                            ].divide(SizedBox(width: 8.0)),
+                                                ),
+                                              ].divide(SizedBox(width: 8.0)),
+                                            ),
                                           ),
                                         ),
                                       ),
-                                    ),
-                                    Expanded(
-                                      child: Container(
-                                        width: double.infinity,
-                                        height: 56.0,
-                                        decoration: BoxDecoration(
-                                          color: FlutterFlowTheme.of(context)
-                                              .buttonBg,
-                                          borderRadius:
-                                              BorderRadius.circular(99.0),
-                                          border: Border.all(
+                                      Expanded(
+                                        child: Container(
+                                          width: double.infinity,
+                                          height: 56.0,
+                                          decoration: BoxDecoration(
                                             color: FlutterFlowTheme.of(context)
-                                                .borderColor,
-                                            width: 1.0,
+                                                .buttonBg,
+                                            borderRadius:
+                                                BorderRadius.circular(99.0),
+                                            border: Border.all(
+                                              color:
+                                                  FlutterFlowTheme.of(context)
+                                                      .borderColor,
+                                              width: 1.0,
+                                            ),
                                           ),
-                                        ),
-                                        alignment:
-                                            AlignmentDirectional(0.0, 0.0),
-                                        child: Padding(
-                                          padding:
-                                              EdgeInsetsDirectional.fromSTEB(
-                                                  16.0, 16.0, 16.0, 16.0),
-                                          child: Row(
-                                            mainAxisSize: MainAxisSize.max,
-                                            mainAxisAlignment:
-                                                MainAxisAlignment.center,
-                                            children: [
-                                              Icon(
-                                                Icons.apple_sharp,
-                                                color:
-                                                    FlutterFlowTheme.of(context)
-                                                        .primaryText,
-                                                size: 24.0,
-                                              ),
-                                              Text(
-                                                'Apple',
-                                                textAlign: TextAlign.start,
-                                                maxLines: 1,
-                                                style: FlutterFlowTheme.of(
-                                                        context)
-                                                    .bodyMedium
-                                                    .override(
-                                                      font: GoogleFonts.nunito(
+                                          alignment:
+                                              AlignmentDirectional(0.0, 0.0),
+                                          child: Padding(
+                                            padding:
+                                                EdgeInsetsDirectional.fromSTEB(
+                                                    16.0, 16.0, 16.0, 16.0),
+                                            child: Row(
+                                              mainAxisSize: MainAxisSize.max,
+                                              mainAxisAlignment:
+                                                  MainAxisAlignment.center,
+                                              children: [
+                                                Icon(
+                                                  Icons.apple_sharp,
+                                                  color: FlutterFlowTheme.of(
+                                                          context)
+                                                      .primaryText,
+                                                  size: 24.0,
+                                                ),
+                                                Text(
+                                                  'Apple',
+                                                  textAlign: TextAlign.start,
+                                                  maxLines: 1,
+                                                  style: FlutterFlowTheme.of(
+                                                          context)
+                                                      .bodyMedium
+                                                      .override(
+                                                        font:
+                                                            GoogleFonts.nunito(
+                                                          fontWeight:
+                                                              FontWeight.w600,
+                                                          fontStyle:
+                                                              FlutterFlowTheme.of(
+                                                                      context)
+                                                                  .bodyMedium
+                                                                  .fontStyle,
+                                                        ),
+                                                        fontSize: 18.0,
+                                                        letterSpacing: 0.0,
                                                         fontWeight:
                                                             FontWeight.w600,
                                                         fontStyle:
@@ -913,27 +930,17 @@ class _SignInPageWidgetState extends State<SignInPageWidget> {
                                                                     context)
                                                                 .bodyMedium
                                                                 .fontStyle,
+                                                        lineHeight: 1.33,
                                                       ),
-                                                      fontSize: 18.0,
-                                                      letterSpacing: 0.0,
-                                                      fontWeight:
-                                                          FontWeight.w600,
-                                                      fontStyle:
-                                                          FlutterFlowTheme.of(
-                                                                  context)
-                                                              .bodyMedium
-                                                              .fontStyle,
-                                                      lineHeight: 1.33,
-                                                    ),
-                                              ),
-                                            ].divide(SizedBox(width: 8.0)),
+                                                ),
+                                              ].divide(SizedBox(width: 8.0)),
+                                            ),
                                           ),
                                         ),
                                       ),
-                                    ),
-                                  ].divide(SizedBox(width: 16.0)),
+                                    ].divide(SizedBox(width: 16.0)),
+                                  ),
                                 ),
-                              ),
                             ],
                           ),
                         ),

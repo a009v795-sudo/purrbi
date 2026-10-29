@@ -1,3 +1,6 @@
+import '/auth/base_auth_user_provider.dart';
+import '/auth/firebase_auth/auth_util.dart';
+import '/backend/backend.dart';
 import '/flutter_flow/flutter_flow_animations.dart';
 import '/flutter_flow/flutter_flow_theme.dart';
 import '/flutter_flow/flutter_flow_util.dart';
@@ -8,6 +11,7 @@ import 'dart:ui';
 import '/actions/actions.dart' as action_blocks;
 import '/custom_code/actions/index.dart' as actions;
 import '/index.dart';
+import 'package:cloud_firestore/cloud_firestore.dart' hide Type;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter_animate/flutter_animate.dart';
@@ -58,8 +62,14 @@ class _SplashPageWidgetState extends State<SplashPageWidget>
           safeSetState(() {});
           FFAppState().isIntro = true;
           safeSetState(() {});
-          if (FFAppState().isLogin == true) {
-            context.goNamed(HomeMainPageWidget.routeName);
+          if (loggedIn) {
+            _model.me =
+                await UsersRecord.getDocumentOnce(currentUserReference!);
+            if (_model.me!.onboardingComplete) {
+              context.goNamed(HomeMainPageWidget.routeName);
+            } else {
+              context.goNamed(PetOnboardingPageWidget.routeName);
+            }
           } else {
             context.goNamed(WelcomeScreenPageWidget.routeName);
           }

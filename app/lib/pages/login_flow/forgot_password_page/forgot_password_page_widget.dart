@@ -1,3 +1,4 @@
+import '/auth/firebase_auth/auth_util.dart';
 import '/flutter_flow/flutter_flow_theme.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 import '/flutter_flow/flutter_flow_widgets.dart';
@@ -357,21 +358,39 @@ class _ForgotPasswordPageWidgetState extends State<ForgotPasswordPageWidget> {
                                               .validate()) {
                                         return;
                                       }
-                                      await Future.delayed(
-                                        Duration(
-                                          milliseconds: 1000,
-                                        ),
-                                      );
-
-                                      context.pushNamed(
-                                        ForgotVerificationsPageWidget.routeName,
-                                        queryParameters: {
-                                          'email': serializeParam(
-                                            _model.textController.text,
-                                            ParamType.String,
+                                      if (_model.textController.text.isEmpty) {
+                                        ScaffoldMessenger.of(context)
+                                            .showSnackBar(
+                                          SnackBar(
+                                            content: Text(
+                                              'Email required!',
+                                            ),
                                           ),
-                                        }.withoutNulls,
+                                        );
+                                        return;
+                                      }
+                                      await authManager.resetPassword(
+                                        email: _model.textController.text,
+                                        context: context,
                                       );
+                                      await showDialog(
+                                        context: context,
+                                        builder: (alertDialogContext) {
+                                          return AlertDialog(
+                                            title: Text('Check your email'),
+                                            content: Text(
+                                                'If an account exists for this address, Firebase has sent a link to reset the password.'),
+                                            actions: [
+                                              TextButton(
+                                                onPressed: () => Navigator.pop(
+                                                    alertDialogContext),
+                                                child: Text('OK'),
+                                              ),
+                                            ],
+                                          );
+                                        },
+                                      );
+                                      context.pop();
                                     } else {
                                       await action_blocks
                                           .internetSnackbar(context);

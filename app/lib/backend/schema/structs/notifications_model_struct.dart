@@ -1,18 +1,23 @@
 // ignore_for_file: unnecessary_getters_setters
 
+import 'package:cloud_firestore/cloud_firestore.dart' hide Type;
+
+import '/backend/schema/util/firestore_util.dart';
 import '/backend/schema/util/schema_util.dart';
 
 import 'index.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 
-class NotificationsModelStruct extends BaseStruct {
+class NotificationsModelStruct extends FFFirebaseStruct {
   NotificationsModelStruct({
     String? title,
     String? subTitle,
     String? createAt,
+    FirestoreUtilData firestoreUtilData = const FirestoreUtilData(),
   })  : _title = title,
         _subTitle = subTitle,
-        _createAt = createAt;
+        _createAt = createAt,
+        super(firestoreUtilData);
 
   // "title" field.
   String? _title;
@@ -107,9 +112,84 @@ NotificationsModelStruct createNotificationsModelStruct({
   String? title,
   String? subTitle,
   String? createAt,
+  Map<String, dynamic> fieldValues = const {},
+  bool clearUnsetFields = true,
+  bool create = false,
+  bool delete = false,
 }) =>
     NotificationsModelStruct(
       title: title,
       subTitle: subTitle,
       createAt: createAt,
+      firestoreUtilData: FirestoreUtilData(
+        clearUnsetFields: clearUnsetFields,
+        create: create,
+        delete: delete,
+        fieldValues: fieldValues,
+      ),
     );
+
+NotificationsModelStruct? updateNotificationsModelStruct(
+  NotificationsModelStruct? notificationsModel, {
+  bool clearUnsetFields = true,
+  bool create = false,
+}) =>
+    notificationsModel
+      ?..firestoreUtilData = FirestoreUtilData(
+        clearUnsetFields: clearUnsetFields,
+        create: create,
+      );
+
+void addNotificationsModelStructData(
+  Map<String, dynamic> firestoreData,
+  NotificationsModelStruct? notificationsModel,
+  String fieldName, [
+  bool forFieldValue = false,
+]) {
+  firestoreData.remove(fieldName);
+  if (notificationsModel == null) {
+    return;
+  }
+  if (notificationsModel.firestoreUtilData.delete) {
+    firestoreData[fieldName] = FieldValue.delete();
+    return;
+  }
+  final clearFields =
+      !forFieldValue && notificationsModel.firestoreUtilData.clearUnsetFields;
+  if (clearFields) {
+    firestoreData[fieldName] = <String, dynamic>{};
+  }
+  final notificationsModelData =
+      getNotificationsModelFirestoreData(notificationsModel, forFieldValue);
+  final nestedData =
+      notificationsModelData.map((k, v) => MapEntry('$fieldName.$k', v));
+
+  final mergeFields =
+      notificationsModel.firestoreUtilData.create || clearFields;
+  firestoreData
+      .addAll(mergeFields ? mergeNestedFields(nestedData) : nestedData);
+}
+
+Map<String, dynamic> getNotificationsModelFirestoreData(
+  NotificationsModelStruct? notificationsModel, [
+  bool forFieldValue = false,
+]) {
+  if (notificationsModel == null) {
+    return {};
+  }
+  final firestoreData = mapToFirestore(notificationsModel.toMap());
+
+  // Add any Firestore field values
+  mapToFirestore(notificationsModel.firestoreUtilData.fieldValues)
+      .forEach((k, v) => firestoreData[k] = v);
+
+  return forFieldValue ? mergeNestedFields(firestoreData) : firestoreData;
+}
+
+List<Map<String, dynamic>> getNotificationsModelListFirestoreData(
+  List<NotificationsModelStruct>? notificationsModels,
+) =>
+    notificationsModels
+        ?.map((e) => getNotificationsModelFirestoreData(e, true))
+        .toList() ??
+    [];

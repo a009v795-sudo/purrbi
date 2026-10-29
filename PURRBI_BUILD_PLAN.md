@@ -18,7 +18,7 @@ References (read-only): Moxis FlutterFlow `moxis-one-x51584` (pulled and export,
 | Firebase project ID | `purrbi-49c21` (`backend/.firebaserc`, `backend/deploy-config.json`) |
 | Android package / iOS bundle ID | `com.mycompany.purrbiv2development` |
 | Cloud Firestore | `(default)` database, Native mode, **`us-central1`** (Firestore triggers run in the database's location; `nam5` maps onto `us-central1` but a regional database keeps database, triggers and functions together) |
-| Cloud Storage | default bucket (`purrbi-49c21.firebasestorage.app`), **`US-CENTRAL1`** (Blaze required; no-cost tier location) |
+| Cloud Storage | default bucket **`purrbi-49c21.firebasestorage.app`**, **`US-EAST1`** (owner's choice; Blaze; no-cost tier location). Verified 2026-10-29: the bucket exists (unauthenticated request → 403), there is no `purrbi-49c21.appspot.com` (404), the app's web/Android/iOS config all name this bucket, and the functions are pinned to it (`STORAGE_BUCKET` from `deploy-config.json`; refuses images from any other bucket or folder). Functions in `us-central1` read label photos across regions: negligible at photo sizes |
 | Cloud Functions | **`us-central1`**, Node 22, 2nd gen (+ one 1st-gen auth trigger), codebase `purrbi` |
 | Runtime identity | `purrbi-functions@purrbi-49c21.iam.gserviceaccount.com` |
 | Deploy identity | `purrbi-deployer@purrbi-49c21.iam.gserviceaccount.com` via WIF pool `github`, provider `purrbi-github` |
@@ -62,10 +62,10 @@ References (read-only): Moxis FlutterFlow `moxis-one-x51584` (pulled and export,
 | 10 | Android APK via GitHub Actions; checksum; test report | after 5 |
 
 ## Owner actions, in order (one at a time)
-1. **FlutterFlow → Settings & Integrations → Project Setup → Firebase → Generate Config Files** (package `com.mycompany.purrbiv2development`).
-2. **Firebase console (purrbi-49c21) → Usage and billing → Details & settings**: confirm the plan is Blaze (Modify plan if Spark) and set a budget alert.
-3. **Firebase console → Authentication → Sign-in method → Email/Password → Enable**; **Storage → Get started → US-CENTRAL1, production mode**.
-4. **Google Cloud Shell** (signed in as Owner): run `backend/tools/gcp/setup-dev-access.sh` once — APIs, Firestore `us-central1`, runtime and deploy identities, secret binding, OIDC sign-in, image cleanup policy. It prints the project number for `backend/deploy-config.json`.
+1. ~~FlutterFlow → Generate Config Files~~ — **done** (export configured for `purrbi-49c21`).
+2. ~~Blaze plan~~ — **done** (owner confirmed; set a budget alert if not yet).
+3. ~~Email/Password sign-in; Storage; FlutterFlow Users Collection~~ — **done, verified 2026-10-29**: sign-up endpoint answers `WEAK_PASSWORD` to a 1-character password (not `OPERATION_NOT_ALLOWED`; no account created); Storage bucket exists in US-EAST1; FlutterFlow's auth user collection is `users` (the `currentUser` bindings validate against it).
+4. **Next — Google Cloud Shell** (signed in as Owner): run `backend/tools/gcp/setup-dev-access.sh` once — APIs, Firestore `us-central1`, runtime and deploy identities, secret binding, OIDC sign-in, image cleanup policy. It prints the project number for `backend/deploy-config.json`.
 5. Then Claude runs `deploy-backend` and `live-e2e` from GitHub (manual runs) and builds the APK.
 
 ## FlutterFlow changes so far (main)
@@ -78,7 +78,11 @@ References (read-only): Moxis FlutterFlow `moxis-one-x51584` (pulled and export,
 - First run: Splash → Welcome (template intro slides with an empty list removed from the path).
 - Legal pages rewritten as drafts that match actual behaviour, marked "not yet legally reviewed".
 - **Template defect fixed:** two ad custom actions imported `google_mobile_ads` without declaring it, so the exported app did not compile (web or Android). Removed.
-- Still template content (to be replaced with the Firebase milestone): Explore tab, My scans tab lists, result cards (Card1–4), profile/edit-profile fields, sign-in/up/forgot pages (still simulated until Firebase Auth), Terms link on Welcome without action.
+- Firebase milestone (pushed 2026-10-29): real email sign-up (Auth account + `users/{uid}` with consent version and time), log in, log out, password reset, account deletion; splash routes by `onboardingComplete`; 4-step pet onboarding saved per step with a resume banner; scan request from the camera or a typed barcode; result screen for every job state (processing, failed + retry, out of scope, needs photos with in-place upload, score, personal fit with a pet switch, supplement purposes, findings, ingredients, nutrition, recall, sources with trace id); history (All / Favorites) reopening saved results; Pets tab (active pet, add a pet).
+- Document ids in actions: FlutterFlow can't read `.id` from a reference inside an action, so the id is taken from page state through a code expression (`(petRef).id.trim()`); query items use `item.reference.id`.
+- FlutterFlow's export includes its own `firebase/` rules with **open reads**; they are never deployed (only `backend/` is) and `app/.gitignore` keeps them out of the repository.
+- Firebase client config (`google-services.json`, `GoogleService-Info.plist`, `firebase_config.dart`) is not committed while the repository is public (secret scanning push protection would flag the Firebase API key); builds here use the local export.
+- Still template content: profile/edit-profile fields, Terms link on Welcome without action.
 
 ## Environment limits found in this session
 - This Claude session's network policy blocks Open Pet Food Facts, Open Food Facts, openFDA, fda.gov, OpenAI and `dl.google.com`. Google APIs, npm, pub.dev, GitHub and FlutterFlow are reachable. The environment supports an allow-list (**environment settings → Network access → Allowed domains**, applies to new sessions); nothing was bypassed.

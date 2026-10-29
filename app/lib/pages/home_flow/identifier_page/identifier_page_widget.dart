@@ -1,3 +1,6 @@
+import '/auth/firebase_auth/auth_util.dart';
+import '/backend/backend.dart';
+import '/flutter_flow/ff_builtin_enums.dart';
 import '/flutter_flow/flutter_flow_theme.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 import '/flutter_flow/flutter_flow_widgets.dart';
@@ -6,6 +9,7 @@ import 'dart:ui';
 import '/actions/actions.dart' as action_blocks;
 import '/flutter_flow/custom_functions.dart' as functions;
 import '/index.dart';
+import 'package:cloud_firestore/cloud_firestore.dart' hide Type;
 import 'package:auto_size_text/auto_size_text.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_barcode_scanner/flutter_barcode_scanner.dart';
@@ -33,6 +37,9 @@ class _IdentifierPageWidgetState extends State<IdentifierPageWidget> {
   void initState() {
     super.initState();
     _model = createModel(context, () => IdentifierPageModel());
+
+    _model.manualBarcodeFieldTextController ??= TextEditingController();
+    _model.manualBarcodeFieldFocusNode ??= FocusNode();
 
     WidgetsBinding.instance.addPostFrameCallback((_) => safeSetState(() {}));
   }
@@ -286,7 +293,8 @@ class _IdentifierPageWidgetState extends State<IdentifierPageWidget> {
                                             ScanMode.QR,
                                           );
 
-                                          _model.lastScan = _model.scannedCode;
+                                          _model.lastScan = functions
+                                              .cleanBarcode(_model.scannedCode);
                                           safeSetState(() {});
                                           if (!functions.isLikelyBarcode(
                                               _model.lastScan)) {
@@ -294,7 +302,7 @@ class _IdentifierPageWidgetState extends State<IdentifierPageWidget> {
                                                 .showSnackBar(
                                               SnackBar(
                                                 content: Text(
-                                                  'No barcode was read. Try again, holding the code steady in the frame.',
+                                                  'No barcode was read. Try again, holding the code steady in the frame, or type the number below.',
                                                   style: TextStyle(),
                                                 ),
                                                 duration: Duration(
@@ -302,30 +310,72 @@ class _IdentifierPageWidgetState extends State<IdentifierPageWidget> {
                                               ),
                                             );
                                           } else {
-                                            await showDialog(
-                                              context: context,
-                                              builder: (alertDialogContext) {
-                                                return AlertDialog(
-                                                  title: Text('Barcode read'),
-                                                  content: Text(
-                                                      'Purrbi read ${_model.lastScan}. The product lookup switches on once Purrbi\'s backend is connected.'),
-                                                  actions: [
-                                                    TextButton(
-                                                      onPressed: () =>
-                                                          Navigator.pop(
-                                                              alertDialogContext),
-                                                      child: Text('OK'),
-                                                    ),
-                                                  ],
-                                                );
-                                              },
+                                            var scansRecordReference =
+                                                ScansRecord.createDoc(
+                                                    currentUserReference!);
+                                            await scansRecordReference.set({
+                                              ...createScansRecordData(
+                                                barcode: _model.lastScan,
+                                                petId: valueOrDefault(
+                                                    currentUserDocument
+                                                        ?.activePetId,
+                                                    ''),
+                                                source: 'camera',
+                                                status: 'queued',
+                                                clientVersion:
+                                                    'purrbi-app-1.0.0',
+                                              ),
+                                              ...mapToFirestore(
+                                                {
+                                                  'createdAt': FieldValue
+                                                      .serverTimestamp(),
+                                                },
+                                              ),
+                                            });
+                                            _model.newScan = ScansRecord
+                                                .getDocumentFromData({
+                                              ...createScansRecordData(
+                                                barcode: _model.lastScan,
+                                                petId: valueOrDefault(
+                                                    currentUserDocument
+                                                        ?.activePetId,
+                                                    ''),
+                                                source: 'camera',
+                                                status: 'queued',
+                                                clientVersion:
+                                                    'purrbi-app-1.0.0',
+                                              ),
+                                              ...mapToFirestore(
+                                                {
+                                                  'createdAt': DateTime.now(),
+                                                },
+                                              ),
+                                            }, scansRecordReference);
+                                            _model.createdScan =
+                                                _model.newScan?.reference;
+                                            safeSetState(() {});
+
+                                            context.pushNamed(
+                                              ScanResultPageWidget.routeName,
+                                              queryParameters: {
+                                                'scanRef': serializeParam(
+                                                  _model.createdScan,
+                                                  ParamType.DocumentReference,
+                                                ),
+                                                'scanId': serializeParam(
+                                                  ((_model.createdScan!))
+                                                      .id
+                                                      .trim(),
+                                                  ParamType.String,
+                                                ),
+                                              }.withoutNulls,
                                             );
                                           }
                                         } else {
                                           await action_blocks.mainSanckbar(
                                             context,
                                             title:
-                                                'Scanning needs the Android or iOS app.',
+                                                'Camera scanning needs the Android or iOS app. Type the barcode number below instead.',
                                           );
                                           safeSetState(() {});
                                         }
@@ -580,6 +630,200 @@ class _IdentifierPageWidgetState extends State<IdentifierPageWidget> {
                                   ),
                                 ],
                               ),
+                            ),
+                          ),
+                          Padding(
+                            padding: EdgeInsetsDirectional.fromSTEB(
+                                valueOrDefault<double>(
+                                  FFAppConstants.mainPadding,
+                                  0.0,
+                                ),
+                                0.0,
+                                valueOrDefault<double>(
+                                  FFAppConstants.mainPadding,
+                                  0.0,
+                                ),
+                                0.0),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.max,
+                              mainAxisAlignment:
+                                  (FFMainAxisAlignment.start).flutterValue,
+                              crossAxisAlignment:
+                                  (FFCrossAxisAlignment.center).flutterValue,
+                              textBaseline: TextBaseline.alphabetic,
+                              children: [
+                                Expanded(
+                                  child: TextFormField(
+                                    controller:
+                                        _model.manualBarcodeFieldTextController,
+                                    focusNode:
+                                        _model.manualBarcodeFieldFocusNode,
+                                    obscureText: false,
+                                    decoration: InputDecoration(
+                                      labelText: 'Barcode number',
+                                      hintText: 'e.g. 5998749108536',
+                                      enabledBorder: OutlineInputBorder(
+                                        borderSide: BorderSide(
+                                          color: FlutterFlowTheme.of(context)
+                                              .borderColor,
+                                          width: 1.0,
+                                        ),
+                                        borderRadius:
+                                            BorderRadius.circular(16.0),
+                                      ),
+                                      focusedBorder: OutlineInputBorder(
+                                        borderSide: BorderSide(
+                                          color: FlutterFlowTheme.of(context)
+                                              .primary,
+                                          width: 1.0,
+                                        ),
+                                        borderRadius:
+                                            BorderRadius.circular(16.0),
+                                      ),
+                                      errorBorder: OutlineInputBorder(
+                                        borderSide: BorderSide(
+                                          color: Color(0x00000000),
+                                          width: 1.0,
+                                        ),
+                                        borderRadius:
+                                            BorderRadius.circular(16.0),
+                                      ),
+                                      focusedErrorBorder: OutlineInputBorder(
+                                        borderSide: BorderSide(
+                                          color: Color(0x00000000),
+                                          width: 1.0,
+                                        ),
+                                        borderRadius:
+                                            BorderRadius.circular(16.0),
+                                      ),
+                                      filled: true,
+                                      fillColor:
+                                          FlutterFlowTheme.of(context).buttonBg,
+                                    ),
+                                    style: TextStyle(),
+                                    maxLines: null,
+                                    keyboardType:
+                                        (FFKeyboardType.number).flutterValue,
+                                    validator: _model
+                                        .manualBarcodeFieldTextControllerValidator
+                                        .asValidator(context),
+                                  ),
+                                ),
+                                FFButtonWidget(
+                                  onPressed: () async {
+                                    _model.lastScan = functions.cleanBarcode(
+                                        _model.manualBarcodeFieldTextController
+                                            .text);
+                                    safeSetState(() {});
+                                    if (!functions
+                                        .isLikelyBarcode(_model.lastScan)) {
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(
+                                        SnackBar(
+                                          content: Text(
+                                            'Enter the 8 to 14 digits printed under the barcode.',
+                                            style: TextStyle(),
+                                          ),
+                                          duration:
+                                              Duration(milliseconds: 4000),
+                                        ),
+                                      );
+                                    } else {
+                                      var scansRecordReference =
+                                          ScansRecord.createDoc(
+                                              currentUserReference!);
+                                      await scansRecordReference.set({
+                                        ...createScansRecordData(
+                                          barcode: _model.lastScan,
+                                          petId: valueOrDefault(
+                                              currentUserDocument?.activePetId,
+                                              ''),
+                                          source: 'manual',
+                                          status: 'queued',
+                                          clientVersion: 'purrbi-app-1.0.0',
+                                        ),
+                                        ...mapToFirestore(
+                                          {
+                                            'createdAt':
+                                                FieldValue.serverTimestamp(),
+                                          },
+                                        ),
+                                      });
+                                      _model.typedScan =
+                                          ScansRecord.getDocumentFromData({
+                                        ...createScansRecordData(
+                                          barcode: _model.lastScan,
+                                          petId: valueOrDefault(
+                                              currentUserDocument?.activePetId,
+                                              ''),
+                                          source: 'manual',
+                                          status: 'queued',
+                                          clientVersion: 'purrbi-app-1.0.0',
+                                        ),
+                                        ...mapToFirestore(
+                                          {
+                                            'createdAt': DateTime.now(),
+                                          },
+                                        ),
+                                      }, scansRecordReference);
+                                      _model.createdScan =
+                                          _model.typedScan?.reference;
+                                      safeSetState(() {});
+
+                                      context.pushNamed(
+                                        ScanResultPageWidget.routeName,
+                                        queryParameters: {
+                                          'scanRef': serializeParam(
+                                            _model.createdScan,
+                                            ParamType.DocumentReference,
+                                          ),
+                                          'scanId': serializeParam(
+                                            ((_model.createdScan!)).id.trim(),
+                                            ParamType.String,
+                                          ),
+                                        }.withoutNulls,
+                                      );
+                                    }
+
+                                    safeSetState(() {});
+                                  },
+                                  text: 'Look up',
+                                  options: FFButtonOptions(
+                                    height: 52.0,
+                                    padding: EdgeInsetsDirectional.fromSTEB(
+                                        0.0, 0.0, 0.0, 0.0),
+                                    iconPadding: EdgeInsetsDirectional.fromSTEB(
+                                        0.0, 0.0, 0.0, 0.0),
+                                    color: FlutterFlowTheme.of(context).primary,
+                                    textStyle: FlutterFlowTheme.of(context)
+                                        .titleSmall
+                                        .override(
+                                          font: GoogleFonts.nunito(
+                                            fontWeight:
+                                                FlutterFlowTheme.of(context)
+                                                    .titleSmall
+                                                    .fontWeight,
+                                            fontStyle:
+                                                FlutterFlowTheme.of(context)
+                                                    .titleSmall
+                                                    .fontStyle,
+                                          ),
+                                          color: FlutterFlowTheme.of(context)
+                                              .onPrimary,
+                                          letterSpacing: 0.0,
+                                          fontWeight:
+                                              FlutterFlowTheme.of(context)
+                                                  .titleSmall
+                                                  .fontWeight,
+                                          fontStyle:
+                                              FlutterFlowTheme.of(context)
+                                                  .titleSmall
+                                                  .fontStyle,
+                                        ),
+                                    borderRadius: BorderRadius.circular(16.0),
+                                  ),
+                                ),
+                              ].divide(SizedBox(width: 12.0)),
                             ),
                           ),
                         ]
