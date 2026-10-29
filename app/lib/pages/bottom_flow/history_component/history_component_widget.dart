@@ -276,7 +276,9 @@ class _HistoryComponentWidgetState extends State<HistoryComponentWidget> {
                                               .flutterValue,
                                       textBaseline: TextBaseline.alphabetic,
                                       children: [
-                                        if (listItemItem.scoreAvailable)
+                                        if (listItemItem.scoreAvailable &&
+                                            (listItemItem.resultState !=
+                                                'partial'))
                                           Container(
                                             width: 44.0,
                                             height: 44.0,
@@ -319,6 +321,56 @@ class _HistoryComponentWidgetState extends State<HistoryComponentWidget> {
                                                         FlutterFlowTheme.of(
                                                                 context)
                                                             .titleSmall
+                                                            .fontStyle,
+                                                  ),
+                                            ),
+                                          ),
+                                        if (listItemItem.scoreAvailable &&
+                                            (listItemItem.resultState ==
+                                                'partial'))
+                                          Container(
+                                            width: 44.0,
+                                            height: 44.0,
+                                            decoration: BoxDecoration(
+                                              color:
+                                                  FlutterFlowTheme.of(context)
+                                                      .slate,
+                                              shape: BoxShape.circle,
+                                            ),
+                                            alignment:
+                                                AlignmentDirectional(0.0, 0.0),
+                                            child: Text(
+                                              listItemItem.scoreText,
+                                              textAlign: TextAlign.center,
+                                              style: FlutterFlowTheme.of(
+                                                      context)
+                                                  .labelSmall
+                                                  .override(
+                                                    font: GoogleFonts.nunito(
+                                                      fontWeight:
+                                                          FlutterFlowTheme.of(
+                                                                  context)
+                                                              .labelSmall
+                                                              .fontWeight,
+                                                      fontStyle:
+                                                          FlutterFlowTheme.of(
+                                                                  context)
+                                                              .labelSmall
+                                                              .fontStyle,
+                                                    ),
+                                                    color: FlutterFlowTheme.of(
+                                                            context)
+                                                        .onPrimary,
+                                                    letterSpacing: 0.0,
+                                                    fontWeight:
+                                                        FlutterFlowTheme.of(
+                                                                context)
+                                                            .labelSmall
+                                                            .fontWeight,
+                                                    fontStyle:
+                                                        FlutterFlowTheme.of(
+                                                                context)
+                                                            .labelSmall
                                                             .fontStyle,
                                                   ),
                                             ),
@@ -661,7 +713,9 @@ class _HistoryComponentWidgetState extends State<HistoryComponentWidget> {
                                               .flutterValue,
                                       textBaseline: TextBaseline.alphabetic,
                                       children: [
-                                        if (listItemItem.scoreAvailable)
+                                        if (listItemItem.scoreAvailable &&
+                                            (listItemItem.resultState !=
+                                                'partial'))
                                           Container(
                                             width: 44.0,
                                             height: 44.0,
@@ -704,6 +758,56 @@ class _HistoryComponentWidgetState extends State<HistoryComponentWidget> {
                                                         FlutterFlowTheme.of(
                                                                 context)
                                                             .titleSmall
+                                                            .fontStyle,
+                                                  ),
+                                            ),
+                                          ),
+                                        if (listItemItem.scoreAvailable &&
+                                            (listItemItem.resultState ==
+                                                'partial'))
+                                          Container(
+                                            width: 44.0,
+                                            height: 44.0,
+                                            decoration: BoxDecoration(
+                                              color:
+                                                  FlutterFlowTheme.of(context)
+                                                      .slate,
+                                              shape: BoxShape.circle,
+                                            ),
+                                            alignment:
+                                                AlignmentDirectional(0.0, 0.0),
+                                            child: Text(
+                                              listItemItem.scoreText,
+                                              textAlign: TextAlign.center,
+                                              style: FlutterFlowTheme.of(
+                                                      context)
+                                                  .labelSmall
+                                                  .override(
+                                                    font: GoogleFonts.nunito(
+                                                      fontWeight:
+                                                          FlutterFlowTheme.of(
+                                                                  context)
+                                                              .labelSmall
+                                                              .fontWeight,
+                                                      fontStyle:
+                                                          FlutterFlowTheme.of(
+                                                                  context)
+                                                              .labelSmall
+                                                              .fontStyle,
+                                                    ),
+                                                    color: FlutterFlowTheme.of(
+                                                            context)
+                                                        .onPrimary,
+                                                    letterSpacing: 0.0,
+                                                    fontWeight:
+                                                        FlutterFlowTheme.of(
+                                                                context)
+                                                            .labelSmall
+                                                            .fontWeight,
+                                                    fontStyle:
+                                                        FlutterFlowTheme.of(
+                                                                context)
+                                                            .labelSmall
                                                             .fontStyle,
                                                   ),
                                             ),

@@ -1235,7 +1235,10 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                                   TextBaseline.alphabetic,
                                               children: [
                                                 if (containerScansRecord
-                                                    .scoreAvailable)
+                                                        .scoreAvailable &&
+                                                    (containerScansRecord
+                                                            .resultState !=
+                                                        'partial'))
                                                   Text(
                                                     containerScansRecord
                                                         .scoreText,
@@ -1269,6 +1272,48 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                                               FlutterFlowTheme.of(
                                                                       context)
                                                                   .headlineLarge
+                                                                  .fontStyle,
+                                                        ),
+                                                  ),
+                                                if (containerScansRecord
+                                                        .scoreAvailable &&
+                                                    (containerScansRecord
+                                                            .resultState ==
+                                                        'partial'))
+                                                  Text(
+                                                    containerScansRecord
+                                                        .scoreText,
+                                                    textAlign: TextAlign.center,
+                                                    style: FlutterFlowTheme.of(
+                                                            context)
+                                                        .titleSmall
+                                                        .override(
+                                                          font: GoogleFonts
+                                                              .nunito(
+                                                            fontWeight:
+                                                                FlutterFlowTheme.of(
+                                                                        context)
+                                                                    .titleSmall
+                                                                    .fontWeight,
+                                                            fontStyle:
+                                                                FlutterFlowTheme.of(
+                                                                        context)
+                                                                    .titleSmall
+                                                                    .fontStyle,
+                                                          ),
+                                                          color: FlutterFlowTheme
+                                                                  .of(context)
+                                                              .onPrimary,
+                                                          letterSpacing: 0.0,
+                                                          fontWeight:
+                                                              FlutterFlowTheme.of(
+                                                                      context)
+                                                                  .titleSmall
+                                                                  .fontWeight,
+                                                          fontStyle:
+                                                              FlutterFlowTheme.of(
+                                                                      context)
+                                                                  .titleSmall
                                                                   .fontStyle,
                                                         ),
                                                   ),
