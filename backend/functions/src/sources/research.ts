@@ -11,7 +11,7 @@ import { parseActiveIngredients } from '../domain/supplements';
 import type { ProductFacts, SourceRef } from '../domain/types';
 import { httpRequest, SourceError } from '../util/http';
 
-export const RESEARCH_VERSION = 'research-1.4.0';
+export const RESEARCH_VERSION = 'research-1.5.0'; // 1.5.0: who it is for only from a page proven to be this product
 
 const nullableString = { type: ['string', 'null'] };
 const SCHEMA = {
@@ -101,6 +101,7 @@ export interface ResearchOutcome {
   sources: SourceRef[];
   discarded: string[];
   model: string;
+  verified?: string[]; // how the page was matched to this product (barcode shown, same recipe), for the evidence notes
 }
 
 interface ResearchOptions {
@@ -111,6 +112,7 @@ interface ResearchOptions {
   knownName?: string;
   knownBrand?: string;
   knownIngredients?: string[]; // from the database record: a page with another recipe is not used
+  knownSpecies?: string; // cat, dog, cat_and_dog or unknown, from the product's other evidence
   userAgent: string;
   now: Date;
 }
@@ -199,6 +201,7 @@ async function researchAttempt(opts: ResearchOptions, user: string): Promise<Res
     url: page.url,
     retrievedAt: opts.now.toISOString(),
     matchConfidence: barcodeOnPage ? 'exact_barcode' : 'brand_and_product',
+    readerVersion: RESEARCH_VERSION,
   };
 
   const facts: Partial<ProductFacts> = {};
@@ -206,13 +209,28 @@ async function researchAttempt(opts: ResearchOptions, user: string): Promise<Res
   if (brand && onPage(brand)) facts.brand = { value: brand, source };
 
   const parsed = parseIngredientList(data.ingredients_verbatim);
-  // Same recipe? When the database already lists ingredients, a page whose first ingredients differ
-  // describes another recipe or formulation (a similarly named variant): nothing from it is used.
+  const listedOnPage = parsed.length >= 3 && parsed.slice(0, 3).every((i) => onPage(i.name));
+  // Same recipe? The first ingredients (up to ten) on the page are compared, in order, with the
+  // database record. Fewer than 80% the same: another recipe or formulation (a similarly named
+  // variant), and nothing from the page is used.
   const known = (opts.knownIngredients ?? []).map((i) => normalizeIngredientName(i)).filter(Boolean);
-  if (known.length >= 3 && parsed.length >= 3 && parsed.slice(0, 3).some((x, i) => normalizeIngredientName(x.name) !== known[i])) {
+  const onPageNames = listedOnPage ? parsed.map((x) => normalizeIngredientName(x.name)) : [];
+  const compared = Math.min(10, known.length, onPageNames.length);
+  const same = onPageNames.slice(0, compared).filter((x, i) => x === known[i]).length;
+  if (compared >= 3 && same < Math.ceil(compared * 0.8)) {
     return { facts: null, sources: [], discarded: [...discarded, `the page lists another recipe (first ingredients ${parsed.slice(0, 3).map((x) => x.name).join(', ')}; the database record lists ${(opts.knownIngredients ?? []).slice(0, 3).join(', ')}), so nothing from it was used`], model };
   }
-  if (parsed.length >= 3 && parsed.slice(0, 3).every((i) => onPage(i.name))) {
+  const sameRecipe = compared >= 5 && same >= Math.ceil(compared * 0.8);
+  // Strong identity: the page shows this barcode, or the same recipe. Brand and name alone are weak:
+  // a brand often sells cat and dog recipes under the same name.
+  const strongIdentity = barcodeOnPage || sameRecipe;
+  const verified: string[] = [];
+  if (barcodeOnPage) verified.push(`${host || 'The page'} shows this product’s barcode.`);
+  if (sameRecipe) verified.push(`Same recipe on ${host || 'the page'}: ${same} of the first ${compared} ingredients match the database record in order (${parsed.slice(0, 4).map((x) => x.name).join(', ')} …).`);
+  if (!strongIdentity && (!opts.knownSpecies || opts.knownSpecies === 'unknown')) {
+    return { facts: null, sources: [], discarded: [...discarded, `${host || 'the page'} matches only by brand and name (no barcode, ${compared >= 3 ? 'too few matching ingredients' : 'no ingredient list to compare'}), and it is not yet known whether this product is for cats or dogs, so nothing from it was used`], model };
+  }
+  if (listedOnPage) {
     facts.ingredientsText = { value: data.ingredients_verbatim!.trim(), source };
     facts.ingredients = { value: parsed.map((i) => i.name), source };
   } else if (data.ingredients_verbatim) discarded.push('ingredients: not found verbatim on the cited page');
@@ -250,9 +268,15 @@ async function researchAttempt(opts: ResearchOptions, user: string): Promise<Res
   else if (data.intended_for === 'people') intendedFor = pageSpecies.every((x) => x === 'unknown') ? 'intended for people' : null;
   else if (data.intended_for === 'other_animals') intendedFor = 'intended for other animals';
   if (!intendedFor && data.intended_for !== 'not_stated') discarded.push(`intended for ${data.intended_for.replace(/_/g, ' ')}: not stated in those words on the fetched page`);
+  if (intendedFor && !strongIdentity) {
+    // Who it is for decides the whole assessment: it is taken only from a page proven to be this product.
+    const conflicts = opts.knownSpecies && opts.knownSpecies !== 'unknown' && !intendedFor.includes(opts.knownSpecies === 'cat_and_dog' ? 'cats and dogs' : `${opts.knownSpecies}s`);
+    if (conflicts) return { facts: null, sources: [], discarded: [...discarded, `${host || 'the page'} is ${intendedFor}, but this product is for ${opts.knownSpecies}s: another variant, so nothing from it was used`], model };
+    intendedFor = null;
+  }
 
   facts.classificationSignals = [name, data.product_type, intendedFor]
     .filter((t): t is string => !!t)
     .map((t) => ({ text: t, source: source.sourceId, kind: 'research' as const }));
-  return { facts, sources: [source], discarded, model };
+  return { facts, sources: [source], discarded, model, verified };
 }

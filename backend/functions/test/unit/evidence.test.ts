@@ -277,7 +277,8 @@ describe('manufacturer research', () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => (url.startsWith('https://api.openai.com/')
       ? new Response(JSON.stringify({ output: [{ type: 'web_search_call' }, { type: 'message', content: [{ type: 'output_text', text: JSON.stringify(json), annotations: [] }] }] }), { status: 200 })
       : new Response(PAGE, { status: 200 }))));
-  const run = () => researchProduct({ apiKey: 'k', model: 'm', gtin14: '07613032759155', barcode: '7613032759155', knownBrand: 'Purina', userAgent: 'test', now: new Date('2026-10-29T00:00:00Z') });
+  // The database record already establishes a cat food; the page then only has to be the same product by brand and name.
+  const run = (over: Record<string, unknown> = {}) => researchProduct({ apiKey: 'k', model: 'm', gtin14: '07613032759155', barcode: '7613032759155', knownBrand: 'Purina', knownSpecies: 'cat', userAgent: 'test', now: new Date('2026-10-29T00:00:00Z'), ...over });
 
   it('verifies a page the model names without a search citation, ignoring markup, entities, ® and decimal commas', async () => {
     stub(answer());
@@ -288,6 +289,22 @@ describe('manufacturer research', () => {
     expect(r.facts?.ingredients?.value.slice(0, 2)).toEqual(['Saumon (17%)', 'protéines de volaille déshydratées']);
     expect(r.facts?.adequacy?.value).toMatchObject({ type: 'complete', species: 'cat', lifeStages: ['adult_maintenance'] });
     expect(r.facts?.guaranteedAnalysis?.value.map((g) => g.value)).toEqual([34, 12.5]); // "12,5 %" on the page
+  });
+  it('takes who it is for only from a page proven to be this product (barcode or same recipe), never from brand and name alone', async () => {
+    // Real case 099482480882: a brand sells cat and dog recipes under the same name.
+    stub(answer());
+    const nameOnly = await run({ knownSpecies: 'unknown' });
+    expect(nameOnly.facts).toBeNull();
+    expect(nameOnly.discarded.join(' ')).toMatch(/matches only by brand and name .* it is not yet known whether this product is for cats or dogs/);
+    const sameRecipe = await run({ knownSpecies: 'unknown', knownIngredients: ['Saumon (17%)', 'protéines de volaille déshydratées', 'blé', 'maïs'] });
+    expect(sameRecipe.facts).toBeNull(); // four ingredients compared is too few to call it the same recipe
+    const page5 = PAGE.replace('ma&iuml;s</p>', 'ma&iuml;s, graisses animales</p>');
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => (url.startsWith('https://api.openai.com/')
+      ? new Response(JSON.stringify({ output: [{ type: 'web_search_call' }, { type: 'message', content: [{ type: 'output_text', text: JSON.stringify(answer({ ingredients_verbatim: 'Saumon (17%), protéines de volaille déshydratées, blé, maïs, graisses animales' })), annotations: [] }] }] }), { status: 200 })
+      : new Response(page5, { status: 200 }))));
+    const recipe = await run({ knownSpecies: 'unknown', knownIngredients: ['Saumon (17%)', 'protéines de volaille déshydratées', 'blé', 'maïs', 'graisses animales'] });
+    expect(recipe.facts?.classificationSignals?.map((c) => c.text)).toContain('intended for cats');
+    expect(recipe.verified).toEqual(['Same recipe on purina.fr: 5 of the first 5 ingredients match the database record in order (Saumon (17%), protéines de volaille déshydratées, blé, maïs …).']);
   });
   it('says what it looked for when the page does not show the product', async () => {
     stub(answer({ product_name: 'Purina Gourmet Gold Mousse au Thon' }));

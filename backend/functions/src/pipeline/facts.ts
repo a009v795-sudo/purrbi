@@ -25,9 +25,14 @@ export function fillMissing(base: ProductFacts, extra: Partial<ProductFacts>): {
 
 const ENRICHMENT_SOURCES = new Set(['database_image', 'manufacturer', 'retailer_or_web']);
 
-/** Removes facts read from database label images by an older label reader, so they are read again. */
-export function dropStaleImageReads(facts: ProductFacts, readerVersion: string): { facts: ProductFacts; dropped: string[] } {
-  const stale = (s: SourceRef | undefined) => s?.sourceType === 'database_image' && s.readerVersion !== readerVersion;
+/**
+ * Removes enrichment made under older rules, so it is done again: facts read from database label images
+ * by an older label reader, and facts or statements taken from web pages by older research rules.
+ */
+export function dropStaleImageReads(facts: ProductFacts, readerVersion: string, researchVersion?: string): { facts: ProductFacts; dropped: string[] } {
+  const stale = (s: SourceRef | undefined) =>
+    (s?.sourceType === 'database_image' && s.readerVersion !== readerVersion) ||
+    (!!researchVersion && (s?.sourceType === 'manufacturer' || s?.sourceType === 'retailer_or_web') && s.readerVersion !== researchVersion);
   const staleIds = new Set(facts.sources.filter(stale).map((s) => s.sourceId));
   if (!staleIds.size) return { facts, dropped: [] };
   const out: ProductFacts = { ...facts, sources: facts.sources.filter((s) => !staleIds.has(s.sourceId)), classificationSignals: facts.classificationSignals.filter((c) => !staleIds.has(c.source)) };

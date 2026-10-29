@@ -10,7 +10,7 @@ import { detectSpecies } from './adequacy';
 import type { AdequacyStatement, OutOfScopeKind, ProductCategory, ProductSpecies, ScopeResult } from './types';
 
 /** Version of these classification rules, saved with each product record and scan. */
-export const SCOPE_VERSION = 'scope-2.0.0';
+export const SCOPE_VERSION = 'scope-2.1.0'; // 2.1.0: the database's front image is read while unresolved
 
 export type DatabaseOrigin = 'opff' | 'off' | 'obf' | 'opf' | 'web' | 'label';
 

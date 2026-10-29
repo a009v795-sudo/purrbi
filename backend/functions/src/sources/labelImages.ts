@@ -12,19 +12,25 @@ import type { OpenFactsProduct } from './openFacts';
 const IMAGE_HOSTS = new Set(['images.openpetfoodfacts.org', 'static.openpetfoodfacts.org', 'images.openfoodfacts.org']);
 const MAX_BYTES = 10 * 1024 * 1024;
 
-const PURPOSE_TEXT: Record<'ingredients' | 'nutrition', string> = {
+type ImagePurpose = 'front' | 'ingredients' | 'nutrition';
+
+const PURPOSE_TEXT: Record<ImagePurpose, string> = {
+  front: 'the front of the package (product name, brand, which animal it is for, product type)',
   ingredients: 'the ingredient list (and any active ingredients with amounts)',
   nutrition: 'the guaranteed analysis, calorie content and nutritional adequacy statement',
 };
+
+// Which database published the image (for the source label and licence).
+const IMAGE_DB: Record<string, string> = { 'images.openpetfoodfacts.org': 'Open Pet Food Facts', 'static.openpetfoodfacts.org': 'Open Pet Food Facts', 'images.openfoodfacts.org': 'Open Food Facts' };
 
 /** The full-resolution version of a Product Opener image URL (".400.jpg" → ".full.jpg"). */
 export function fullResolution(url: string): string {
   return url.replace(/\.(100|200|400)\.jpg$/, '.full.jpg');
 }
 
-export function candidateImages(product: OpenFactsProduct, needs: PhotoPurpose[]): { purpose: 'ingredients' | 'nutrition'; url: string }[] {
-  const out: { purpose: 'ingredients' | 'nutrition'; url: string }[] = [];
-  const add = (purpose: 'ingredients' | 'nutrition', raw: string | undefined) => {
+export function candidateImages(product: OpenFactsProduct, needs: PhotoPurpose[]): { purpose: ImagePurpose; url: string }[] {
+  const out: { purpose: ImagePurpose; url: string }[] = [];
+  const add = (purpose: ImagePurpose, raw: string | undefined) => {
     if (!raw) return;
     try {
       const u = new URL(raw);
@@ -33,6 +39,8 @@ export function candidateImages(product: OpenFactsProduct, needs: PhotoPurpose[]
       /* ignore malformed URLs */
     }
   };
+  // The front only when it is unresolved what the product is (who it is for, product type).
+  if (needs.includes('front')) add('front', product.image_front_url);
   if (needs.includes('ingredients')) add('ingredients', product.image_ingredients_url);
   if (needs.includes('nutrition')) add('nutrition', product.image_nutrition_url);
   return out;
@@ -55,9 +63,10 @@ export async function readDatabaseLabelImages(opts: {
   beforeAiCall: () => Promise<void>;
 }): Promise<DatabaseImageOutcome> {
   const result: DatabaseImageOutcome = { facts: [], read: [], skipped: [] };
-  for (const img of candidateImages(opts.product, opts.needs).slice(0, 2)) {
+  for (const img of candidateImages(opts.product, opts.needs).slice(0, 3)) {
+    const dbName = IMAGE_DB[new URL(img.url).hostname] ?? 'Open Pet Food Facts';
     try {
-      const file = await httpBytes(img.url, { source: 'Open Pet Food Facts image', headers: { 'User-Agent': opts.userAgent }, timeoutMs: 15000, maxBytes: MAX_BYTES });
+      const file = await httpBytes(img.url, { source: `${dbName} image`, headers: { 'User-Agent': opts.userAgent }, timeoutMs: 15000, maxBytes: MAX_BYTES });
       const mimeType = file.contentType || 'image/jpeg';
       if (!/^image\/(jpeg|png|webp)$/.test(mimeType)) {
         result.skipped.push(`${img.purpose}: unsupported image type`);
@@ -73,11 +82,11 @@ export async function readDatabaseLabelImages(opts: {
       const source: SourceRef = {
         sourceId: `opff-image:${opts.code}:${img.purpose}`,
         sourceType: 'database_image',
-        sourceName: 'Open Pet Food Facts label image',
+        sourceName: `${dbName} label image`,
         url: img.url,
         retrievedAt: opts.now.toISOString(),
         matchConfidence: 'exact_barcode',
-        license: 'CC BY-SA 3.0 (image), contributors of Open Pet Food Facts',
+        license: `CC BY-SA 3.0 (image), contributors of ${dbName}`,
         ...(label.version ? { readerVersion: label.version } : {}),
       };
       // Identity fields stay with the database record; the image only fills label panels.

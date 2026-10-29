@@ -275,7 +275,7 @@ async function publicEvidence(deps: Deps, job: JobInfo, o: AssessOptions, stored
       origin: sister ? (sister.db as DatabaseOrigin) : 'label',
       fetchedPublic: true,
       notes: [],
-      openFacts: null,
+      openFacts: sister,
     };
   } catch (err) {
     if (!stored) throw err;
@@ -312,10 +312,11 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   let { facts, origin, fetchedPublic } = evidence;
   const notes = evidence.notes;
   // Label images read by an older label reader are dropped (and read again below when allowed).
-  const stale = dropStaleImageReads(facts, LABEL_EXTRACTION_VERSION);
+  const before = facts.sources.length + facts.classificationSignals.length;
+  const stale = dropStaleImageReads(facts, LABEL_EXTRACTION_VERSION, RESEARCH_VERSION);
   facts = stale.facts;
-  let rewriteProduct = stale.dropped.length > 0;
-  if (rewriteProduct) job.diagnosticNotes.push(`Dropped ${stale.dropped.join(', ')} read from database label images by an older label reader.`);
+  let rewriteProduct = stale.dropped.length > 0 || facts.sources.length + facts.classificationSignals.length < before;
+  if (rewriteProduct) job.diagnosticNotes.push(`Dropped ${stale.dropped.join(', ') || 'statements'} taken from database label images or web pages under older rules; they are read again.`);
   // A saved database analysis that cannot be per 100 g (saved before this check existed) is dropped too.
   const unusable = facts.guaranteedAnalysis?.source.sourceType === 'database' ? implausibleAnalysis(facts.guaranteedAnalysis.value) : null;
   if (unusable) {
@@ -331,7 +332,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   let metaChanged = false;
   if (evidence.openFacts) {
     const p = evidence.openFacts.product;
-    const urls = { ...(p.image_ingredients_url ? { ingredients: p.image_ingredients_url } : {}), ...(p.image_nutrition_url ? { nutrition: p.image_nutrition_url } : {}) };
+    const urls = { ...(p.image_front_url ? { front: p.image_front_url } : {}), ...(p.image_ingredients_url ? { ingredients: p.image_ingredients_url } : {}), ...(p.image_nutrition_url ? { nutrition: p.image_nutrition_url } : {}) };
     if (JSON.stringify(urls) !== JSON.stringify(meta.labelImageUrls)) {
       meta.labelImageUrls = urls;
       metaChanged = true;
@@ -339,14 +340,18 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   }
   // Enrichment runs for every product not affirmatively out of scope, wherever its record is filed.
   const aiOk = o.allowFetch && config.aiEnabled && scope.status !== 'out_of_scope';
-  const panelNeeds = () => missingInfo(facts, scope, scope.category).map((r) => r.purpose).filter((p) => p === 'ingredients' || p === 'nutrition');
+  // Label images in the database answer missing panels and, while it is unresolved what the product is, the front.
+  const panelNeeds = () => missingInfo(facts, scope, scope.category).map((r) => r.purpose).filter((p) => p === 'ingredients' || p === 'nutrition' || (p === 'front' && scope.status === 'unknown'));
 
   // 2a. Label images already published in the pet database, read by AI.
-  const imagesDue = ageDays(meta.enrichment.databaseImagesAt, now) > config.productFreshDays || meta.enrichment.databaseImages?.version !== LABEL_EXTRACTION_VERSION;
+  // Due per panel: a panel never tried (e.g. the front, once it is unresolved what the product is) is read
+  // even when other panels were read recently.
+  const tried = new Set([...(meta.enrichment.databaseImages?.read ?? []), ...(meta.enrichment.databaseImages?.skipped ?? []).map((x) => x.split(/[,:]/)[0].trim())]);
+  const imagesDue = ageDays(meta.enrichment.databaseImagesAt, now) > config.productFreshDays || meta.enrichment.databaseImages?.version !== LABEL_EXTRACTION_VERSION || panelNeeds().some((p) => !tried.has(p));
   if (aiOk && config.databaseImagesEnabled && panelNeeds().length && Object.keys(meta.labelImageUrls).length && imagesDue) {
     await setStatus(deps, o.uid, o.scanId, SCAN_STATUS.researching, 'Reading the label images in the product database', 30);
     const code = facts.sources.find((s) => s.sourceType === 'database')?.sourceId.split(':')[1] ?? o.barcode.digits;
-    const product = { image_ingredients_url: meta.labelImageUrls.ingredients, image_nutrition_url: meta.labelImageUrls.nutrition };
+    const product = { image_front_url: meta.labelImageUrls.front, image_ingredients_url: meta.labelImageUrls.ingredients, image_nutrition_url: meta.labelImageUrls.nutrition };
     const r = await deps.sources.databaseImages({
       product,
       code,
@@ -366,7 +371,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
     meta.enrichment.databaseImages = { read: r.read, skipped: r.skipped, version: LABEL_EXTRACTION_VERSION };
     job.diagnosticNotes.push(...r.skipped.slice(0, 4).map((x) => `Database label image ${x}`));
     metaChanged = true;
-    if (r.read.length) job.evidenceNotes.push(`Read the ${r.read.map((x) => (x === 'nutrition' ? 'nutrition panel' : 'ingredient list')).join(' and ')} from a label image in Open Pet Food Facts (AI, not reviewed).`);
+    if (r.read.length) job.evidenceNotes.push(`Read the ${r.read.map((x) => (x === 'nutrition' ? 'nutrition panel' : x === 'front' ? 'front of the package' : 'ingredient list')).join(' and ')} from a label image in ${origin === 'off' ? 'Open Food Facts' : 'Open Pet Food Facts'} (AI, two readings agreed; not reviewed).`);
     log('database label images', { read: r.read, skipped: r.skipped });
     scope = scopeOf(facts, origin);
   }
@@ -381,7 +386,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
     try {
       await consumeQuota(db, o.uid, 'research', config.limits, now);
       await consumeAiBudget(db, config.limits, now);
-      const r = await deps.sources.research({ apiKey: config.openaiApiKey(), model: config.researchModel, gtin14: gtin, barcode: o.barcode.digits, knownName: facts.productName?.value, knownBrand: facts.brand?.value, knownIngredients: facts.ingredients?.value, userAgent: config.userAgent, now });
+      const r = await deps.sources.research({ apiKey: config.openaiApiKey(), model: config.researchModel, gtin14: gtin, barcode: o.barcode.digits, knownName: facts.productName?.value, knownBrand: facts.brand?.value, knownIngredients: facts.ingredients?.value, knownSpecies: scope.species, userAgent: config.userAgent, now });
       let filled: string[] = [];
       if (r.facts) {
         // "Active ingredients" are a supplement's; a food page's additive list is not used as such.
@@ -397,6 +402,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       meta.enrichment.research = { filled, discarded: r.discarded, source: src ? `${src.sourceName} (${src.sourceType})` : '', version: RESEARCH_VERSION };
       metaChanged = true;
       const pageKind = src?.sourceType === 'manufacturer' ? 'manufacturer page' : 'web page';
+      if (r.facts && r.verified?.length) job.evidenceNotes.push(...r.verified);
       const confirmed = r.facts?.classificationSignals?.find((c) => c.kind === 'research' && /^intended for /.test(c.text))?.text;
       if (confirmed && src) job.evidenceNotes.push(`${src.sourceName} (${pageKind}) says it is ${confirmed}; checked on the page.`);
       job.evidenceNotes.push(

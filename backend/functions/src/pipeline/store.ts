@@ -66,7 +66,7 @@ export interface StoredProduct {
 
 /** Server-only bookkeeping per barcode (never readable by clients): label image links and enrichment attempts. */
 export interface ProductMeta {
-  labelImageUrls: { ingredients?: string; nutrition?: string };
+  labelImageUrls: { front?: string; ingredients?: string; nutrition?: string };
   enrichment: Enrichment;
 }
 

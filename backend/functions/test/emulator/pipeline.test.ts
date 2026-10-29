@@ -11,6 +11,8 @@ import { explanationKey } from '../../src/knowledge/explain';
 import { DEFAULT_LIMITS, type RuntimeConfig } from '../../src/pipeline/config';
 import { handleScanUpdate, processPhoto, processScan, type Deps, type Sources } from '../../src/pipeline/scanJob';
 import type { OpenFactsDb, OpenFactsLookup } from '../../src/sources/openFacts';
+import { RESEARCH_VERSION } from '../../src/sources/research';
+import { SCOPE_VERSION } from '../../src/domain/scope';
 import { SourceError } from '../../src/util/http';
 
 const withCheck = (body: string) => body + gs1CheckDigit(body);
@@ -25,6 +27,7 @@ const BC = {
   webOnly: withCheck('501234567894'),
   misfiled: withCheck('501234567896'), // a pet food filed in the human-food database, as 099482480882 is
   offDown: withCheck('501234567897'),
+  misfiledFront: withCheck('501234567898'), // misfiled too, with a front image in the database
 };
 
 let db: Firestore;
@@ -70,7 +73,14 @@ const sources: Sources = {
       } };
     }
     // The shared backend's answer: not in the pet database, filed as human food elsewhere.
-    if (dbName === 'opff' && (barcode.digits === BC.misfiled || barcode.digits === BC.offDown)) return { found: false, db: dbName, tried: [barcode.digits], otherType: 'food' };
+    if (dbName === 'opff' && (barcode.digits === BC.misfiled || barcode.digits === BC.offDown || barcode.digits === BC.misfiledFront)) return { found: false, db: dbName, tried: [barcode.digits], otherType: 'food' };
+    if (dbName === 'off' && barcode.digits === BC.misfiledFront) {
+      return { found: true, db: dbName, code: barcode.digits, source: src(dbName, barcode.digits), product: {
+        product_type: 'food', product_name: 'TEST FIXTURE Grain free turkey recipe', brands: 'TESTSTORE', categories_tags: [],
+        ingredients_text: 'Turkey, Turkey Meal, Peas, Chicken Fat (preserved with mixed tocopherols), Dried Plain Beet Pulp, Choline Chloride',
+        image_front_url: 'https://images.openfoodfacts.org/images/products/501/234/567/8988/front_en.3.400.jpg',
+      } };
+    }
     if (dbName === 'off' && barcode.digits === BC.misfiled) {
       return { found: true, db: dbName, code: barcode.digits, source: src(dbName, barcode.digits), product: {
         product_type: 'food', product_name: 'TEST FIXTURE Grain free chicken & Pea recipe', brands: 'TESTSTORE', categories_tags: [],
@@ -90,11 +100,11 @@ const sources: Sources = {
   async research(o) {
     calls.research = (calls.research ?? 0) + 1;
     if (o.barcode === BC.misfiled) {
-      const page = { sourceId: `web:teststore.example:${o.gtin14}`, sourceType: 'retailer_or_web' as const, sourceName: 'teststore.example', url: 'https://teststore.example/grain-free-chicken-pea-dog-food', retrievedAt: NOW.toISOString(), matchConfidence: 'brand_and_product' as const };
+      const page = { sourceId: `web:teststore.example:${o.gtin14}`, sourceType: 'retailer_or_web' as const, sourceName: 'teststore.example', url: 'https://teststore.example/grain-free-chicken-pea-dog-food', retrievedAt: NOW.toISOString(), matchConfidence: 'brand_and_product' as const, readerVersion: RESEARCH_VERSION };
       return { facts: { classificationSignals: [{ text: 'intended for dogs', source: page.sourceId, kind: 'research' as const }] }, sources: [page], discarded: [], model: 'mock' };
     }
     if (o.barcode !== BC.webOnly) return { facts: null, sources: [], discarded: ['model reported no matching product'], model: 'mock' };
-    const source = { sourceId: `web:testbrand.example:${o.gtin14}`, sourceType: 'manufacturer' as const, sourceName: 'testbrand.example', url: 'https://testbrand.example/lamb', retrievedAt: NOW.toISOString(), matchConfidence: 'brand_and_product' as const };
+    const source = { sourceId: `web:testbrand.example:${o.gtin14}`, sourceType: 'manufacturer' as const, sourceName: 'testbrand.example', url: 'https://testbrand.example/lamb', retrievedAt: NOW.toISOString(), matchConfidence: 'brand_and_product' as const, readerVersion: RESEARCH_VERSION };
     const facts: Partial<ProductFacts> = {
       ingredientsText: { value: 'Lamb, brown rice, lamb meal, chicken fat', source },
       ingredients: { value: ['Lamb', 'brown rice', 'lamb meal', 'chicken fat'], source },
@@ -111,6 +121,11 @@ const sources: Sources = {
   },
   async databaseImages(o) {
     calls.dbImages = (calls.dbImages ?? 0) + 1;
+    if (o.needs.includes('front') && o.product.image_front_url) {
+      // The front of the package, as both readings read it: "Dry Cat Food".
+      const front = { sourceId: `off-image:${o.code}:front`, sourceType: 'database_image' as const, sourceName: 'Open Food Facts label image', url: o.product.image_front_url, retrievedAt: NOW.toISOString(), matchConfidence: 'exact_barcode' as const, readerVersion: LABEL_EXTRACTION_VERSION };
+      return { read: ['front'], skipped: [], facts: [{ sources: [front], classificationSignals: [{ text: 'Dry Cat Food', source: front.sourceId, kind: 'photo' as const }, { text: 'for cats', source: front.sourceId, kind: 'photo' as const }] }] };
+    }
     if (!o.product.image_nutrition_url) return { facts: [], read: [], skipped: ['no image'] };
     await o.beforeAiCall();
     const source = { sourceId: `opff-image:${o.code}:nutrition`, sourceType: 'database_image' as const, sourceName: 'Open Pet Food Facts label image', url: o.product.image_nutrition_url, retrievedAt: NOW.toISOString(), matchConfidence: 'exact_barcode' as const, readerVersion: LABEL_EXTRACTION_VERSION };
@@ -349,6 +364,15 @@ describe('classification by evidence, not by database (regression: 099482480882)
     expect(s.missingInfo).toContain('front');
     expect(s.productName).toBe('TEST FIXTURE Grain free chicken & Pea recipe');
   });
+  it('reads the front image the database publishes when it is unresolved who the product is for', async () => {
+    const ref = await newScan('u1', BC.misfiledFront, 'cat1');
+    await processScan(deps(), 'u1', ref.id); // research switched off: the database's own front image decides
+    const s = await read(ref);
+    expect(calls.dbImages).toBe(1);
+    expect(s).toMatchObject({ scope: 'supported', productSpecies: 'cat', productCategory: 'complete_food' });
+    expect(s.evidenceNotes.join(' ')).toMatch(/Read the front of the package from a label image in Open Food Facts/);
+    expect(s.missingInfo).not.toContain('front'); // no photo of the front is asked for
+  });
   it('a rate-limited database is a specific, retryable failure, never "not found" or "unknown"', async () => {
     const ref = await newScan('u1', BC.offDown);
     await processScan(deps(), 'u1', ref.id);
@@ -371,10 +395,10 @@ describe('classification by evidence, not by database (regression: 099482480882)
     expect(calls['lookup:opff']).toBe(1); // read again once under the new rules
     expect((await read(ref)).scope).toBe('supported');
     const product = (await db.doc(`products/${gtin}`).get()).data()!;
-    expect(product).toMatchObject({ scope: 'supported', species: 'dog', scopeVersion: 'scope-2.0.0' });
+    expect(product).toMatchObject({ scope: 'supported', species: 'dog', scopeVersion: SCOPE_VERSION });
     const audit = (await db.collection(`products/${gtin}/classifications`).get()).docs.map((d) => d.data());
     expect(audit).toHaveLength(1);
-    expect(audit[0]).toMatchObject({ from: { scope: 'out_of_scope', version: 'scope-1' }, to: { scope: 'supported', species: 'dog', version: 'scope-2.0.0' } });
+    expect(audit[0]).toMatchObject({ from: { scope: 'out_of_scope', version: 'scope-1' }, to: { scope: 'supported', species: 'dog', version: SCOPE_VERSION } });
   });
 });
 
@@ -560,7 +584,7 @@ describe('fallbacks before asking the owner for photos', () => {
     expect(calls.dbImages).toBe(2);
     const s = await read(again);
     expect(s.status).toBe('complete');
-    expect(s.diagnosticNotes[0]).toBe('Dropped guaranteedAnalysis, calories, adequacy read from database label images by an older label reader.');
+    expect(s.diagnosticNotes[0]).toBe('Dropped guaranteedAnalysis, calories, adequacy taken from database label images or web pages under older rules; they are read again.');
     const product = (await db.doc(`products/${gtin}`).get()).data()!;
     expect(product.facts.guaranteedAnalysis.source.readerVersion).toBe(LABEL_EXTRACTION_VERSION);
   });
