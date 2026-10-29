@@ -9,7 +9,7 @@ Mocked tests and live tests are kept separate. "Mocked" = synthetic inputs label
 4. **Live public providers** — real Open Pet Food Facts / Open Food Facts / openFDA / citation pages from GitHub Actions; no Purrbi backend involved.
 5. **Live deployed backend** — the deployed Firebase project (`purrbi-49c21`), driven by client requests only (`live-e2e`: Auth REST sign-up, Firestore/Storage REST with the user's token, so the deployed rules apply).
 5b. **Live app in a browser** — the real app (FlutterFlow export, release web build) in Chromium at phone size against the deployed backend, driven through its accessibility tree. Sandbox workarounds, nothing else changed: the Firebase JS SDK is served from the official npm package (this sandbox blocks `www.gstatic.com`), and Chromium's GET of an uploaded photo is re-sent through Playwright (this sandbox's proxy answers Chromium's Storage GET with 400; uploads go through the browser). Not a phone: camera, gestures and Android behaviour are not covered.
-6. **Android compilation** — `android-apk` workflow on GitHub. Compile check done with a placeholder Firebase config (no APK kept); an installable APK needs the repository secret `FIREBASE_GOOGLE_SERVICES_JSON`.
+6. **Android build** — `android-apk` workflow on GitHub, with `google-services.json` from the repository secret `FIREBASE_GOOGLE_SERVICES_JSON` (checked to be for `purrbi-49c21` and this app). Built, not yet installed on a device.
 7. **Physical device** — *pending; not possible in this environment.*
 
 ## Executed
@@ -43,7 +43,7 @@ Mocked tests and live tests are kept separate. "Mocked" = synthetic inputs label
 | 2026-10-29 | App: photo recovery with the grounded reader | 5b live app | sandbox → `purrbi-49c21` | U "Biscuits fourrés" 3256228550729: database analysis (1% protein, 0.8% fat) **rejected as implausible, with the reason shown** → asked for the nutrition panel → one back-label photo uploaded from the app → both readings agreed → **protein 10%, fibre 1%, fat 8%, ash 5.5%, moisture 10%, vitamins A 8500 IU/kg, D3 700 IU/kg, E 60 mg/kg — identical to the pack** → complete: treat for dogs, score 65 (provisional), "Made for dogs, not cats" for Miso (trace `924b817b-afc`); after an app restart, history lists it and it reopens with all sections. Coshida 4056489928232: the composition from the database's label image and the owner photo's analysis (31/20/6/2.5) match the pack (trace `4c2819ca-a92`); a blurry photo → "could not be read reliably" with retake advice |
 | 2026-10-29 | App: result page sections | 5b live app | sandbox (release web build) | **Defect found and fixed:** the "Check it for another pet" chip row had no height; in release builds it pushed every later section (label findings, ingredients and explanations, nutrition, sources) out of view. Fixed in FlutterFlow; verified on a rebuilt release web build |
 | 2026-10-29 | Android compile check (`android-apk`, placeholder Firebase config, no APK kept) | 6 | GitHub run 40824791039 | **passed**: release APK built (112,621,758 bytes, commit 718bf9d) |
-| — | Installable Android APK | 6 | GitHub | **pending: repository secret `FIREBASE_GOOGLE_SERVICES_JSON`** |
+| 2026-10-29 | Installable Android APK (release, debug-key signed, for testing) | 6 | GitHub run 40920027599 | **built**: `app-release.apk`, 112,621,794 bytes, SHA-256 `554137effb3606eb11e8ea79fb4b9c0b7de0e337fb15bfaa85d7de0b8ed8c540`, commit 3be6091; artifact `purrbi-android-apk-1`. Not installed or run on a device yet |
 | — | Physical device | 7 | — | **pending** |
 
 Notes:
@@ -71,4 +71,4 @@ Notes:
 | Account isolation (client requests) | refused | **Live:** as above (other user's read, list, update; foreign Storage folder) |
 | Deployed rules = repository | match | **Live:** every deploy's verify step: Firestore and Storage rules equal the repository files |
 | Mobile experience | camera, layout, navigation, retry | Phone-size web build only (layout, navigation, retry, uploads). **Camera and device: pending (no device here)** |
-| Android APK | installable build | Compile check passed on GitHub (release APK built with a placeholder config, not kept). **Installable APK: pending the repository secret** |
+| Android APK | installable build | **Built** (run 40920027599, SHA-256 `554137ef…c540`). Installation and use on a device: **pending** |

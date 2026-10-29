@@ -61,7 +61,7 @@ References (read-only): Moxis FlutterFlow `moxis-one-x51584` (pulled and export,
 | 7 | Photo recovery UI | ✅ live |
 | 8 | Deploy backend (OIDC); deployed-rules check; live E2E with client requests | ✅ live (two E2E runs) |
 | 9 | Visual refinement; legal/privacy/methodology copy; spoken labels for icon-only buttons | pending |
-| 10 | Android APK via GitHub Actions; checksum; test report | compile check ✅; installable APK waits for the repository secret |
+| 10 | Android APK via GitHub Actions; checksum; test report | ✅ APK built (run 40920027599, SHA-256 recorded); device test pending |
 
 ## Owner actions, in order (one at a time)
 1. ~~FlutterFlow → Generate Config Files~~ — **done** (export configured for `purrbi-49c21`).
@@ -69,7 +69,8 @@ References (read-only): Moxis FlutterFlow `moxis-one-x51584` (pulled and export,
 3. ~~Email/Password sign-in; Storage; FlutterFlow Users Collection~~ — **done, verified 2026-10-29**: sign-up endpoint answers `WEAK_PASSWORD` to a 1-character password (not `OPERATION_NOT_ALLOWED`; no account created); Storage bucket exists in US-EAST1; FlutterFlow's auth user collection is `users` (the `currentUser` bindings validate against it).
 4. ~~Google Cloud Shell: `backend/tools/gcp/setup-dev-access.sh`~~ — **done 2026-10-29** (re-run after IAM propagation retries; Cloud Billing API enabled; the default build identity's Editor role removed and replaced with the Cloud Build builder role).
 5. ~~Deploy and live tests~~ — **done 2026-10-29**: `deploy-backend` runs (all verified), two `live-e2e` runs, live app demos (`TEST_RESULTS.md`).
-6. **Next — installable APK:** GitHub → this repository → Settings → Secrets and variables → Actions → New repository secret, name `FIREBASE_GOOGLE_SERVICES_JSON`, value: the contents of `google-services.json` from Firebase console → Project settings → General → Your apps → the Android app `com.mycompany.purrbiv2development` → google-services.json. Then Claude runs `android-apk` (the workflow checks the file is for `purrbi-49c21` and this app).
+6. ~~Repository secret `FIREBASE_GOOGLE_SERVICES_JSON`~~ — **done 2026-10-29**; `android-apk` run 40920027599 built the installable APK.
+7. **Next — device test:** install `app-release.apk` from the run's artifact on an Android phone and try sign-up, onboarding, a camera scan and a label photo.
 
 ## FlutterFlow changes so far (main)
 - Theme from the prototype (cream/teal/coral/sun/alert/slate, Nunito; 318 hard-coded Inter overrides reset to the theme font).
