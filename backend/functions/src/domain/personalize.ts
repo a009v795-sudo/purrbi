@@ -59,6 +59,27 @@ export function personalize(
     add('positive', `Made for ${pet.species}s.`, 'Product label', 'P-SPECIES');
   }
 
+  // P-HAZARD: an entry of Purrbi's reviewed list, judged for this pet's species (one finding per entry).
+  const flagged = general.ingredientNotes.filter((n) => n.status === 'concern' || n.status === 'caution');
+  for (const id of [...new Set(flagged.map((n) => n.kbId ?? n.name))]) {
+    const group = flagged.filter((n) => (n.kbId ?? n.name) === id);
+    const n = group[0];
+    const forms = group.map((g) => g.name).join(', ');
+    const forSpecies = n.concernFor ?? [];
+    if (forSpecies.length && !forSpecies.includes(pet.species)) {
+      add('info', `${forms}: a documented ${n.status} for ${forSpecies.map((x) => `${x}s`).join(' and ')}, not for ${pet.species}s.`, 'Purrbi ingredient review', 'P-HAZARD');
+      continue;
+    }
+    if (n.status === 'concern') {
+      state = worse(state, 'mismatch');
+      add('alert', `${forms}: ${n.note}`, 'Documented concern (regulatory or veterinary source)', 'P-HAZARD');
+    } else {
+      state = worse(state, 'review');
+      add('review', `${forms}: ${n.note}`, 'Documented caution (veterinary source)', 'P-HAZARD');
+    }
+    trace.push({ input: 'species', value: pet.species, rule: 'P-HAZARD', effect: `${forms}: documented ${n.status} for ${pet.species}s` });
+  }
+
   // P-LIFESTAGE (complete foods only: treats and supplements are not meant to meet a life-stage profile)
   const ls = petLifeStage(pet, now);
   const adequacy = facts.adequacy?.value;
@@ -165,14 +186,26 @@ export function personalize(
     trace.push({ input: 'veterinary diet', value: 'reported', rule: 'P-VET', effect: 'Adds a vet check' });
   }
   if (pet.conditionsStatus === 'reported') {
-    add('info', 'A label can’t show whether a product suits a diagnosed condition. Ask your veterinarian.', 'Owner-recorded', 'P-CONDITIONS');
-    trace.push({ input: 'conditions', value: 'reported', rule: 'P-CONDITIONS', effect: 'Adds a limit-of-advice note' });
+    // A supplement taken alongside a diagnosed condition needs the vet's view; a food gets a limit-of-advice note.
+    if (general.category === 'supplement') {
+      state = worse(state, 'review');
+      add('review', `Ask your veterinarian whether this supplement suits ${name}’s condition before giving it.`, 'Owner-recorded', 'P-CONDITIONS');
+    } else add('info', 'A label can’t show whether a product suits a diagnosed condition. Ask your veterinarian.', 'Owner-recorded', 'P-CONDITIONS');
+    trace.push({ input: 'conditions', value: 'reported', rule: 'P-CONDITIONS', effect: general.category === 'supplement' ? 'Supplement: review with the vet' : 'Adds a limit-of-advice note' });
   }
   if (general.category === 'supplement') {
-    if (pet.medicationsStatus === 'reported') add('review', 'Ask your veterinarian whether this supplement interacts with your pet’s medications.', 'Owner-recorded', 'P-MEDS');
-    else if (pet.medicationsStatus !== 'none_reported') unresolved.push('Medication information wasn’t provided, so interactions can’t be considered.');
+    // Suitability, not a score: medicines, conditions and pregnancy or nursing call for the vet's view.
+    if (pet.medicationsStatus === 'reported') {
+      state = worse(state, 'review');
+      add('review', `${name} takes medicines: ask your veterinarian whether this supplement interacts with them before adding it.`, 'Owner-recorded', 'P-MEDS');
+    } else if (pet.medicationsStatus !== 'none_reported') unresolved.push('Medication information wasn’t provided, so interactions can’t be considered.');
     else add('info', 'No medications were reported; supplements can still interact with future medications, so mention it to your vet.', 'Owner-recorded', 'P-MEDS');
     trace.push({ input: 'medications', value: pet.medicationsStatus ?? 'not provided', rule: 'P-MEDS', effect: 'Adds an interaction note; Purrbi never states that interactions are absent' });
+    if (pet.reproductiveStatus === 'pregnant' || pet.reproductiveStatus === 'lactating') {
+      state = worse(state, 'review');
+      add('review', `${name} is ${pet.reproductiveStatus === 'pregnant' ? 'pregnant' : 'nursing'}: check with your veterinarian before giving a supplement.`, 'Owner-recorded', 'P-REPRO');
+      trace.push({ input: 'reproductive status', value: pet.reproductiveStatus, rule: 'P-REPRO', effect: 'Supplement: review with the vet' });
+    }
   }
 
   // P-GOALS: informational only, never changes the state.

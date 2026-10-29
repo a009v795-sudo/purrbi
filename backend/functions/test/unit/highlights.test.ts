@@ -77,18 +77,27 @@ describe('verdict', () => {
     const ok = `Purrbi’s label score for this chicken recipe is ${v.assessment.score}/100, but it contains chicken, which you recorded as an allergy for your cat, so compare the ingredient list before choosing it.`;
     expect(checkVerdict(ok, v)).toBeNull();
     expect(checkVerdict(ok.replace('compare the ingredient list', 'it is the safest choice; compare the list'), v)).toMatch(/claim Purrbi does not make/);
-    expect(checkVerdict(ok.replace(`${v.assessment.score}/100`, '97/100'), v)).toMatch(/number not in the assessment/);
+    expect(checkVerdict(ok.replace(`${v.assessment.score}/100`, '97/100'), v)).toMatch(/score not the assessment’s \(97\)/);
+    expect(checkVerdict(ok.replace('compare the ingredient list', 'compare the 12 ingredients'), v)).toMatch(/number not in the assessment \(12\)/);
+    expect(checkVerdict(ok.replace('this chicken recipe', 'this great, high-quality chicken recipe'), v)).toMatch(/claim Purrbi does not make/);
     expect(checkVerdict('Contains chicken.', v)).toMatch(/length/);
     expect(checkVerdict(ok.replace('but it contains', 'a partial assessment, but it contains'), v)).toMatch(/calls a full assessment partial/);
     expect(checkVerdict(ok.replace(/chicken/g, 'poultry').replace('which you recorded as an allergy', 'which may matter'), v)).toMatch(/most serious caution/);
   });
-  it('the rule-based verdict leads with the alert and stays within 45 words', () => {
-    const p = pet({ allergiesStatus: 'reported', allergies: ['chicken'] });
-    const v = input(result(facts(), p), p);
-    const text = ruleVerdict(v);
-    expect(text).toMatch(/chicken/);
-    expect(text.split(/\s+/).length).toBeLessThanOrEqual(46);
-    expect(checkVerdict(text, v) ?? '').not.toMatch(/claim|number/);
+  it('the rule-based verdict leads with the alert, is 25 to 45 words of whole sentences, and passes the check', () => {
+    for (const p of [pet({ allergiesStatus: 'reported', allergies: ['chicken'] }), pet(), pet({ species: 'dog', name: 'Rex' })]) {
+      for (const f of [facts(), facts({ adequacyText: '' }), facts({ ingredientsText: 'Chicken, glycerin, propylene glycol, salt' })]) {
+        const v = input(result(f, p), p);
+        const text = ruleVerdict(v);
+        const n = text.split(/\s+/).length;
+        expect(n).toBeGreaterThanOrEqual(25);
+        expect(n).toBeLessThanOrEqual(45);
+        expect(text).not.toMatch(/…/);
+        expect(checkVerdict(text, v)).toBeNull();
+      }
+    }
+    const allergic = pet({ allergiesStatus: 'reported', allergies: ['chicken'] });
+    expect(ruleVerdict(input(result(facts(), allergic), allergic))).toMatch(/^In the allergy profile: Contains Chicken/);
   });
   it('the cache key changes with the evidence or the pet, not with the pet’s name', () => {
     const named = (over: Parameters<typeof pet>[0]) => {

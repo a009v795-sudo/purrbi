@@ -53,6 +53,7 @@ export function explanationFields(general: GeneralAssessment, status: string): R
       position: n.position,
       status: n.status,
       note: n.note,
+      role: n.role ?? '', // what it does (curated or from a verified cited page); never part of the score
       sourceTitle: n.sourceTitle ?? '',
       sourceUrl: n.sourceUrl ?? '',
       explanationKind: n.explanationKind,
@@ -114,6 +115,7 @@ export function resultFields(args: {
     score: general.score ?? 0,
     scoreText: general.score === null ? (general.scoreApplicable ? 'Unscored' : 'Not scored') : String(general.score),
     scoreMaxPossible: general.scoreMaxPossible ?? 0,
+    scoreMinPossible: general.scoreMinPossible ?? 0,
     scoreCoverage: general.scoreCoverage ?? 0,
     scoreBasis: general.scoreBasis,
     scoreBand: general.scoreBand ?? '',
@@ -210,10 +212,12 @@ export function recallDisplay(recall: RecallCheck | null): Record<string, unknow
   }[status];
   const severity = status === 'exact_active' ? 'alert' : status === 'possible_active' ? 'review' : status === 'unavailable' ? 'review' : 'info';
   const checked = recall?.checkedAt ? new Date(recall.checkedAt) : null;
+  const day = checked ? checked.toISOString().slice(0, 10) : '';
   return {
     recallStatusLabel: label,
     recallSeverity: severity,
-    recallCheckedLabel: checked ? `Checked ${checked.toISOString().slice(0, 10)} in FDA enforcement reports (openFDA, updated weekly)` : '',
+    // Only a check that was made says "Checked"; a failed one says when it failed.
+    recallCheckedLabel: !checked || status === 'not_checked' ? '' : status === 'unavailable' ? `Check failed on ${day}` : `Checked ${day} in FDA enforcement reports (openFDA, updated weekly)`,
   };
 }
 

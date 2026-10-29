@@ -14,6 +14,8 @@ export interface Highlight {
   value: string; // e.g. "chicken", "3,800 kcal/kg"; empty when none
   evidence: string;
   rule: string;
+  /** the full statement the line was shortened from (for the verdict; not shown) */
+  full?: string;
 }
 
 const oneLine = (s: string, max = 110) => {
@@ -22,11 +24,11 @@ const oneLine = (s: string, max = 110) => {
 };
 
 function caution(f: Finding, title: string, severity: Highlight['severity'], value = ''): Highlight {
-  return { kind: 'caution', severity, title, detail: oneLine(f.text), value, evidence: f.evidence, rule: f.rule };
+  return { kind: 'caution', severity, title, detail: oneLine(f.text), value, evidence: f.evidence, rule: f.rule, full: f.text };
 }
 
 function positive(f: Finding, title: string, value = ''): Highlight {
-  return { kind: 'positive', severity: 'info', title, detail: oneLine(f.text), value, evidence: f.evidence, rule: f.rule };
+  return { kind: 'positive', severity: 'info', title, detail: oneLine(f.text), value, evidence: f.evidence, rule: f.rule, full: f.text };
 }
 
 export function buildHighlights(args: { facts: ProductFacts; scope: ScopeResult; general: GeneralAssessment; personal: PersonalAssessment; recall: RecallCheck | null }): { positives: Highlight[]; cautions: Highlight[] } {
@@ -43,12 +45,15 @@ export function buildHighlights(args: { facts: ProductFacts; scope: ScopeResult;
   const matches = (text: string) => /^Contains (.+?)(?: —|, which)/.exec(text)?.[1] ?? '';
 
   // ---- cautions, most serious first ----
+  // A documented concern is judged for the selected pet's species (P-HAZARD); without a pet, for the product's.
+  const withPet = personal.state !== 'no_pet' && personal.state !== 'not_applicable';
+  const hazardTitle = (f: Finding) => `${f.text.split(':')[0]}: documented ${f.kind === 'alert' ? 'concern' : 'caution'}`;
   if (recall?.status === 'exact_active') cautions.push({ kind: 'caution', severity: 'alert', title: 'Recall match', detail: oneLine(recall.summary), value: recall.records[0]?.recallNumber ?? '', evidence: 'Official notice (openFDA)', rule: 'G-RECALL' });
+  for (const f of withPet ? pf('P-HAZARD', 'alert') : gf('G-KB-CONCERN', 'alert')) cautions.push(caution(f, hazardTitle(f), 'alert'));
   for (const f of pf('P-SPECIES', 'alert')) cautions.push(caution(f, 'Made for another species', 'alert'));
   for (const f of [...pf('P-ALLERGEN', 'review'), ...pf('P-SENSITIVITY', 'review')]) {
     if (/^Contains /.test(f.text)) cautions.push(caution(f, f.rule === 'P-ALLERGEN' ? 'In the allergy profile' : 'In the sensitivity profile', 'alert', recorded(f.text)));
   }
-  for (const f of gf('G-KB-CONCERN', 'alert')) cautions.push(caution(f, `${f.text.split(':')[0]}: documented concern`, 'alert', f.text.split(':')[0]));
   if (recall?.status === 'possible_active') cautions.push({ kind: 'caution', severity: 'review', title: 'Possible recall match', detail: oneLine(recall.summary), value: '', evidence: 'Official notice (openFDA)', rule: 'G-RECALL' });
   for (const f of pf('P-LIFESTAGE', 'review')) cautions.push(caution(f, 'Life stage', 'review'));
   for (const f of pf('P-LARGEGROWTH', 'review')) cautions.push(caution(f, 'Large-breed growth', 'review'));
@@ -57,7 +62,8 @@ export function buildHighlights(args: { facts: ProductFacts; scope: ScopeResult;
   }
   for (const f of pf('P-VET', 'review')) cautions.push(caution(f, 'Vet-directed diet', 'review'));
   for (const f of gf('G-ADEQUACY', 'review')) cautions.push(caution(f, 'Feeding statement', 'review'));
-  for (const f of gf('G-KB-CAUTION', 'review')) cautions.push(caution(f, `${f.text.split(':')[0]}: caution`, 'review', f.text.split(':')[0]));
+  for (const f of withPet ? pf('P-HAZARD', 'review') : gf('G-KB-CAUTION', 'review')) cautions.push(caution(f, hazardTitle(f), 'review'));
+  for (const f of [...pf('P-MEDS', 'review'), ...pf('P-CONDITIONS', 'review'), ...pf('P-REPRO', 'review')]) cautions.push(caution(f, 'Ask your vet first', 'review'));
   for (const f of pf('P-AVOID', 'review')) cautions.push(caution(f, 'An ingredient you avoid', 'info', matches(f.text)));
 
   // ---- positives, evidence-backed and scoped to what was checked ----
@@ -67,10 +73,7 @@ export function buildHighlights(args: { facts: ProductFacts; scope: ScopeResult;
     for (const f of gf('G-ADEQUACY', 'positive')) positives.push(positive(f, 'Complete and balanced', adequacy.lifeStages.map(lifeStageLabel).join(', ')));
   }
   for (const f of pf('P-ALLERGEN', 'positive')) positives.push(positive(f, 'No listed allergy match'));
-  const concerns = general.components.find((c) => c.key === 'concerns');
-  if (concerns?.status === 'met') {
-    positives.push({ kind: 'positive', severity: 'info', title: 'No documented ingredient concerns', detail: oneLine(`None of the listed ingredients is on Purrbi’s reviewed list of documented concerns for ${scope.species === 'cat' ? 'cats' : scope.species === 'dog' ? 'dogs' : 'cats and dogs'}.`), value: '', evidence: 'Purrbi ingredient review', rule: 'G-KB' });
-  }
+  // No positive for "no documented concerns": Purrbi's reviewed list is short, so absence is not a strength.
   if ((general.category === 'treat' || general.category === 'complementary') && facts.calories?.value.length) {
     positives.push({ kind: 'positive', severity: 'info', title: 'Calories listed', detail: 'Helps keep treats and toppers under about 10% of daily calories.', value: describeCalories(facts.calories.value[0]), evidence: 'Product label', rule: 'G-CALORIES' });
   }

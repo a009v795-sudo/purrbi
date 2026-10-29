@@ -753,6 +753,8 @@ function applyExplanations(general: GeneralAssessment, byKey: Map<string, CitedE
     const e = byKey.get(explanationKey(species, 'ingredient', n.name));
     if (e?.status === 'verified' && n.explanationKind === 'none') {
       Object.assign(n, { explanation: e.summary, explanationKind: 'cited_ai', explanationSourceTitle: e.sourceTitle, explanationSourceUrl: e.sourceUrl, explanationQuote: e.quote });
+      // The role from the verified page fills in only where Purrbi's own role table has none.
+      if (!n.role && e.role) Object.assign(n, { role: e.role.slice(0, 60), roleSource: 'cited_ai' });
       applied++;
     }
   }

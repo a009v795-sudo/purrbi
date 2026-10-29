@@ -7,6 +7,7 @@
 // Every URL is checked by the live link check (test/live/contract.test.ts, run on GitHub). Entries are drafts until a
 // veterinary reviewer signs them off (reviewStatus).
 import { containsTerm, type ParsedIngredient } from './ingredients';
+import { ingredientRole } from './roles';
 import type { IngredientNote, Species } from './types';
 
 export const KB_VERSION = 'kb-2026-10-28-draft';
@@ -190,9 +191,11 @@ function entryFor(ing: ParsedIngredient): KbEntry | undefined {
  */
 export function ingredientNotes(ingredients: ParsedIngredient[], species: Species[]): IngredientNote[] {
   return ingredients.map((ing): IngredientNote => {
+    const role = ingredientRole(ing.name);
+    const withRole = (n: IngredientNote): IngredientNote => (role ? { ...n, role, roleSource: 'curated' } : n);
     const entry = entryFor(ing);
     if (!entry) {
-      return { name: ing.name, position: ing.position, status: 'unknown', note: 'Not yet reviewed by Purrbi. Unknown is not the same as harmful.', explanationKind: 'none' };
+      return withRole({ name: ing.name, position: ing.position, status: 'unknown', note: 'Not yet reviewed by Purrbi. Unknown is not the same as harmful.', explanationKind: 'none' });
     }
     let status: IngredientNote['status'] = 'unknown';
     let note = '';
@@ -207,12 +210,13 @@ export function ingredientNotes(ingredients: ParsedIngredient[], species: Specie
       }
     }
     if (status === 'unknown') {
-      return { name: ing.name, position: ing.position, status: 'unknown', note: 'Not yet reviewed by Purrbi for this species.', explanationKind: 'none' };
+      return withRole({ name: ing.name, position: ing.position, status: 'unknown', note: 'Not yet reviewed by Purrbi for this species.', explanationKind: 'none' });
     }
     if (species.length > 1 && forSpecies && (status === 'concern' || status === 'caution') && !entry.status[species.find((x) => x !== forSpecies)!]) {
       note = `${note} (Applies to ${forSpecies}s.)`;
     }
-    return { name: ing.name, position: ing.position, status, note, sourceUrl: entry.sources[0]?.url, sourceTitle: entry.sources[0]?.title, explanationKind: 'curated' };
+    const concernFor = species.filter((s) => entry.status[s] === 'concern' || entry.status[s] === 'caution');
+    return withRole({ name: ing.name, position: ing.position, status, note, kbId: entry.id, ...(concernFor.length ? { concernFor } : {}), sourceUrl: entry.sources[0]?.url, sourceTitle: entry.sources[0]?.title, explanationKind: 'curated' });
   });
 }
 

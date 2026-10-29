@@ -98,8 +98,15 @@ export async function checkRecalls(
     return { status: 'possible_active', summary: `An active FDA recall from ${brand} may involve this product; it doesn\u2019t list this barcode. Compare the lot codes. ${COVERAGE}`, checkedAt, source: { ...source, matchConfidence: 'brand_and_product' }, records: top };
   }
   if (records.length) {
+    // Said as it is: a closed recall of this barcode is named; open records of other products are counted, not hidden.
     const years = [...new Set(records.map((r) => r.reportDate.slice(0, 4)).filter(Boolean))].sort();
-    return { status: 'brand_history', summary: `No active FDA recall matches this product. ${brand} has ${records.length} past pet-product enforcement record${records.length > 1 ? 's' : ''}${years.length ? ` (${years[0]}\u2013${years[years.length - 1]})` : ''}, shown for context. ${COVERAGE}`, checkedAt, source, records: top };
+    const closedExact = records.find((r) => r.match === 'exact_barcode');
+    const openOther = records.filter((r) => active(r)).length;
+    const lead = closedExact
+      ? `A closed FDA recall listed this barcode (${closedExact.recallNumber}, ${closedExact.status || 'not active'}); no open recall matches it.`
+      : 'No FDA recall record matches this product\u2019s barcode or name.';
+    const other = `${brand} has ${records.length} pet-product enforcement record${records.length > 1 ? 's' : ''}${years.length ? ` (${years[0]}\u2013${years[years.length - 1]})` : ''}${openOther ? `, ${openOther} still open, for other products` : ''}, shown for context.`;
+    return { status: 'brand_history', summary: `${lead} ${other} ${COVERAGE}`, checkedAt, source, records: top };
   }
   return { status: 'none_found', summary: `No FDA enforcement record for ${brand} pet products was found in openFDA. ${COVERAGE}`, checkedAt, source, records: [] };
 }

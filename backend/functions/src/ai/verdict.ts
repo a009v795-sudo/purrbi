@@ -11,7 +11,7 @@ import type { Highlight } from '../domain/highlights';
 import { SourceError } from '../util/http';
 import { chatJson } from './openai';
 
-export const VERDICT_VERSION = 'verdict-1.1.0';
+export const VERDICT_VERSION = 'verdict-1.2.0';
 
 export interface VerdictInput {
   product: { name: string; brand: string; species: string; category: string };
@@ -41,8 +41,8 @@ export function verdictInput(args: {
     product: { name: args.productName || 'This product', brand: args.brand, species: args.species, category: args.category },
     assessment: { score: args.score, provisional: args.provisional, label: args.scoreLabel, basis: args.scoreBasis, withheldReason: args.withheldReason },
     pet: args.pet ? { name: petPlaceholder(args.pet.species), species: args.pet.species, fit: args.pet.fit, headline: args.pet.headline } : null,
-    positives: args.positives.map((h) => ({ title: h.title, detail: h.detail, value: h.value })),
-    cautions: args.cautions.map((h) => ({ title: h.title, detail: h.detail, value: h.value, severity: h.severity, rule: h.rule })),
+    positives: args.positives.map((h) => ({ title: h.title, detail: (h.full ?? h.detail).slice(0, 160), value: h.value })),
+    cautions: args.cautions.map((h) => ({ title: h.title, detail: (h.full ?? h.detail).slice(0, 160), value: h.value, severity: h.severity, rule: h.rule })),
     unresolved: args.unresolved.slice(0, 3),
   };
   return args.pet?.name ? replaceName(input, args.pet.name, petPlaceholder(args.pet.species)) : input;
@@ -70,38 +70,69 @@ export function withPetName(text: string, species: string, name: string | null |
 export const verdictKey = (input: VerdictInput, model: string) => createHash('sha256').update(`${VERDICT_VERSION}|${model}|${JSON.stringify(input)}`).digest('hex').slice(0, 32);
 
 const words = (s: string) => s.trim().split(/\s+/).filter(Boolean);
-const trimTo = (s: string, max: number) => {
-  const w = words(s);
-  return w.length <= max ? s.trim() : `${w.slice(0, max).join(' ').replace(/[,;:]$/, '')}…`;
+const sentence = (s: string) => {
+  const t = s.trim().replace(/…$/, '');
+  return /[.!?]$/.test(t) ? t : `${t}.`;
 };
 
-/** A plain verdict from the same findings, used when no model is available or its sentence fails the check. */
+/**
+ * A plain verdict from the same findings, used when no model is available or its sentence fails the
+ * check: whole sentences (never cut with "…"), 25 to 45 words, the most serious caution first.
+ */
 export function ruleVerdict(input: VerdictInput): string {
   const first = input.cautions[0];
   const name = input.product.name;
-  if (first?.severity === 'alert') return trimTo(`${input.pet?.headline ? `${input.pet.headline}. ` : ''}${first.detail}`, 45);
+  const a = input.assessment;
   const score =
-    input.assessment.score === null
-      ? input.assessment.withheldReason
-      : input.assessment.label === 'Partial assessment'
-        ? `Purrbi’s label score for ${name} is ${input.assessment.score}/100 so far, a partial assessment.`
-        : `Purrbi’s label score for ${name} is ${input.assessment.score}/100 (${input.assessment.label.toLowerCase()}).`;
-  const why = first ? `Check: ${first.detail}` : input.positives[0] ? input.positives[0].detail : '';
-  const fit = input.pet?.headline && input.pet.fit !== 'fits' ? `${input.pet.headline}.` : '';
-  return trimTo([fit, score, why].filter(Boolean).join(' '), 45);
+    a.score === null
+      ? a.withheldReason || `Purrbi hasn’t scored ${name} yet.`
+      : a.label === 'Partial assessment'
+        ? `Purrbi’s label score for ${name} is ${a.score}/100 so far, a partial assessment.`
+        : a.label === 'Documented ingredient concern'
+          ? `Purrbi’s label score for ${name} is capped at ${a.score}/100 because of a documented ingredient concern.`
+          : `Purrbi’s label score for ${name} is ${a.score}/100 (${a.label.toLowerCase()}).`;
+  const required = [first?.severity === 'alert' ? `${first.title}: ${first.detail}` : input.pet?.headline && input.pet.fit !== 'fits' ? input.pet.headline : '', score].filter(Boolean).map(sentence);
+  const optional = [
+    first && first.severity !== 'alert' ? `To check: ${first.detail}` : '',
+    input.cautions[1] ? `Also check: ${input.cautions[1].detail}` : '',
+    input.positives[0] ? `Good to know: ${input.positives[0].detail}` : '',
+    input.unresolved[0] ?? '',
+    'The details and their sources are listed below.',
+  ].filter(Boolean).map(sentence);
+  const out = [...required];
+  for (const s of optional) if (words([...out, s].join(' ')).length <= 45) out.push(s);
+  if (words(out.join(' ')).length < 25) out.push('Purrbi’s findings come from the label information it found and are not a veterinary review.');
+  let text = out.join(' ');
+  // A single very long statement: end it at the last full stop before word 45, else at word 45.
+  if (words(text).length > 45) {
+    const head = words(text).slice(0, 45).join(' ');
+    const stop = head.lastIndexOf('. ');
+    text = stop > 40 ? head.slice(0, stop + 1) : sentence(head.replace(/[,;:]$/, ''));
+  }
+  return text;
 }
 
-const FORBIDDEN = /\b(safe|safest|ideal|perfect|healthy|healthiest|recommended?|guarantee[sd]?|no concerns?|cures?|treats? (?:allerg|disease)|best|excellent)\b/i;
+// Claims Purrbi never makes, whatever the evidence: safety, quality superlatives, health or treatment claims.
+const FORBIDDEN =
+  /\b(safe|safer|safest|ideal|perfect|healthy|healthier|healthiest|nutritious|wholesome|great|excellent|outstanding|amazing|superb|superior|premium|top[- ]quality|high[- ]quality|quality food|best|recommended?|recommends|guarantee[sd]?|no concerns?|risk[- ]free|cures?|prevents?|treats? (?:allerg\w*|disease\w*|illness\w*)|heals?|vet[- ]approved|clinically)\b/i;
 
 /** Why a model-written verdict cannot be used, or null if it can. */
 export function checkVerdict(text: string, input: VerdictInput): string | null {
   const n = words(text).length;
-  if (n < 20 || n > 50) return `length ${n} words`;
+  if (n < 25 || n > 45) return `length ${n} words`;
+  if (/…|\.\.\./.test(text)) return 'trailing ellipsis';
   if (FORBIDDEN.test(text)) return `claim Purrbi does not make (“${FORBIDDEN.exec(text)![0]}”)`;
-  const source = JSON.stringify(input);
-  // "/100" is the scale, not a figure; every other number must come from the assessment.
-  const numbers = text.replace(/\/\s*100\b/g, '').match(/\d+(?:[.,]\d+)?/g) ?? [];
-  const invented = numbers.find((x) => !source.includes(x));
+  // A score in the sentence must be the score; every other number must be one the assessment states.
+  for (const m of text.matchAll(/(\d+(?:[.,]\d+)?)\s*(?:\/|out of)\s*100\b/gi)) {
+    if (input.assessment.score === null || Number(m[1]) !== input.assessment.score) return `score not the assessment’s (${m[1]})`;
+  }
+  const stated = new Set(
+    [String(input.assessment.score ?? ''), input.assessment.basis, ...input.positives.flatMap((h) => [h.title, h.detail, h.value]), ...input.cautions.flatMap((h) => [h.title, h.detail, h.value]), ...input.unresolved, input.product.name, input.pet?.headline ?? '']
+      .join(' ')
+      .match(/\d+(?:[.,]\d+)?/g) ?? [],
+  );
+  const others = text.replace(/(\d+(?:[.,]\d+)?)\s*(?:\/|out of)\s*100\b/gi, ' ').match(/\d+(?:[.,]\d+)?/g) ?? [];
+  const invented = others.find((x) => !stated.has(x));
   if (invented) return `number not in the assessment (${invented})`;
   // The label is used as given: a full assessment is never called partial, nor the reverse.
   const partial = input.assessment.label === 'Partial assessment';
@@ -116,12 +147,12 @@ export function checkVerdict(text: string, input: VerdictInput): string | null {
 }
 
 const SYSTEM = [
-  'You write the verdict a cat or dog owner sees first: one or two plain sentences, 25 to 45 words, saying what Purrbi’s assessment of this product means for their pet.',
+  'You write the verdict a cat or dog owner sees first: one or two plain sentences, between 25 and 45 words (count them), saying what Purrbi’s assessment of this product means for their pet.',
   'Use only the facts in the JSON input. Never add facts, numbers, ingredients, health claims or advice that are not in it.',
   'If there is a caution with severity "alert" (a recall match, a product made for another species, an ingredient in the pet’s allergy profile), start with it.',
   'Call the score “Purrbi’s label score” and use the assessment label exactly as given. Only if the label is “Partial assessment”, say it is a partial assessment; if provisional is true with any other label, you may say some optional label details are not confirmed yet. If there is no score, say what is missing.',
   'If there is no pet, speak about the product in general.',
-  'Never say safe, ideal, perfect, healthy, best, excellent, recommended, guaranteed or “no concerns”; say “no documented concerns in Purrbi’s reviewed list” only if a positive says so. Do not give veterinary advice.',
+  'Never praise or judge the product beyond the findings: never say safe, ideal, perfect, healthy, nutritious, great, excellent, premium, high-quality, best, recommended, guaranteed or “no concerns”, and never make health or treatment claims. Do not give veterinary advice. Write numbers only as they appear in the input, and the score only as given.',
 ].join(' ');
 
 export async function writeVerdict(opts: { apiKey: string | undefined; model: string; input: VerdictInput }): Promise<{ text: string; model: string }> {

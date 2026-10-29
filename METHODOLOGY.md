@@ -1,12 +1,11 @@
 # Purrbi assessment methodology
 
-Version: `purrbi-score-1.1.0` (score), `scope-2.1.0` (classification), `verdict-1.0.0` (verdict),
+Version: `purrbi-score-2.0.0` (score), `scope-2.1.0` (classification), `verdict-1.2.0` (verdict),
 `kb-2026-10-28-draft` (ingredient notes). Every saved result records the versions it was made with.
 
-The Purrbi label score is Purrbi's own measure. It says how completely the product's documented label information supports its intended use, less any documented species-specific ingredient concerns. It is not an FDA, AAFCO, WSAVA or veterinary rating. It does not depend on the pet profile: two pets see the same general score for the same evidence. Personal fit is assessed separately.
+The Purrbi label score is Purrbi's own measure of how well the label information that is available supports the product's intended use. It is not an FDA, AAFCO, WSAVA or veterinary rating. It does not depend on the pet profile: two pets see the same general score for the same evidence. Personal fit is assessed separately.
 
-Code: `backend/functions/src/domain/score.ts` (score), `scope.ts` (classification), `highlights.ts`,
-`personalize.ts`, `../ai/verdict.ts`.
+Code: `backend/functions/src/domain/score.ts` (score), `scope.ts` (classification), `roles.ts` (ingredient roles), `highlights.ts`, `personalize.ts`, `../ai/verdict.ts`.
 
 ## 1. What the product is, first
 
@@ -25,11 +24,11 @@ Every scan is classified from the product's own evidence before anything is scor
 
 ## 2. Minimum evidence per category
 
-Essential inputs are required. Without them the score is withheld, never estimated. Optional inputs only change how complete the score is.
+Essential inputs are required. Without them the score is withheld, never estimated. Other inputs change only the coverage. The one exception is a complete food's adequacy statement: without it, the score is capped at 74.
 
-| Category | Essential (no score without) | Optional (provisional without) |
+| Category | Essential (no score without) | Other inputs (coverage only) |
 |---|---|---|
-| Complete food | Ingredient list; guaranteed analysis (protein, fat, fiber) | Nutritional adequacy statement; calorie statement; moisture; further guarantees |
+| Complete food | Ingredient list; guaranteed analysis (protein, fat, fiber) | Nutritional adequacy statement (score capped at 74 until it is known); calorie statement; moisture; further guarantees |
 | Treat / complementary | Ingredient list **or** guaranteed analysis | Feeding statement; calorie statement; moisture; the other of ingredients / analysis |
 | Supplement | Active ingredients or ingredient list | Amounts per serving; warnings; quality signals |
 | Any | Confirmed identity, species and category (section 1) | — |
@@ -40,60 +39,71 @@ Essential inputs are required. Without them the score is withheld, never estimat
 
 | Component | Points | Rule |
 |---|---|---|
-| Nutritional adequacy statement | 40 | Feeding tests 40; formulation 34; complete but no life stage or a different species 24; unclear 16; missing 0 (unverified) |
-| Required guarantees (protein, fat, fiber) | 20 | Listed 20 |
-| Calorie content statement | 10 | Listed 10 |
+| Nutritional adequacy statement | 50 | Feeding tests 50; formulation 43; complete but no life stage or a different species 30; unclear 20; missing: unverified |
+| Required guarantees (protein, fat, fiber) | 25 | Listed 25 |
+| Calorie content statement | 15 | Listed 15 |
 | Moisture guarantee | 5 | Listed 5 |
 | Further guarantees | 5 | 2 or more 5; one 3; none 0 (unverified if from a database record) |
-| Documented ingredient concerns | 20 | −20 per documented concern, −5 per caution (floor 0) |
 
 **Treat or complementary product**
 
 | Component | Points | Rule |
 |---|---|---|
-| Feeding statement | 15 | Present and clear 15; unclear 8; missing 0 (unverified) |
-| Required guarantees | 25 | Listed 25 |
-| Calorie content statement | 20 | Listed 20 |
+| Feeding statement | 25 | Present and clear 25; unclear 13; missing: unverified |
+| Required guarantees | 40 | Listed 40 |
+| Calorie content statement | 30 | Listed 30 |
 | Moisture guarantee | 5 | Listed 5 |
-| Documented ingredient concerns | 35 | −35 per documented concern, −10 per caution (floor 0) |
 
-**Supplements** get no number: their purpose, dose and evidence vary by ingredient. They get the label facts, their active ingredients and amounts, any documented concerns, and personal suitability checks instead.
+Ingredients earn and lose no points: see section 5.
+
+**Supplements** get no number: their purpose, dose and evidence vary by ingredient. Instead they get:
+- the label facts, and their active ingredients with amounts;
+- any documented concerns;
+- personal suitability checks (section 6).
 
 ## 4. Coverage is kept separate from quality
 
-- Missing information earns 0 points and is marked **unverified**. It is never treated as poor quality and never filled in.
-- A score with unverified components is **provisional**: a lower bound. The result carries:
-  - `scoreCoverage`: how many of the 100 points rest on evidence;
-  - `scoreMaxPossible`: the highest the score could reach once the gaps are filled;
-  - `scoreBasis`: one line, e.g. "Based on 60 of 100 points' worth of label information; nutritional adequacy statement could add up to 40."
-- With 20 or more points unverified, the label is **Partial assessment**, not a quality band.
-- Bands, used only when fewer than 20 points are unverified: 85+ Strong label information; 70–84 Good label information; 50–69 Review the details; below 50 Significant gaps or concerns.
-- The app shows `scoreText` and never the raw number on its own:
+- A component without evidence is **unverified**. It is left out of the score, never counted as poor quality and never filled in.
+- **Score (quality)** = points earned ÷ points' worth of the components that could be assessed × 100.
+- **Coverage** (`scoreCoverage`) = points' worth of the components that could be assessed (0–100).
+- **Range**: `scoreMinPossible` (every unverified item failed) to `scoreMaxPossible` (every one met). The score always lies within it.
+- `scoreBasis` gives all three in one line, e.g. "Based on 50 of 100 points' worth of label information (nutritional adequacy statement not available yet); the complete label could put it between 50 and 100. Score capped at 74 until the adequacy statement is known."
+- Below 80 points' coverage the label is **Partial assessment**, not a quality band.
+- **Caps** (stated in `scoreBasis`):
+  - a documented concern for the product's species caps the score at 20, labelled **Documented ingredient concern** (section 5);
+  - a complete food without its adequacy statement is capped at 74, so it is never "strong".
+- **Bands** (coverage of 80 or more, no documented concern):
+  - 85+ Strong label information;
+  - 70–84 Good label information;
+  - 50–69 Review the details;
+  - below 50 Weak label information.
+- The app shows `scoreText`, never the raw number on its own:
   - **Unscored** when essential evidence is missing;
-  - **Not scored** for supplements and out-of-scope products.
-  - An unscored result is never shown as 0/100.
+  - **Not scored** for supplements and out-of-scope products;
+  - an unscored result is never shown as 0/100.
 
 ## 5. Ingredients: roles and documented concerns, not counts
 
-- Ingredients are listed in label order with their role (curated, or an AI summary of a cited page that Purrbi checked against the page).
-- Only Purrbi's reviewed list of documented species-specific concerns and cautions changes the score:
-  - **concern**: a regulatory or veterinary toxicology source documents harm for that species;
-  - **caution**: harm depends on an amount the label does not state.
-- Grains, by-products, unfamiliar names and synthetic nutrients are not penalised.
-- "Good" and "bad" ingredients are never counted.
+- **No counting.** Ingredients are never counted as "good" or "bad". Grains, by-products, unfamiliar names and synthetic nutrients are not penalised. "Unknown" means not yet reviewed, not harmful.
+- **Roles.** Each ingredient is listed in label order with its role, e.g. "Protein source", "Fibre source", "Preservative" or "Vitamin or mineral". The role comes from Purrbi's curated role table (`roles.ts`). Where that table has none, it comes from a cited page whose quote Purrbi found on the page. A role never changes the score.
+- **Purrbi's reviewed list** (`kb.ts`) changes the result in two ways only:
+  - a **concern** is harm that a regulatory or veterinary toxicology source documents for that species. Examples: propylene glycol in cat food (21 CFR 589.1001), onion, xylitol for dogs. It caps the score at 20 and comes first among the cautions;
+  - a **caution** is harm that depends on an amount the label does not state (e.g. garlic). It is a flag only, with no points.
+- Each listed entry gives one finding, naming every form listed (e.g. "garlic, garlic powder").
 - Explanations never change a status or the score.
-- "Unknown" means not yet reviewed, not harmful.
 
 ## 6. Personal fit (separate from the score)
 
 Personal fit is checked against the selected pet's recorded information:
 
 - species, from the product label (not from the pet);
+- documented concerns and cautions, judged for the pet's own species. A cat-only concern in a product for cats and dogs is noted as "not for dogs" for a dog. A concern for the pet's species makes the fit a possible mismatch; a caution makes it "review";
 - life stage, against the adequacy claim;
 - large-breed growth;
 - allergies and sensitivities ("Contains" versus "may include");
 - owner preferences;
-- vet-directed diets.
+- vet-directed diets;
+- for supplements, suitability: medicines, a reported condition, or pregnancy or nursing call for the vet's view, so the fit is "review", never "fits".
 
 "Not sure" and "not provided" stay distinct, and Purrbi never claims "no interactions". Breed alone is not used.
 
@@ -103,50 +113,57 @@ Personal fit is checked against the selected pet's recorded information:
 
 Cautions:
 1. Recall notice matching the barcode
-2. Made for another species
-3. Contains an ingredient in the allergy or sensitivity profile
-4. Documented ingredient concern
+2. Documented ingredient concern, judged for the selected pet's species (without a pet, for the product's)
+3. Made for another species
+4. Contains an ingredient in the allergy or sensitivity profile
 5. Possible (lot-specific) recall match
 6. Life-stage mismatch
 7. Large-breed growth
 8. May match the allergy profile
 9. Vet-directed diet
 10. Unclear feeding statement
-11. Documented caution
-12. An ingredient the owner avoids
+11. Documented caution (a flag; no points)
+12. A supplement question for the vet (medicines, condition, pregnancy or nursing)
+13. An ingredient the owner avoids
 
 Positives:
 - matches the known life stage;
 - complete and balanced;
 - no listed allergy match;
-- no documented ingredient concerns, worded as "in Purrbi's reviewed list" (never "safe" or "no concerns");
 - calories listed (treats);
 - made for the pet's species.
+
+"No documented ingredient concerns" is never a positive. Purrbi's reviewed list is short, so finding nothing on it is not a strength.
 
 While the product is unresolved, only recall and documented-concern cautions are shown, and no positives.
 
 **Verdict.** 25–45 words written by a model (`OPENAI_VERDICT_MODEL`).
 
-- Its input is only the computed assessment, highlights and pet-fit findings, as JSON.
-- The pet's name is replaced by "your cat" or "your dog" before the call and put back only in the app's copy.
-- The sentence is rejected, and a rule-based sentence from the same findings is used instead, if it:
-  - is under 20 or over 50 words;
-  - makes a claim Purrbi does not make ("safe", "ideal", "healthy", "best", "recommended", "no concerns", treatment claims);
-  - contains a number not in its input;
+- **Input.** Only the computed assessment, highlights (their full statements) and pet-fit findings, as JSON.
+- **Privacy.** The pet's name is replaced by "your cat" or "your dog" before the call and put back only in the app's copy.
+- **Checks.** The sentence is rejected, and a rule-based sentence from the same findings is used instead, if it:
+  - is under 25 or over 45 words, or ends with "…";
+  - makes a claim Purrbi does not make: safety, praise such as "great", "high-quality", "premium", "nutritious" or "best", "recommended", "no concerns", or health and treatment claims;
+  - gives a score ("N/100", "N out of 100") other than the assessment's score;
+  - uses any other number that is not stated in the score, its basis, the highlights or the unresolved items;
+  - calls a full assessment partial, or the reverse;
   - omits the most serious caution.
-- Out-of-scope and unresolved products get a fixed sentence.
-- Verdicts are cached per account by the hash of their input and model (`users/{uid}/verdicts/{key}`, server-only), so the same evidence and pet never cost a second call.
-- A rule-based fallback is reused for the product freshness window only. A failed call is not cached.
+- **Fallback.** The rule-based sentence is built from whole sentences, 25–45 words, with the most serious caution first. It passes the same checks.
+- **Fixed sentences.** Out-of-scope and unresolved products get a fixed sentence.
+- **Caching.**
+  - Verdicts are cached per account by the hash of their input and model (`users/{uid}/verdicts/{key}`, server-only), so the same evidence and pet never cost a second call.
+  - A rule-based fallback is reused for the product freshness window only.
+  - A failed call is not cached.
 
 ## 8. Recalls
 
-Purrbi checks the official FDA enforcement reports (openFDA, updated weekly). The result is cached for 12 hours.
+Purrbi checks the official FDA enforcement reports (openFDA, updated weekly). The result is cached for 24 hours (a check that could not be made is not cached).
 
 | Status | Shown as |
 |---|---|
 | `exact_active` | "Recall notice matches this barcode" (alert; overrides the verdict) |
 | `possible_active` | "Possible match: compare the lot code" (lot- or brand-and-name match) |
-| `brand_history` | "No current matching notice (older notices exist for this brand)" |
+| `brand_history` | "No current matching notice (older notices exist for this brand)"; the summary names a closed recall of this barcode and counts open records of the brand's other products |
 | `none_found` | "No matching notice found in the sources checked" (never "no recalls") |
 | `unavailable` | "The recall check failed; try again later" |
 

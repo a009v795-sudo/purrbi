@@ -199,9 +199,16 @@ export interface ScoreComponent {
 export interface IngredientNote {
   name: string;
   position: number; // 1-based label order
-  /** From Purrbi's curated list only (deterministic; the score uses it). */
+  /** From Purrbi's curated list only (deterministic). A documented concern caps the score; nothing else does. */
   status: 'positive' | 'caution' | 'concern' | 'unknown' | 'info';
   note: string;
+  /** The curated entry it matched (one finding per entry, however many forms are listed). */
+  kbId?: string;
+  /** The species a concern or caution applies to. */
+  concernFor?: Species[];
+  /** What the ingredient does (curated role table, or a verified cited explanation). Never changes the score. */
+  role?: string;
+  roleSource?: 'curated' | 'cited_ai';
   sourceUrl?: string;
   sourceTitle?: string;
   /** Plain-language explanation: curated, or an AI summary of a cited page Purrbi verified. Never affects the score. */
@@ -254,6 +261,8 @@ export interface GeneralAssessment {
   scoreCoverage: number | null;
   /** the highest the score could reach once the unverified components are confirmed */
   scoreMaxPossible: number | null;
+  /** the lowest it could reach (every unverified component failed); the score lies between the two */
+  scoreMinPossible?: number | null;
   /** one line on what the score rests on and what is missing */
   scoreBasis: string;
   components: ScoreComponent[];
