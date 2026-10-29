@@ -33,6 +33,8 @@ const BC = {
 let db: Firestore;
 let calls: Record<string, number>;
 let opffDown = false;
+let verdictMode: 'ok' | 'invalid' | 'fail' = 'ok';
+let verdictInputs: string[] = [];
 
 const NOW = new Date('2026-10-28T12:00:00Z');
 const src = (db: OpenFactsDb, code: string) => ({ sourceId: `${db}:${code}`, sourceType: 'database' as const, sourceName: 'TEST FIXTURE database', retrievedAt: NOW.toISOString(), matchConfidence: 'exact_barcode' as const });
@@ -150,6 +152,16 @@ const sources: Sources = {
       quote: 'TEST FIXTURE quote copied from the cited page.', reason: '', checkedAt: NOW.toISOString(), model: 'mock', version: 'test',
     }));
   },
+  async verdict(o) {
+    calls.verdict = (calls.verdict ?? 0) + 1;
+    verdictInputs.push(JSON.stringify(o.input));
+    if (verdictMode === 'fail') throw new Error('mock verdict outage');
+    if (verdictMode === 'invalid') return { text: 'TEST FIXTURE: the safest food.', model: 'mock' };
+    const subject = o.input.pet ? o.input.pet.name : 'a cat or dog';
+    const score = o.input.assessment.score === null ? 'not available yet' : `${o.input.assessment.score}/100`;
+    const first = o.input.cautions[0]?.value ? ` (first: ${o.input.cautions[0].value})` : '';
+    return { text: `TEST FIXTURE verdict: Purrbi’s label score for this product is ${score}; for ${subject}, check the cautions listed below${first} against what you already know before choosing it.`, model: 'mock' };
+  },
   async extractLabel(o): Promise<ValidatedLabel> {
     calls.extract = (calls.extract ?? 0) + 1;
     if (o.purpose.includes('front')) {
@@ -173,8 +185,8 @@ const sources: Sources = {
 
 function deps(over: Partial<RuntimeConfig> = {}): Deps {
   const config: RuntimeConfig = {
-    userAgent: 'test', openaiApiKey: () => 'test-key', visionModel: 'mock', researchModel: 'mock', explainModel: 'mock',
-    aiEnabled: true, researchEnabled: false, databaseImagesEnabled: true, explanationsEnabled: true,
+    userAgent: 'test', openaiApiKey: () => 'test-key', visionModel: 'mock', researchModel: 'mock', explainModel: 'mock', verdictModel: 'mock',
+    aiEnabled: true, researchEnabled: false, databaseImagesEnabled: true, explanationsEnabled: true, verdictsEnabled: true,
     productFreshDays: 30, recallFreshHours: 12, limits: DEFAULT_LIMITS, ...over,
   };
   const silent = { info: () => undefined, warn: () => undefined, error: () => undefined };
@@ -197,6 +209,8 @@ beforeAll(() => {
 beforeEach(async () => {
   calls = {};
   opffDown = false;
+  verdictMode = 'ok';
+  verdictInputs = [];
   await fetch(`http://${process.env.FIRESTORE_EMULATOR_HOST}/emulator/v1/projects/demo-purrbi/databases/(default)/documents`, { method: 'DELETE' });
   await db.doc('users/u1/pets/cat1').set({ name: 'Miso', species: 'cat', birthDate: Timestamp.fromDate(new Date('2022-01-01')), allergiesStatus: 'reported', allergies: ['chicken'], profileVersion: 2 });
   await db.doc('users/u1/pets/cat2').set({ name: 'Pip', species: 'cat', birthDate: Timestamp.fromDate(new Date('2021-03-01')), allergiesStatus: 'none_reported', profileVersion: 1 });
@@ -524,6 +538,87 @@ describe('evidence-backed explanations and reuse', () => {
     await processScan(deps(small), 'u1', b.id);
     expect(calls.explain).toBe(2);
     expect((await read(b)).lastJob).toMatchObject({ aiCalls: 0, explanationsNew: 0, explanationsCached: 2 });
+  });
+});
+
+describe('concise result: highlights and verdict', () => {
+  it('shows at most two positives and two cautions, and a checked verdict that names the pet only in the app', async () => {
+    const ref = await newScan('u1', BC.food, 'cat1'); // Miso is allergic to chicken
+    await processScan(deps(), 'u1', ref.id);
+    const s = await read(ref);
+    expect(s.positives.length).toBeLessThanOrEqual(2);
+    expect(s.cautions.length).toBeGreaterThan(0);
+    expect(s.cautions.length).toBeLessThanOrEqual(2);
+    expect(s.cautions[0]).toMatchObject({ severity: 'alert', title: 'In the allergy profile', value: 'chicken' });
+    expect(s).toMatchObject({ verdictSource: 'ai', verdictStatus: 'ready' });
+    expect(s.verdict).toMatch(/for Miso, check the cautions listed below \(first: chicken\)/);
+    expect(calls.verdict).toBe(1);
+    expect(verdictInputs[0]).not.toContain('Miso'); // the pet's name never reaches the model
+    expect(verdictInputs[0]).toContain('your cat');
+    expect(s.scoreText).toMatch(/^\d+$|^Unscored$|^Not scored$/);
+  });
+  it('does not use a verdict that leaves out the most serious caution', async () => {
+    const ref = await newScan('u1', BC.food, 'cat1');
+    const silent = { ...sources, verdict: async () => ({ text: 'TEST FIXTURE verdict: Purrbi’s label score for this product is not available yet; check the label details listed below against what you already know before choosing it.', model: 'mock' }) };
+    await processScan({ ...deps(), sources: silent }, 'u1', ref.id);
+    const s = await read(ref);
+    expect(s.verdictSource).toBe('rules');
+    expect(s.verdict).toMatch(/chicken/i);
+    expect(s.diagnosticNotes.join(' ')).toMatch(/does not name the most serious caution/);
+  });
+  it('reuses the cached verdict on a rescan with the same evidence and pet (no new AI call)', async () => {
+    const a = await newScan('u1', BC.treat, 'cat2');
+    await processScan(deps(), 'u1', a.id);
+    const b = await newScan('u1', BC.treat, 'cat2');
+    await processScan(deps(), 'u1', b.id);
+    expect(calls.verdict).toBe(1);
+    expect((await read(b)).verdict).toBe((await read(a)).verdict);
+  });
+  it('replaces a verdict that fails the check with one built from the same findings', async () => {
+    verdictMode = 'invalid';
+    const ref = await newScan('u1', BC.treat, 'cat2');
+    await processScan(deps(), 'u1', ref.id);
+    const s = await read(ref);
+    expect(s).toMatchObject({ verdictSource: 'rules', verdictStatus: 'ready' });
+    expect(s.verdict).not.toMatch(/safest/);
+    expect(s.verdict).toMatch(/Purrbi’s label score for TEST FIXTURE Salmon Cat Treats is \d+\/100/);
+    expect(s.diagnosticNotes.join(' ')).toMatch(/Verdict \(mock\) not used: (length|claim Purrbi does not make)/);
+  });
+  it('keeps the rule-based verdict when the model is unavailable, and tries again next time', async () => {
+    verdictMode = 'fail';
+    const a = await newScan('u1', BC.treat, 'cat2');
+    await processScan(deps(), 'u1', a.id);
+    expect(await read(a)).toMatchObject({ verdictSource: 'rules', verdictStatus: 'ready' });
+    verdictMode = 'ok';
+    const b = await newScan('u1', BC.treat, 'cat2');
+    await processScan(deps(), 'u1', b.id);
+    expect(calls.verdict).toBe(2); // the failure was not cached
+    expect((await read(b)).verdictSource).toBe('ai');
+  });
+  it('an unresolved product gets a fixed verdict and no positives (no AI verdict call)', async () => {
+    const ref = await newScan('u1', BC.misfiled, 'cat1');
+    await processScan(deps(), 'u1', ref.id);
+    const s = await read(ref);
+    expect(s.scope).toBe('unknown');
+    expect(s.verdict).toMatch(/couldn’t confirm yet whether this is made for cats or dogs/);
+    expect(s.positives).toEqual([]);
+    expect(s.scoreText).not.toBe('0');
+    expect(calls.verdict).toBeUndefined();
+  });
+});
+
+describe('no stale overwrite', () => {
+  it('a run whose inputs are older than the saved result does not overwrite it', async () => {
+    const ref = await newScan('u1', BC.treat, 'cat2');
+    await processScan(deps(), 'u1', ref.id);
+    // A newer result (inputs read an hour later) is already saved.
+    await ref.update({ assessmentInputsAt: Timestamp.fromDate(new Date(NOW.getTime() + 3600000)), personalState: 'newer-result' });
+    const before = await read(ref);
+    await ref.update({ refreshPersonalRequested: true, petId: 'cat1' });
+    await handleScanUpdate(deps(), 'u1', ref.id, before, await read(ref));
+    const s = await read(ref);
+    expect(s.personalState).toBe('newer-result');
+    expect(s.refreshPersonalRequested).toBe(false);
   });
 });
 

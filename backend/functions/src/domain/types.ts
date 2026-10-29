@@ -249,6 +249,12 @@ export interface GeneralAssessment {
   scoreLabel: string;
   scoreProvisional: boolean;
   scoreWithheldReason: string | null;
+  /** points' worth of label information the score rests on (components with evidence), 0-100 */
+  scoreCoverage: number | null;
+  /** the highest the score could reach once the unverified components are confirmed */
+  scoreMaxPossible: number | null;
+  /** one line on what the score rests on and what is missing */
+  scoreBasis: string;
   components: ScoreComponent[];
   findings: Finding[];
   ingredientNotes: IngredientNote[];

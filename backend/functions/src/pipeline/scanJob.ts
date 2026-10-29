@@ -9,8 +9,10 @@
 import { randomUUID } from 'node:crypto';
 import type { Firestore } from 'firebase-admin/firestore';
 import { extractLabel as extractLabelImpl, LABEL_EXTRACTION_VERSION, type ValidatedLabel } from '../ai/labelExtract';
+import { checkVerdict, ruleVerdict, verdictInput, verdictKey, withPetName, writeVerdict as verdictImpl } from '../ai/verdict';
 import { parseAdequacyStatement } from '../domain/adequacy';
 import { normalizeBarcode, type NormalizedBarcode } from '../domain/barcode';
+import { buildHighlights } from '../domain/highlights';
 import { personalize } from '../domain/personalize';
 import { classifyScope, SCOPE_VERSION, type DatabaseOrigin } from '../domain/scope';
 import { assessGeneral } from '../domain/score';
@@ -26,7 +28,7 @@ import { SourceError } from '../util/http';
 import { rematchAnalysis } from '../domain/nutrition';
 import { SCAN_STATUS, type ErrorCode, type RuntimeConfig } from './config';
 import { dropStaleImageReads, enrichmentFacts, fillMissing, labelToFacts, missingInfo, type PhotoRequest } from './facts';
-import { explanationFields, jobFields, resultFields, type JobInfo } from './serialize';
+import { explanationFields, highlightFields, jobFields, resultFields, type JobInfo } from './serialize';
 import {
   consumeAiBudget,
   consumeQuota,
@@ -37,7 +39,9 @@ import {
   readPet,
   readProduct,
   readProductMeta,
+  readVerdict,
   saveLabelExtraction,
+  saveVerdict,
   stripPrivate,
   Timestamp,
   writeExplanations,
@@ -61,6 +65,7 @@ export interface Sources {
   extractLabel: (o: Parameters<typeof extractLabelImpl>[0]) => Promise<ValidatedLabel>;
   databaseImages: (o: Parameters<typeof databaseImagesImpl>[0]) => ReturnType<typeof databaseImagesImpl>;
   explain: (o: Parameters<typeof explainImpl>[0]) => Promise<CitedExplanation[]>;
+  verdict: (o: Parameters<typeof verdictImpl>[0]) => Promise<{ text: string; model: string }>;
 }
 
 export const realSources: Sources = {
@@ -70,6 +75,7 @@ export const realSources: Sources = {
   extractLabel: extractLabelImpl,
   databaseImages: databaseImagesImpl,
   explain: explainImpl,
+  verdict: verdictImpl,
 };
 
 export interface Deps {
@@ -95,7 +101,7 @@ const scanPath = (uid: string, scanId: string) => `users/${uid}/scans/${scanId}`
 const ageDays = (d: Date | null | undefined, now: Date) => (d ? (now.getTime() - d.getTime()) / 86400000 : Infinity);
 
 function newJob(kind: JobInfo['kind'], traceId: string, now: Date): JobInfo {
-  return { kind, traceId, startedAt: now, productCache: 'none', recallCache: 'skipped', explanationsCached: 0, explanationsNew: 0, evidenceNotes: [], diagnosticNotes: [] };
+  return { kind, traceId, runId: randomUUID().slice(0, 12), startedAt: now, productCache: 'none', recallCache: 'skipped', explanationsCached: 0, explanationsNew: 0, evidenceNotes: [], diagnosticNotes: [] };
 }
 
 async function setStatus(deps: Deps, uid: string, scanId: string, status: string, message: string, progress: number) {
@@ -432,6 +438,8 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   if (metaChanged) await writeProductMeta(db, gtin, meta, now);
 
   // 4. The owner's own label photos fill remaining gaps (private, unreviewed).
+  // When this run read its private inputs (photos, then the pet): a result from inputs read later is never overwritten by it.
+  const inputsAt = deps.now();
   const extractions = await readLabelExtractions(db, o.uid, gtin);
   let labelUsed = false;
   const olderReads = extractions.filter((e) => e.label.status === 'processed' && e.label.version !== LABEL_EXTRACTION_VERSION).length;
@@ -474,6 +482,39 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   const state = overallState(general, recall, scope);
   const requests: PhotoRequest[] = o.skipPhotos ? [] : missingInfo(facts, scope, general.category);
 
+  // The concise result: up to two positives and two cautions, and the verdict for the selected pet.
+  // Supported products get a model-written verdict, checked against this assessment and cached; until it
+  // arrives (or if it fails the check) the app shows one built from the same findings.
+  const highlights = buildHighlights({ facts, scope, general, personal, recall });
+  const vInput = verdictInput({
+    productName: facts.productName?.value ?? '',
+    brand: facts.brand?.value ?? '',
+    species: scope.species,
+    category: general.category,
+    score: general.score,
+    provisional: general.scoreProvisional,
+    scoreLabel: general.scoreLabel,
+    scoreBasis: general.scoreBasis,
+    withheldReason: general.scoreWithheldReason ?? '',
+    pet: pet ? { name: pet.name, species: pet.species, fit: personal.state, headline: personal.headline } : null,
+    positives: highlights.positives,
+    cautions: highlights.cautions,
+    unresolved: personal.unresolved,
+  });
+  const named = (text: string) => (pet ? withPetName(text, pet.species, pet.name) : text);
+  const fixed = fixedVerdict(scope, requests);
+  const wantVerdict = !fixed && config.aiEnabled && config.verdictsEnabled;
+  const vKey = verdictKey(vInput, config.verdictModel);
+  const cachedVerdict = wantVerdict ? await readVerdict(db, o.uid, vKey).catch(() => null) : null;
+  // A rule-based fallback is reused for a while only, so a model sentence is tried again later.
+  const verdictHit = cachedVerdict && (cachedVerdict.source === 'ai' || ageDays(cachedVerdict.createdAt, now) <= config.productFreshDays) ? cachedVerdict : null;
+  const verdictPending = wantVerdict && !verdictHit;
+  let verdict = fixed
+    ? { text: fixed, source: 'rules', status: 'ready' }
+    : verdictHit
+      ? { text: named(verdictHit.text), source: verdictHit.source, status: 'ready' }
+      : { text: named(ruleVerdict(vInput)), source: 'rules', status: verdictPending ? 'pending' : 'ready' };
+
   // Explanations already in the cache are attached now; new ones follow in step 8.
   const explain = await cachedExplanations(deps, general, scope, now);
   job.explanationsCached = explain.cachedCount;
@@ -483,13 +524,19 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   const statusMessage =
     status === SCAN_STATUS.outOfScope ? 'Outside Purrbi’s scope' : status === SCAN_STATUS.needsPhotos ? `Add ${requests.length === 1 ? 'a photo' : 'photos'} to finish the assessment` : 'Assessment ready';
 
-  // 7. Save. A failed save is reported as such (never as "unknown product").
+  // 7. Save. A failed save is reported as such (never as "unknown product"). A run whose inputs are older
+  // than those of a result already saved (e.g. a photo and a pet change processed at the same time) does
+  // not overwrite it.
   const ref = db.doc(scanPath(o.uid, o.scanId));
+  let superseded = false;
   try {
-    await ref.update({
+    const fields = {
       ...resultFields({ facts, scope, general, personal, recall, summary, state, photoRequests: requests, factsVersion, labelEvidenceUsed: labelUsed }),
       ...explanationFields(general, pending ? 'pending' : explain.status),
+      ...highlightFields(highlights, verdict),
       ...jobFields(job, currentCalls(), deps.now()),
+      assessmentRunId: job.runId,
+      assessmentInputsAt: Timestamp.fromDate(inputsAt),
       status,
       statusMessage,
       progress: 100,
@@ -501,17 +548,28 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       assessedAt: Timestamp.fromDate(now),
       completedAt: status === SCAN_STATUS.needsPhotos ? null : Timestamp.fromDate(now),
       updatedAt: Timestamp.fromDate(now),
+    };
+    superseded = await db.runTransaction(async (tx) => {
+      const newer = ((await tx.get(ref)).get('assessmentInputsAt') as Timestamp | undefined)?.toMillis() ?? 0;
+      if (newer > inputsAt.getTime()) return true;
+      tx.update(ref, fields);
+      return false;
     });
   } catch (err) {
     deps.log.error('save failed', { traceId: job.traceId, error: (err as Error).message });
     throw new JobError('save_failed', errorMessage('save_failed'), true);
   }
-  log('scan assessed', { status, state, score: general.score, personal: personal.state, labelUsed, factsVersion, productCache: job.productCache, recallCache: job.recallCache, calls: currentCalls().length });
+  if (superseded) {
+    log('result superseded', { runId: job.runId, kind: job.kind });
+    return;
+  }
+  log('scan assessed', { status, state, score: general.score, personal: personal.state, labelUsed, factsVersion, productCache: job.productCache, recallCache: job.recallCache, calls: currentCalls().length, verdict: verdictPending ? 'pending' : verdict.source });
 
-  // 8. New cited explanations, then the second update. All of the product's new terms are explained
-  // now (parallel calls of explanationsPerCall terms), so a later rescan needs no AI call. Failure here
-  // never fails the scan; a failed call is tried again on the next scan.
-  if (pending) {
+  // 8. New cited explanations and the written verdict (in parallel), then the second update. All of the
+  // product's new terms are explained now (parallel calls of explanationsPerCall terms), so a later rescan
+  // needs no AI call. Failure here never fails the scan; a failed call is tried again on the next scan.
+  if (!pending && !verdictPending) return;
+  const explainStep = async () => {
     let finalStatus = explain.status;
     try {
       const species = scope.species === 'unknown' ? 'cat_and_dog' : scope.species;
@@ -538,10 +596,48 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       log('explanations skipped', { reason });
     }
     if (job.explanationsCached || job.explanationsNew) job.evidenceNotes.push(`${job.explanationsCached} ingredient explanation${job.explanationsCached === 1 ? '' : 's'} reused; ${job.explanationsNew} new, each checked against its cited page.`);
-    await ref.update({ ...explanationFields(general, finalStatus), ...jobFields(job, currentCalls(), deps.now()), updatedAt: Timestamp.fromDate(deps.now()) }).catch((err) => {
+    return finalStatus;
+  };
+  const verdictStep = async () => {
+    const fallback = ruleVerdict(vInput);
+    try {
+      await consumeAiBudget(db, config.limits, deps.now());
+      const w = await deps.sources.verdict({ apiKey: config.openaiApiKey(), model: config.verdictModel, input: vInput });
+      const problem = checkVerdict(w.text, vInput);
+      const chosen = problem ? { text: fallback, model: w.model, source: 'rules' } : { text: w.text, model: w.model, source: 'ai' };
+      if (problem) job.diagnosticNotes.push(`Verdict (${w.model}) not used: ${problem}; the rule-based verdict is shown.`);
+      await saveVerdict(db, o.uid, vKey, chosen, deps.now());
+      log('verdict', { model: w.model, used: !problem, problem });
+      return { text: named(chosen.text), source: chosen.source, status: 'ready' };
+    } catch (err) {
+      // Not cached: the next assessment tries again.
+      const reason = err instanceof QuotaError ? err.kind : errorDetail((err as Error).message);
+      job.diagnosticNotes.push(`Verdict not written: ${reason}; the rule-based verdict is shown.`);
+      log('verdict skipped', { reason });
+      return { text: named(fallback), source: 'rules', status: 'ready' };
+    }
+  };
+  const [finalStatus, written] = await Promise.all([pending ? explainStep() : Promise.resolve(explain.status), verdictPending ? verdictStep() : Promise.resolve(verdict)]);
+  verdict = written;
+  // Written only while this run's result is still the one saved.
+  await db
+    .runTransaction(async (tx) => {
+      if ((await tx.get(ref)).get('assessmentRunId') !== job.runId) return;
+      tx.update(ref, { ...explanationFields(general, finalStatus), ...highlightFields(highlights, verdict), ...jobFields(job, currentCalls(), deps.now()), updatedAt: Timestamp.fromDate(deps.now()) });
+    })
+    .catch((err) => {
       deps.log.error('explanation save failed', { traceId: job.traceId, error: (err as Error).message });
     });
-  }
+}
+
+/** Products that are out of scope, or not yet known to be for cats or dogs, have nothing to assess for a pet yet. */
+function fixedVerdict(scope: ScopeResult, requests: PhotoRequest[]): string | null {
+  if (scope.status === 'out_of_scope') return scope.reason;
+  if (scope.status === 'unknown')
+    return requests.some((r) => r.purpose === 'front')
+      ? 'We couldn’t confirm yet whether this is made for cats or dogs, so Purrbi hasn’t assessed it. A photo of the front of the package, where it says who it is for, will settle it.'
+      : 'We couldn’t confirm yet whether this is made for cats or dogs, so Purrbi hasn’t assessed it.';
+  return null;
 }
 
 /** Saved records keep the label text; what Purrbi reads from it is re-derived with the current rules. */

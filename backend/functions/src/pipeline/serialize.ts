@@ -6,6 +6,7 @@ import { evidenceLabel } from '../domain/score';
 import { describeCalories, describeEntry, dryMatterPercent, findNutrient } from '../domain/nutrition';
 import type { GeneralAssessment, PersonalAssessment, ProductFacts, RecallCheck, ScopeResult } from '../domain/types';
 import type { ResultState } from '../domain/summary';
+import type { Highlight } from '../domain/highlights';
 import { summarizeCalls, type SourceCall } from '../util/diagnostics';
 import type { PhotoRequest } from './facts';
 
@@ -13,6 +14,7 @@ import type { PhotoRequest } from './facts';
 export interface JobInfo {
   kind: 'scan' | 'retry' | 'photo' | 'refresh';
   traceId: string;
+  runId: string; // this run only (a refresh shares the scan's trace id)
   startedAt: Date;
   productCache: 'hit' | 'miss' | 'stale_used' | 'none';
   recallCache: 'hit' | 'miss' | 'skipped';
@@ -69,7 +71,9 @@ const RESULT_LABELS: Record<ResultState, string> = {
   review: 'Review the details',
   low: 'Significant gaps or concerns',
   alert: 'Official recall match',
+  partial: 'Partial assessment',
   incomplete: 'Information incomplete',
+  unresolved: 'Not yet confirmed for cats or dogs',
   out_of_scope: 'Not a cat or dog product',
   not_scored: 'Not scored',
 };
@@ -105,7 +109,12 @@ export function resultFields(args: {
     resultState: args.state,
     resultLabel: RESULT_LABELS[args.state],
     scoreAvailable: general.score !== null,
+    // The app shows scoreText, never score alone: an unscored result is never displayed as 0.
     score: general.score ?? 0,
+    scoreText: general.score === null ? (general.scoreApplicable ? 'Unscored' : 'Not scored') : String(general.score),
+    scoreMaxPossible: general.scoreMaxPossible ?? 0,
+    scoreCoverage: general.scoreCoverage ?? 0,
+    scoreBasis: general.scoreBasis,
     scoreBand: general.scoreBand ?? '',
     scoreLabel: general.scoreLabel,
     scoreProvisional: general.scoreProvisional,
@@ -146,6 +155,7 @@ export function resultFields(args: {
     adequacySource: facts.adequacy ? evidenceLabel(facts.adequacy.source) : '',
 
     recallStatus: recall?.status ?? 'not_checked',
+    ...recallDisplay(recall),
     recallSummary: recall?.summary ?? '',
     recallCheckedAt: recall ? new Date(recall.checkedAt) : null,
     recallRecords: (recall?.records ?? []).map((r) => ({ ...r })),
@@ -171,9 +181,59 @@ export function resultFields(args: {
     supplementQualitySignals: general.supplement?.qualitySignals ?? [],
 
     summary: args.summary,
+    ingredientsPreview: (facts.ingredients?.value ?? []).slice(0, 5).join(', '),
+    ingredientsCount: facts.ingredients?.value.length ?? 0,
+    verificationStatus: verificationStatus(facts),
     missingInfo: args.photoRequests.map((p) => p.purpose),
     photoRequests: args.photoRequests.map((p) => ({ ...p })),
     labelEvidenceUsed: args.labelEvidenceUsed,
     evidenceRevision: args.factsVersion,
+  };
+}
+
+/**
+ * Recall status in four plain outcomes (FDA notices are published separately and openFDA enforcement
+ * data is updated weekly: no outcome is a "recall-free" guarantee, and an old record is never read as a
+ * current recall).
+ */
+export function recallDisplay(recall: RecallCheck | null): Record<string, unknown> {
+  const status = recall?.status ?? 'not_checked';
+  const label = {
+    exact_active: 'Recall notice matches this barcode',
+    possible_active: 'Possible match: compare the lot code',
+    brand_history: 'No current matching notice (older notices exist for this brand)',
+    none_found: 'No matching notice found in the sources checked',
+    unavailable: 'The recall check failed; try again later',
+    not_checked: 'Not checked',
+  }[status];
+  const severity = status === 'exact_active' ? 'alert' : status === 'possible_active' ? 'review' : status === 'unavailable' ? 'review' : 'info';
+  const checked = recall?.checkedAt ? new Date(recall.checkedAt) : null;
+  return {
+    recallStatusLabel: label,
+    recallSeverity: severity,
+    recallCheckedLabel: checked ? `Checked ${checked.toISOString().slice(0, 10)} in FDA enforcement reports (openFDA, updated weekly)` : '',
+  };
+}
+
+/** Where the facts shown come from, as one line (verified by a person never; checked against sources how). */
+function verificationStatus(facts: ProductFacts): string {
+  const kinds = new Set(facts.sources.map((s) => s.sourceType));
+  const parts: string[] = [];
+  if (kinds.has('database')) parts.push('database record');
+  if (kinds.has('manufacturer') || kinds.has('retailer_or_web')) parts.push('web page, each fact found on it');
+  if (kinds.has('database_image')) parts.push('database label image read by AI');
+  if (kinds.has('user_label')) parts.push('your label photo read by AI (product identity not independently verified)');
+  return parts.length ? `Based on: ${parts.join('; ')}. Not reviewed by a person.` : 'No product record yet.';
+}
+
+/** The concise result: up to two positives and two cautions, and the short verdict for the pet. */
+export function highlightFields(h: { positives: Highlight[]; cautions: Highlight[] }, verdict: { text: string; source: string; status: string }): Record<string, unknown> {
+  const row = (x: Highlight) => ({ kind: x.kind, severity: x.severity, title: x.title, detail: x.detail, value: x.value, evidence: x.evidence, rule: x.rule });
+  return {
+    positives: h.positives.map(row),
+    cautions: h.cautions.map(row),
+    verdict: verdict.text,
+    verdictSource: verdict.source, // 'ai' (checked against the assessment) or 'rules'
+    verdictStatus: verdict.status, // 'pending' while the written verdict is on its way
   };
 }

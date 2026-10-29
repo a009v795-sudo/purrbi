@@ -28,12 +28,22 @@ describe('general score', () => {
     expect(a.scoreProvisional).toBe(false);
     expect(a.components.every((c) => c.explanation.length > 0)).toBe(true);
   });
-  it('withholds the score when core evidence is missing (never estimates)', () => {
-    const f = facts({ adequacyText: '' });
+  it('withholds the score when an essential input is missing (never estimates)', () => {
+    const f = facts({ guaranteedAnalysis: undefined });
     const a = assessGeneral(f, scopeOf(f));
     expect(a.score).toBeNull();
-    expect(a.missingForScore).toContain('nutritional adequacy statement');
-    expect(a.scoreWithheldReason).toMatch(/needs the nutritional adequacy statement/);
+    expect(a.missingForScore).toEqual(['guaranteed analysis (protein, fat, fiber)']);
+    expect(a.scoreWithheldReason).toMatch(/needs the guaranteed analysis/);
+    expect(a.scoreCoverage).toBeNull();
+  });
+  it('scores a complete food without its adequacy statement as a lower bound, by coverage, not as poor quality', () => {
+    const f = facts({ adequacyText: '' });
+    const a = assessGeneral(f, scopeOf(f));
+    const full = assessGeneral(facts(), scopeOf(facts()));
+    expect(a.score).toBe(full.score! - full.components.find((c) => c.key === 'adequacy')!.points);
+    expect(a).toMatchObject({ scoreProvisional: true, scoreLabel: 'Partial assessment', scoreCoverage: 60, scoreMaxPossible: a.score! + 40 });
+    expect(a.scoreBasis).toBe('Based on 60 of 100 points’ worth of label information; nutritional adequacy statement could add up to 40.');
+    expect(a.findings.find((x) => x.rule === 'G-ADEQUACY')!.kind).toBe('missing'); // shown as missing evidence, not as a fault
   });
   it('marks a score provisional when an optional item lacks evidence, without calling it a fault', () => {
     const f = facts({ calories: undefined });

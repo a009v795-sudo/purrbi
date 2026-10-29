@@ -2,13 +2,15 @@
 import { categoryLabel, speciesLabel } from './scope';
 import type { GeneralAssessment, PersonalAssessment, ProductFacts, RecallCheck, ScopeResult } from './types';
 
-export type ResultState = 'strong' | 'good' | 'review' | 'low' | 'alert' | 'incomplete' | 'out_of_scope' | 'not_scored';
+export type ResultState = 'strong' | 'good' | 'review' | 'low' | 'partial' | 'alert' | 'incomplete' | 'unresolved' | 'out_of_scope' | 'not_scored';
 
 export function overallState(general: GeneralAssessment, recall: RecallCheck | null, scope: ScopeResult): ResultState {
   if (scope.status === 'out_of_scope') return 'out_of_scope';
   if (recall?.status === 'exact_active') return 'alert';
+  if (scope.status === 'unknown') return 'unresolved'; // not yet known whether it is for cats or dogs
   if (!general.scoreApplicable) return 'not_scored';
   if (general.score === null || !general.scoreBand) return 'incomplete';
+  if (general.scoreLabel === 'Partial assessment') return 'partial';
   return general.scoreBand;
 }
 
@@ -32,9 +34,10 @@ export function buildSummary(
   if (!general.scoreApplicable) out.push(general.scoreWithheldReason ?? 'This product type is not scored.');
   else if (general.score === null) out.push(general.scoreWithheldReason ?? 'There isn’t enough label information to score it yet.');
   else {
-    const unverified = general.components.filter((c) => c.status === 'unverified').map((c) => c.label.toLowerCase());
     out.push(
-      `Its Purrbi label score is ${general.score}/100 (${general.scoreLabel.toLowerCase()})${general.scoreProvisional ? `, provisional until ${unverified.join(' and ')} ${unverified.length > 1 ? 'are' : 'is'} confirmed` : ''}.`,
+      general.scoreProvisional
+        ? `Its Purrbi label score so far is ${general.score}/100, a lower bound: ${general.scoreBasis.charAt(0).toLowerCase()}${general.scoreBasis.slice(1)}`
+        : `Its Purrbi label score is ${general.score}/100 (${general.scoreLabel.toLowerCase()}).`,
     );
   }
 

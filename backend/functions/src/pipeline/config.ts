@@ -17,10 +17,12 @@ export interface RuntimeConfig {
   visionModel: string;
   researchModel: string;
   explainModel: string;
+  verdictModel: string;
   aiEnabled: boolean;
   researchEnabled: boolean;
   databaseImagesEnabled: boolean;
   explanationsEnabled: boolean;
+  verdictsEnabled: boolean;
   productFreshDays: number;
   recallFreshHours: number;
   limits: Limits;

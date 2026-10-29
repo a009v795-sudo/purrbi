@@ -3,11 +3,14 @@
 // ingredient concerns. It is Purrbi's own methodology, not an FDA, AAFCO, WSAVA or veterinary
 // rating, and it is independent of any pet profile.
 //
-// Missing-data rules (no silent denominators):
+// Missing-data rules (no silent denominators, no inflation):
 //  - every category has a fixed component set and a fixed maximum of 100;
-//  - if a core component lacks evidence the score is withheld (never estimated);
+//  - if an ESSENTIAL input is missing (MINIMUM_EVIDENCE) the score is withheld (never estimated);
 //  - an optional component without evidence earns 0 points, is marked "unverified" and makes the
-//    score "provisional" — it is shown as missing evidence, never as a negative finding.
+//    score "provisional": the number is then a lower bound, shown with its coverage ("based on 60 of
+//    100 points' worth of label information") and the highest it could reach. Missing information is
+//    never treated as poor quality, and never fills in points it has not earned.
+//  - supplements get no number: their purpose, dose and evidence vary by ingredient.
 import { lifeStageLabel } from './adequacy';
 import { ingredientNotes, KB_VERSION } from './kb';
 import { describeCalories, findNutrient, hasCoreGuaranteedAnalysis } from './nutrition';
@@ -27,7 +30,19 @@ import type {
   Species,
 } from './types';
 
-export const METHODOLOGY_VERSION = 'purrbi-score-1.0.0';
+export const METHODOLOGY_VERSION = 'purrbi-score-1.1.0';
+
+/**
+ * Minimum evidence per category: the essential inputs without which no score is given, and the
+ * optional enrichment that only changes how complete (provisional) the score is. Identity, species and
+ * category come first for every category (classification). Documented in METHODOLOGY.md.
+ */
+export const MINIMUM_EVIDENCE: Record<'complete_food' | 'treat' | 'complementary' | 'supplement', { essential: string[]; optional: string[] }> = {
+  complete_food: { essential: ['ingredient list', 'guaranteed analysis (protein, fat, fiber)'], optional: ['nutritional adequacy statement', 'calorie content statement', 'moisture guarantee', 'further guarantees'] },
+  treat: { essential: ['ingredient list or guaranteed analysis'], optional: ['feeding statement', 'calorie content statement', 'moisture guarantee', 'the other of ingredient list / guaranteed analysis'] },
+  complementary: { essential: ['ingredient list or guaranteed analysis'], optional: ['feeding statement', 'calorie content statement', 'moisture guarantee', 'the other of ingredient list / guaranteed analysis'] },
+  supplement: { essential: ['active ingredients or ingredient list'], optional: ['amounts per serving', 'warnings', 'quality signals'] },
+};
 
 export function evidenceLabel(src: SourceRef | undefined): string {
   if (!src) return 'Unknown source';
@@ -127,7 +142,7 @@ export function assessGeneral(facts: ProductFacts, scope: ScopeResult): GeneralA
 
   if (scope.status === 'out_of_scope') {
     findings.push({ kind: 'info', text: scope.reason, evidence: 'Product classification', rule: 'G-SCOPE' });
-    return { ...base, category: 'unknown', scoreApplicable: false, score: null, scoreBand: null, scoreLabel: 'Not assessed', scoreProvisional: false, scoreWithheldReason: scope.reason, components: [], findings, missingForScore: [] };
+    return { ...base, category: 'unknown', scoreApplicable: false, score: null, scoreBand: null, scoreLabel: 'Not assessed', scoreProvisional: false, scoreWithheldReason: scope.reason, scoreCoverage: null, scoreMaxPossible: null, scoreBasis: '', components: [], findings, missingForScore: [] };
   }
 
   const adequacy = facts.adequacy?.value;
@@ -203,6 +218,9 @@ export function assessGeneral(facts: ProductFacts, scope: ScopeResult): GeneralA
       scoreLabel: 'Not scored',
       scoreProvisional: false,
       scoreWithheldReason: 'Purrbi does not give supplements a number: their purpose, dose and evidence vary by ingredient. The label facts, ingredients and any documented concerns are shown instead.',
+      scoreCoverage: null,
+      scoreMaxPossible: null,
+      scoreBasis: '',
       components,
       findings,
       missingForScore,
@@ -213,8 +231,8 @@ export function assessGeneral(facts: ProductFacts, scope: ScopeResult): GeneralA
     missingForScore.push('product type');
   } else if (category === 'complete_food') {
     if (!adequacy) {
-      missingForScore.push('nutritional adequacy statement');
-      components.push({ key: 'adequacy', label: 'Nutritional adequacy statement', points: 0, maxPoints: 40, status: 'unverified', explanation: 'Not available yet.' });
+      // Optional enrichment: databases rarely carry it. Without it the score is provisional and can rise by up to 40.
+      components.push({ key: 'adequacy', label: 'Nutritional adequacy statement', points: 0, maxPoints: 40, status: 'unverified', explanation: 'Not available yet: the package states whether the food is complete and balanced, and for which life stage.' });
     } else {
       let points = 16;
       let status: ScoreComponent['status'] = 'partly_met';
@@ -253,11 +271,11 @@ export function assessGeneral(facts: ProductFacts, scope: ScopeResult): GeneralA
         ? { key: 'feeding_statement', label: 'Feeding statement', points: feeding.points, maxPoints: 15, status: feeding.status, explanation: feeding.text }
         : { key: 'feeding_statement', label: 'Feeding statement', points: 0, maxPoints: 15, status: 'unverified', explanation: 'Not available yet.' },
     );
-    if (!coreGa) missingForScore.push('guaranteed analysis (protein, fat, fiber)');
+    // Essential: the ingredient list or the guaranteed analysis (either gives a bounded label assessment).
+    if (!coreGa && !hasIngredients) missingForScore.push('ingredient list or guaranteed analysis (protein, fat, fiber)');
     components.push(presence('core_guarantees', 'Required guarantees (protein, fat, fiber)', 25, coreGa, 'Protein, fat and fiber guarantees are listed.', 'Not available yet.'));
     components.push(presence('calories', 'Calorie content statement', 20, caloriesKnown, 'Calorie content is listed, which helps keep treats under about 10% of daily calories.', 'Not available yet.'));
     components.push(presence('moisture', 'Moisture guarantee', 5, moistureKnown, 'Moisture is listed.', 'Not available yet.'));
-    if (!hasIngredients) missingForScore.push('ingredient list');
     components.push(concernComponent('concerns', 35, 35, 10, notes, hasIngredients));
   }
 
@@ -268,9 +286,17 @@ export function assessGeneral(facts: ProductFacts, scope: ScopeResult): GeneralA
       scoreApplicable: true,
       score: null,
       scoreBand: null,
-      scoreLabel: 'Not enough information to score',
+      scoreLabel: scope.status === 'unknown' ? 'Not scored yet' : 'Not enough information to score',
       scoreProvisional: false,
-      scoreWithheldReason: `Purrbi needs the ${missingForScore.join(', ')} before it can score this ${categoryLabel(category).toLowerCase()}.`,
+      scoreWithheldReason:
+        scope.status === 'unknown'
+          ? 'Not scored yet: it isn’t confirmed whether this product is made for cats or dogs.'
+          : category === 'unknown'
+            ? 'Purrbi needs to know whether this is a complete food, a treat or a supplement before it can score it.'
+            : `Purrbi needs the ${missingForScore.join(', ')} before it can score this ${categoryLabel(category).toLowerCase()}.`,
+      scoreCoverage: null,
+      scoreMaxPossible: null,
+      scoreBasis: '',
       components,
       findings,
       missingForScore,
@@ -280,7 +306,9 @@ export function assessGeneral(facts: ProductFacts, scope: ScopeResult): GeneralA
   const score = components.reduce((s, c) => s + c.points, 0);
   const max = components.reduce((s, c) => s + c.maxPoints, 0);
   if (max !== 100) throw new Error(`score components must total 100, got ${max}`);
-  const provisional = components.some((c) => c.status === 'unverified');
+  const unverified = components.filter((c) => c.status === 'unverified');
+  const provisional = unverified.length > 0;
+  const missingPoints = unverified.reduce((s, c) => s + c.maxPoints, 0);
   const b = band(score);
   return {
     ...explained,
@@ -288,9 +316,16 @@ export function assessGeneral(facts: ProductFacts, scope: ScopeResult): GeneralA
     scoreApplicable: true,
     score,
     scoreBand: b.band,
-    scoreLabel: b.label,
+    // A provisional score is a lower bound; with 20 or more points still unverified it is labelled by
+    // its coverage, not by a quality band.
+    scoreLabel: provisional && missingPoints >= 20 ? 'Partial assessment' : b.label,
     scoreProvisional: provisional,
     scoreWithheldReason: null,
+    scoreCoverage: 100 - missingPoints,
+    scoreMaxPossible: score + missingPoints,
+    scoreBasis: provisional
+      ? `Based on ${100 - missingPoints} of 100 points’ worth of label information; ${unverified.map((c) => c.label.toLowerCase()).join(', ')} could add up to ${missingPoints}.`
+      : 'Based on all the label information Purrbi scores for this product type.',
     components,
     findings,
     missingForScore,

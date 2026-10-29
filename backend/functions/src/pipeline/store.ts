@@ -248,6 +248,18 @@ export async function writeExplanations(db: Firestore, items: CitedExplanation[]
   await batch.commit();
 }
 
+// ---- verdicts (per owner, cached by their input) ---------------------------------
+
+/** A verdict already written for exactly this input (same product facts, assessment, pet and rules). */
+export async function readVerdict(db: Firestore, uid: string, key: string): Promise<{ text: string; model: string; source: string; createdAt: Date | null } | null> {
+  const snap = await db.doc(`users/${uid}/verdicts/${key}`).get();
+  return snap.exists ? { text: String(snap.get('text') ?? ''), model: String(snap.get('model') ?? ''), source: String(snap.get('source') ?? 'ai'), createdAt: (snap.get('createdAt') as Timestamp | undefined)?.toDate() ?? null } : null;
+}
+
+export async function saveVerdict(db: Firestore, uid: string, key: string, v: { text: string; model: string; source: string }, now: Date): Promise<void> {
+  await db.doc(`users/${uid}/verdicts/${key}`).set({ ...v, createdAt: Timestamp.fromDate(now) });
+}
+
 // ---- private label evidence ---------------------------------------------------
 
 export interface StoredLabelExtraction {
