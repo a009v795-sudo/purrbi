@@ -392,7 +392,14 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   // Enrichment runs for every product not affirmatively out of scope, wherever its record is filed.
   const aiOk = o.allowFetch && config.aiEnabled && scope.status !== 'out_of_scope';
   // Label images in the database answer missing panels and, while it is unresolved what the product is, the front.
-  const panelNeeds = () => missingInfo(facts, scope, scope.category).map((r) => r.purpose).filter((p) => p === 'ingredients' || p === 'nutrition' || (p === 'front' && scope.status === 'unknown'));
+  // When the product type is unclear, the nutrition panel (its feeding statement says complete or complementary) helps too.
+  const typeUnclear = scope.status === 'unknown' || scope.category === 'unknown';
+  const panelNeeds = () => [
+    ...new Set([
+      ...missingInfo(facts, scope, scope.category).map((r) => r.purpose).filter((p) => p === 'ingredients' || p === 'nutrition' || (p === 'front' && typeUnclear)),
+      ...(scope.category === 'unknown' && scope.status === 'supported' && !facts.adequacy ? (['nutrition'] as const) : []),
+    ]),
+  ];
 
   // 2a. Label images already published in the pet database, read by AI.
   // Due per panel: a panel never tried (e.g. the front, once it is unresolved what the product is) is read
@@ -435,12 +442,14 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
 
   // 2b. Bounded manufacturer/web research.
   // Research also runs when it is unresolved whether the product is for cats or dogs.
-  const stillMissing = scope.status === 'unknown' || missingInfo(facts, scope, scope.category).some((r) => r.purpose !== 'front' || !facts.productName);
+  const stillMissing = scope.status === 'unknown' || scope.category === 'unknown' || missingInfo(facts, scope, scope.category).some((r) => r.purpose !== 'front' || !facts.productName);
   const hasWeb = facts.sources.some((s) => s.sourceType === 'manufacturer' || s.sourceType === 'retailer_or_web');
   const researchDue =
     ageDays(meta.enrichment.researchAt, now) > config.productFreshDays ||
     meta.enrichment.research?.version !== RESEARCH_VERSION ||
-    (meta.enrichment.research?.outcome === 'fetch_failed' && ageDays(meta.enrichment.researchAt, now) * 24 >= 12);
+    (meta.enrichment.research?.outcome === 'fetch_failed' && ageDays(meta.enrichment.researchAt, now) * 24 >= 12) ||
+    // A search made while it was unknown who the product is for could not use pages matched by brand and name.
+    (meta.enrichment.research?.species === 'unknown' && scope.species !== 'unknown' && !!meta.enrichment.research.filled && meta.enrichment.research.filled.length === 0);
   if (aiOk && config.researchEnabled && stillMissing && !hasWeb && researchDue) {
     await setStatus(deps, o.uid, o.scanId, SCAN_STATUS.researching, 'Looking for the manufacturer’s label information', 40);
     try {
@@ -460,7 +469,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       const src = r.sources[0];
       meta.enrichment.researchAt = now;
       const unreachable = !r.facts && r.fetchFailed === true;
-      meta.enrichment.research = { filled, discarded: r.discarded, source: src ? `${src.sourceName} (${src.sourceType})` : '', version: RESEARCH_VERSION, outcome: unreachable ? 'fetch_failed' : 'done' };
+      meta.enrichment.research = { filled, discarded: r.discarded, source: src ? `${src.sourceName} (${src.sourceType})` : '', version: RESEARCH_VERSION, outcome: unreachable ? 'fetch_failed' : 'done', species: scope.species };
       metaChanged = true;
       const pageKind = src?.sourceType === 'manufacturer' ? 'manufacturer page' : 'web page';
       if (r.facts && r.verified?.length) job.evidenceNotes.push(...r.verified);

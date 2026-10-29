@@ -28,8 +28,12 @@ export function buildSummary(
     out.push('No pet recommendation is given for products outside Purrbi’s scope.');
     return out;
   }
-  const what = general.category === 'unknown' ? 'a pet product' : `a ${categoryLabel(general.category).toLowerCase()}`;
-  out.push(`${name} is ${what} for ${speciesLabel(scope.species).toLowerCase()}.`);
+  // Never call a product a pet product before it is confirmed as one.
+  if (scope.status === 'unknown') out.push(`It isn’t confirmed yet whether ${name} is made for cats or dogs.`);
+  else {
+    const what = general.category === 'unknown' ? 'a cat or dog product of an unclear type' : `a ${categoryLabel(general.category).toLowerCase()}`;
+    out.push(`${name} is ${what} for ${speciesLabel(scope.species).toLowerCase()}.`);
+  }
 
   if (!general.scoreApplicable) out.push(general.scoreWithheldReason ?? 'This product type is not scored.');
   else if (general.score === null) out.push(general.scoreWithheldReason ?? 'There isn’t enough label information to score it yet.');
