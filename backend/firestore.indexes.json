@@ -41,6 +41,34 @@
           "order": "ASCENDING"
         }
       ]
+    },
+    {
+      "collectionGroup": "pets",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "onboardingComplete",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "pets",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "onboardingComplete",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "updatedAt",
+          "order": "DESCENDING"
+        }
+      ]
     }
   ],
   "fieldOverrides": []

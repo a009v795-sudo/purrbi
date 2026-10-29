@@ -979,6 +979,19 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                                                         true;
                                                                     safeSetState(
                                                                         () {});
+                                                                    safeSetState(
+                                                                        () {
+                                                                      _model.isDataUploading_uploadData =
+                                                                          false;
+                                                                      _model.uploadedLocalFile_uploadData = FFUploadedFile(
+                                                                          bytes:
+                                                                              Uint8List.fromList([]),
+                                                                          originalFilename:
+                                                                              '');
+                                                                      _model.uploadedFileUrl_uploadData =
+                                                                          '';
+                                                                    });
+
                                                                     final selectedMedia =
                                                                         await selectMediaWithSourceBottomSheet(
                                                                       context:
@@ -1063,74 +1076,69 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                                                     }
 
                                                                     if (_model
-                                                                            .uploadedFileUrl_uploadData ==
+                                                                            .uploadedFileUrl_uploadData !=
                                                                         '') {
-                                                                      _model.uploading =
-                                                                          false;
-                                                                      safeSetState(
-                                                                          () {});
+                                                                      var photosRecordReference =
+                                                                          PhotosRecord.createDoc(
+                                                                              currentUserReference!);
+                                                                      await photosRecordReference
+                                                                          .set({
+                                                                        ...createPhotosRecordData(
+                                                                          scanId:
+                                                                              widget!.scanId,
+                                                                          purpose:
+                                                                              requestItem.purpose,
+                                                                          imageUrl:
+                                                                              _model.uploadedFileUrl_uploadData,
+                                                                          status:
+                                                                              'uploaded',
+                                                                        ),
+                                                                        ...mapToFirestore(
+                                                                          {
+                                                                            'createdAt':
+                                                                                FieldValue.serverTimestamp(),
+                                                                          },
+                                                                        ),
+                                                                      });
+                                                                      _model.document =
+                                                                          PhotosRecord
+                                                                              .getDocumentFromData({
+                                                                        ...createPhotosRecordData(
+                                                                          scanId:
+                                                                              widget!.scanId,
+                                                                          purpose:
+                                                                              requestItem.purpose,
+                                                                          imageUrl:
+                                                                              _model.uploadedFileUrl_uploadData,
+                                                                          status:
+                                                                              'uploaded',
+                                                                        ),
+                                                                        ...mapToFirestore(
+                                                                          {
+                                                                            'createdAt':
+                                                                                DateTime.now(),
+                                                                          },
+                                                                        ),
+                                                                      }, photosRecordReference);
+                                                                      ScaffoldMessenger.of(
+                                                                              context)
+                                                                          .showSnackBar(
+                                                                        SnackBar(
+                                                                          content:
+                                                                              Text(
+                                                                            'Photo added. Reading the label…',
+                                                                            style:
+                                                                                TextStyle(),
+                                                                          ),
+                                                                          duration:
+                                                                              Duration(milliseconds: 4000),
+                                                                        ),
+                                                                      );
                                                                     }
-
-                                                                    var photosRecordReference =
-                                                                        PhotosRecord.createDoc(
-                                                                            currentUserReference!);
-                                                                    await photosRecordReference
-                                                                        .set({
-                                                                      ...createPhotosRecordData(
-                                                                        scanId:
-                                                                            widget!.scanId,
-                                                                        purpose:
-                                                                            requestItem.purpose,
-                                                                        imageUrl:
-                                                                            _model.uploadedFileUrl_uploadData,
-                                                                        status:
-                                                                            'uploaded',
-                                                                      ),
-                                                                      ...mapToFirestore(
-                                                                        {
-                                                                          'createdAt':
-                                                                              FieldValue.serverTimestamp(),
-                                                                        },
-                                                                      ),
-                                                                    });
-                                                                    _model.document =
-                                                                        PhotosRecord
-                                                                            .getDocumentFromData({
-                                                                      ...createPhotosRecordData(
-                                                                        scanId:
-                                                                            widget!.scanId,
-                                                                        purpose:
-                                                                            requestItem.purpose,
-                                                                        imageUrl:
-                                                                            _model.uploadedFileUrl_uploadData,
-                                                                        status:
-                                                                            'uploaded',
-                                                                      ),
-                                                                      ...mapToFirestore(
-                                                                        {
-                                                                          'createdAt':
-                                                                              DateTime.now(),
-                                                                        },
-                                                                      ),
-                                                                    }, photosRecordReference);
                                                                     _model.uploading =
                                                                         false;
                                                                     safeSetState(
                                                                         () {});
-                                                                    ScaffoldMessenger.of(
-                                                                            context)
-                                                                        .showSnackBar(
-                                                                      SnackBar(
-                                                                        content:
-                                                                            Text(
-                                                                          'Photo added. Reading the label…',
-                                                                          style:
-                                                                              TextStyle(),
-                                                                        ),
-                                                                        duration:
-                                                                            Duration(milliseconds: 4000),
-                                                                      ),
-                                                                    );
 
                                                                     safeSetState(
                                                                         () {});

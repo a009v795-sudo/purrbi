@@ -1,9 +1,9 @@
 name: backend-ci
 on:
   push:
-    paths: ['backend/**', '.github/workflows/backend-ci.yml']
+    paths: ['backend/**', 'app/lib/**', '.github/workflows/backend-ci.yml']
   pull_request:
-    paths: ['backend/**']
+    paths: ['backend/**', 'app/lib/**']
   workflow_dispatch:
 
 jobs:
@@ -28,6 +28,9 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npx tsc -p tsconfig.test.json
+      - name: Every app query that needs a composite index has one
+        working-directory: backend/tools
+        run: node check-indexes.mjs
       - name: Unit tests (domain logic, mocked inputs)
         run: npm test
       - run: npm install -g firebase-tools@15.34.1
