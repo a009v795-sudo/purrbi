@@ -11,7 +11,7 @@ import { parseActiveIngredients } from '../domain/supplements';
 import type { ProductFacts, SourceRef } from '../domain/types';
 import { httpRequest, SourceError } from '../util/http';
 
-export const RESEARCH_VERSION = 'research-1.5.0'; // 1.5.0: who it is for only from a page proven to be this product
+export const RESEARCH_VERSION = 'research-1.6.0'; // 1.5.0: who it is for only from a page proven to be this product; 1.6.0: recipes compared in order, tolerant of naming
 
 const nullableString = { type: ['string', 'null'] };
 const SCHEMA = {
@@ -95,6 +95,46 @@ const wordsKey = (s: string) => normalizeIngredientName(s).replace(/[^a-z0-9]+/g
 const numberOnPage = (raw: string, n: number) => raw.includes(String(n)) || raw.includes(String(n).replace('.', ','));
 
 const canonical = (u: string) => u.replace(/#.*$/, '').replace(/[?&]utm_[^&]*/g, '').replace(/\/$/, '');
+
+/** An ingredient's name without percentages, parentheses or the trailing plural, as words. */
+const ingredientWords = (name: string) =>
+  normalizeIngredientName(name.replace(/\([^)]*\)/g, ' '))
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w) => (w.length > 3 && w.endsWith('s') ? w.slice(0, -1) : w));
+
+/** The same ingredient written slightly differently ("Dried Plain Beet Pulp" / "Dried Beet Pulp"). */
+function sameIngredient(a: string, b: string): boolean {
+  const x = new Set(ingredientWords(a));
+  const y = new Set(ingredientWords(b));
+  if (!x.size || !y.size) return false;
+  const shared = [...x].filter((w) => y.has(w)).length;
+  return shared / Math.max(x.size, y.size) >= 0.75;
+}
+
+/**
+ * How many of the first ingredients (up to ten) two lists share in the same order (longest common
+ * subsequence, so one ingredient listed elsewhere does not shift the rest), and which did not match.
+ */
+export function compareRecipes(record: string[], page: string[]): { compared: number; same: number; unmatched: string[] } {
+  const a = record.slice(0, 10);
+  const b = page.slice(0, 10);
+  const compared = Math.min(a.length, b.length);
+  if (!compared) return { compared: 0, same: 0, unmatched: [] };
+  const t = Array.from({ length: a.length + 1 }, () => new Array<number>(b.length + 1).fill(0));
+  for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) t[i][j] = sameIngredient(a[i - 1], b[j - 1]) ? t[i - 1][j - 1] + 1 : Math.max(t[i - 1][j], t[i][j - 1]);
+  const matchedPage = new Set<number>();
+  for (let i = a.length, j = b.length; i > 0 && j > 0; ) {
+    if (sameIngredient(a[i - 1], b[j - 1]) && t[i][j] === t[i - 1][j - 1] + 1) {
+      matchedPage.add(j - 1);
+      i--;
+      j--;
+    } else if (t[i - 1][j] >= t[i][j - 1]) i--;
+    else j--;
+  }
+  return { compared, same: Math.min(compared, t[a.length][b.length]), unmatched: b.filter((_, j) => !matchedPage.has(j)) };
+}
 
 export interface ResearchOutcome {
   facts: Partial<ProductFacts> | null;
@@ -213,13 +253,12 @@ async function researchAttempt(opts: ResearchOptions, user: string): Promise<Res
   // Same recipe? The first ingredients (up to ten) on the page are compared, in order, with the
   // database record. Fewer than 80% the same: another recipe or formulation (a similarly named
   // variant), and nothing from the page is used.
-  const known = (opts.knownIngredients ?? []).map((i) => normalizeIngredientName(i)).filter(Boolean);
-  const onPageNames = listedOnPage ? parsed.map((x) => normalizeIngredientName(x.name)) : [];
-  const compared = Math.min(10, known.length, onPageNames.length);
-  const same = onPageNames.slice(0, compared).filter((x, i) => x === known[i]).length;
-  if (compared >= 3 && same < Math.ceil(compared * 0.8)) {
-    return { facts: null, sources: [], discarded: [...discarded, `the page lists another recipe (first ingredients ${parsed.slice(0, 3).map((x) => x.name).join(', ')}; the database record lists ${(opts.knownIngredients ?? []).slice(0, 3).join(', ')}), so nothing from it was used`], model };
+  const recipe = compareRecipes(opts.knownIngredients ?? [], listedOnPage ? parsed.map((x) => x.name) : []);
+  const { compared, same } = recipe;
+  if (compared >= 3 && same < Math.ceil(compared * 0.6)) {
+    return { facts: null, sources: [], discarded: [...discarded, `the page lists another recipe: ${same} of the first ${compared} ingredients match the database record in order (page: ${parsed.slice(0, 5).map((x) => x.name).join(', ')}; record: ${(opts.knownIngredients ?? []).slice(0, 5).join(', ')}), so nothing from it was used`], model };
   }
+  if (compared >= 3) discarded.push(`recipe check: ${same} of the first ${compared} ingredients match the database record in order${recipe.unmatched.length ? ` (not matched: ${recipe.unmatched.slice(0, 3).join(', ')})` : ''}`);
   const sameRecipe = compared >= 5 && same >= Math.ceil(compared * 0.8);
   // Strong identity: the page shows this barcode, or the same recipe. Brand and name alone are weak:
   // a brand often sells cat and dog recipes under the same name.

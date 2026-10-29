@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { normalizeBarcode } from '../../src/domain/barcode';
 import { classifyScope, feedMarkers } from '../../src/domain/scope';
 import { lookupOpenFacts, openFactsToFacts } from '../../src/sources/openFacts';
+import { compareRecipes } from '../../src/sources/research';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -71,5 +72,19 @@ describe('Open*Facts lookups: a miss says where the record is filed', () => {
       { text: 'Grain free chicken & Pea recipe', source: 'off:0099482480882', kind: 'name' },
     ]);
     expect(facts.ingredients?.value.slice(0, 3)).toEqual(['Chicken', 'Chicken Meal', 'Peas']);
+  });
+});
+
+describe('same recipe or another one', () => {
+  const record = WHOLE_PAWS_INGREDIENTS.split(', ');
+  it('recognises the same recipe written slightly differently or with one ingredient moved', () => {
+    const page = ['Chicken', 'Chicken Meal', 'Peas', 'Turkey Meal', 'Garbanzo Beans', 'Chicken Fat (Preserved with Mixed Tocopherols)', 'Flaxseed', 'Dried Beet Pulp', 'Natural Flavors', 'Salmon Oil'];
+    expect(compareRecipes(record, page)).toMatchObject({ compared: 10, same: 9 });
+  });
+  it('tells another recipe of the same brand apart', () => {
+    const salmon = ['Salmon', 'Salmon Meal', 'Sweet Potatoes', 'Peas', 'Pea Protein', 'Canola Oil', 'Tapioca', 'Natural Flavor', 'Potassium Chloride', 'Salt'];
+    const r = compareRecipes(record, salmon);
+    expect(r.same).toBeLessThan(6);
+    expect(r.unmatched).toContain('Salmon');
   });
 });
