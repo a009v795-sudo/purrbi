@@ -1,0 +1,24 @@
+name: live-probe
+# Read-only look at what Open Pet Food Facts and its sister databases return for given barcodes
+# (status, redirects, product_type, classification fields), from GitHub's network. No credentials.
+on:
+  workflow_dispatch:
+    inputs:
+      barcodes:
+        description: Barcodes separated by spaces
+        required: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Probe
+        env:
+          BARCODES: ${{ inputs.barcodes }}
+        run: node backend/tools/probe-barcode.mjs $BARCODES
