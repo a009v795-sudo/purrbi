@@ -11,7 +11,7 @@ import { parseActiveIngredients } from '../domain/supplements';
 import type { ProductFacts, ProductSpecies, SourceRef } from '../domain/types';
 import { httpRequest, SourceError } from '../util/http';
 
-export const RESEARCH_VERSION = 'research-1.2.0';
+export const RESEARCH_VERSION = 'research-1.3.0';
 
 const nullableString = { type: ['string', 'null'] };
 const SCHEMA = {
@@ -66,17 +66,32 @@ const SYSTEM = [
   'source_urls must list the exact pages that show the information.',
 ].join(' ');
 
+const charFrom = (code: number) => (code > 0 && code < 0x110000 ? String.fromCodePoint(code) : ' ');
+
 function htmlToText(html: string): string {
   return html
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
     .replace(/<[^>]+>/g, ' ')
+    .replace(/&#(\d+);/g, (_, d: string) => charFrom(Number(d)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, h: string) => charFrom(parseInt(h, 16)))
+    // accented letters (é, ü, ç …) by their base letter: the comparisons below ignore accents anyway
+    .replace(/&([a-zA-Z])(acute|grave|circ|uml|tilde|cedil|ring|slash);/g, '$1')
+    .replace(/&szlig;/g, 'ss')
+    .replace(/&(oe|ae)lig;/gi, '$1')
     .replace(/&nbsp;/g, ' ')
     .replace(/&amp;/g, '&')
-    .replace(/&#39;|&apos;/g, "'")
-    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;|&rsquo;|&lsquo;/g, "'")
+    .replace(/&quot;|&ldquo;|&rdquo;/g, '"')
+    .replace(/&(reg|trade|copy);/g, ' ')
     .replace(/\s+/g, ' ');
 }
+
+/** Words only: case, accents, punctuation, symbols (®, ™) and markup gaps do not matter. */
+const wordsKey = (s: string) => normalizeIngredientName(s).replace(/[^a-z0-9]+/g, ' ').trim();
+
+/** A number as printed on the page, with a decimal point or a decimal comma (EU labels). */
+const numberOnPage = (raw: string, n: number) => raw.includes(String(n)) || raw.includes(String(n).replace('.', ','));
 
 const canonical = (u: string) => u.replace(/#.*$/, '').replace(/[?&]utm_[^&]*/g, '').replace(/\/$/, '');
 
@@ -127,8 +142,8 @@ export async function researchProduct(opts: {
     try {
       const res = await httpRequest(url, { source: 'web page', headers: { 'User-Agent': opts.userAgent, Accept: 'text/html' }, timeoutMs: 8000, retries: 0 });
       const plain = htmlToText(res.text).slice(0, 400000);
-      // text: normalised for phrase checks; raw: keeps numbers and percentages for value checks
-      pages.push({ url, text: normalizeIngredientName(plain), raw: plain.toLowerCase() });
+      // text: words only, for phrase checks; raw: keeps numbers and percentages for value checks
+      pages.push({ url, text: ` ${wordsKey(plain)} `, raw: plain.toLowerCase() });
     } catch (err) {
       discarded.push(`could not fetch ${url.slice(0, 120)} to verify it${err instanceof SourceError ? ` (${err.status ? `HTTP ${err.status}` : err.kind})` : ''}`);
     }
@@ -136,14 +151,17 @@ export async function researchProduct(opts: {
   if (!pages.length) return { facts: null, sources: [], discarded, model };
 
   const onPage = (needle: string | null | undefined) => {
-    const n = normalizeIngredientName(needle ?? '');
-    return !!n && pages.some((p) => p.text.includes(n));
+    const n = wordsKey(needle ?? '');
+    return !!n && pages.some((p) => p.text.includes(` ${n} `));
   };
   const barcodeOnPage = pages.some((p) => textContainsGtin(p.raw, opts.gtin14));
   const brand = data.brand ?? opts.knownBrand ?? null;
   const name = data.product_name ?? opts.knownName ?? null;
   const identityOk = barcodeOnPage || (onPage(brand) && onPage(name));
-  if (!identityOk) return { facts: null, sources: [], discarded: [...discarded, 'the cited page does not show this product’s barcode or its brand and name'], model };
+  if (!identityOk) {
+    const sought = `brand "${(brand ?? '').slice(0, 40)}"${onPage(brand) ? ' found' : ' not found'}, name "${(name ?? '').slice(0, 60)}"${onPage(name) ? ' found' : ' not found'}`;
+    return { facts: null, sources: [], discarded: [...discarded, `the cited page does not show this product’s barcode or its brand and name (${sought})`], model };
+  }
 
   const page = pages[0];
   let host = '';
@@ -172,25 +190,25 @@ export async function researchProduct(opts: {
     facts.ingredients = { value: parsed.map((i) => i.name), source };
   } else if (data.ingredients_verbatim) discarded.push('ingredients: not found verbatim on the cited page');
 
-  if (data.adequacy_statement_verbatim && onPage(data.adequacy_statement_verbatim.slice(0, 60))) {
+  if (data.adequacy_statement_verbatim && onPage(wordsKey(data.adequacy_statement_verbatim).split(' ').slice(0, 10).join(' '))) {
     const adequacy = parseAdequacyStatement(data.adequacy_statement_verbatim);
     if (adequacy) facts.adequacy = { value: adequacy, source };
   } else if (data.adequacy_statement_verbatim) discarded.push('adequacy statement: not found on the cited page');
 
   const ga = validateGuaranteedAnalysis(
     (data.guaranteed_analysis ?? [])
-      .filter((g) => pages.some((p) => p.raw.includes(String(g.value))))
+      .filter((g) => pages.some((p) => numberOnPage(p.raw, Number(g.value))))
       .map((g) => ({ nutrient: nutrientKeyFromLabel(g.label), label: g.label, qualifier: qualifierFrom(g.qualifier), value: Number(g.value), unit: normalizeUnit(g.unit) })),
   ).valid;
   if (ga.length) facts.guaranteedAnalysis = { value: ga, source };
   else if (data.guaranteed_analysis?.length) discarded.push('guaranteed analysis: values not found on the cited page');
 
   const actives = parseActiveIngredients(data.active_ingredients_verbatim?.match(/active ingredients?/i) ? data.active_ingredients_verbatim : data.active_ingredients_verbatim ? `Active ingredients: ${data.active_ingredients_verbatim}` : null)
-    .filter((a) => onPage(a.name) && (a.amount === null || pages.some((p) => p.raw.includes(String(a.amount)))));
+    .filter((a) => onPage(a.name) && (a.amount === null || pages.some((p) => numberOnPage(p.raw, Number(a.amount)))));
   if (actives.length) facts.activeIngredients = { value: actives, source };
   else if (data.active_ingredients_verbatim) discarded.push('active ingredients: not found on the cited page');
 
-  const cals = parseCalorieText(data.calorie_statement_verbatim).filter((c) => pages.some((p) => p.raw.includes(String(c.kcal)) || p.raw.includes(c.kcal.toLocaleString('en-US'))));
+  const cals = parseCalorieText(data.calorie_statement_verbatim).filter((c) => pages.some((p) => numberOnPage(p.raw, c.kcal) || p.raw.includes(c.kcal.toLocaleString('en-US'))));
   if (cals.length) facts.calories = { value: cals, source };
 
   facts.classificationSignals = [name, data.product_type, data.species !== 'unknown' ? `for ${data.species.replace('_and_', ' and ')}s` : null]

@@ -11,6 +11,7 @@ import { candidateImages, fullResolution } from '../../src/sources/labelImages';
 import { currentCalls, runWithCallLog, sanitizeUrl } from '../../src/util/diagnostics';
 import { httpRequest } from '../../src/util/http';
 import { researchJson } from '../../src/ai/openai';
+import { researchProduct } from '../../src/sources/research';
 import { facts, SRC } from '../helpers/fixtures';
 
 const GA: GuaranteedAnalysisEntry[] = [
@@ -256,6 +257,43 @@ describe('failed-call reasons and the research domain filter', () => {
     vi.stubGlobal('fetch', fetchMock);
     await expect(researchJson({ apiKey: 'test', model: 'mock', system: 's', user: 'u', format: { name: 'x', schema: { type: 'object' } }, timeoutMs: 1000, allowedDomains: ['fda.gov'] })).rejects.toThrow(/401/);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('manufacturer research', () => {
+  const PAGE = `<html><head><title>PURINA ONE® Stérilisé Saumon</title></head><body>
+    <h1>PURINA ONE<sup>&reg;</sup> St&eacute;rilis&eacute; Croquettes au Saumon</h1><p>Marque&nbsp;: Purina</p>
+    <h2>Composition</h2><p>Saumon (17%), prot&eacute;ines de volaille d&eacute;shydrat&eacute;es, bl&eacute;, ma&iuml;s</p>
+    <h2>Constituants analytiques</h2><p>Prot&eacute;ine : 34 %, Mati&egrave;res grasses brutes : 12,5 %, Cellulose brute : 3,5 %</p>
+    <p>Aliment complet pour chats adultes st&eacute;rilis&eacute;s.</p></body></html>`;
+  const answer = (over: Record<string, unknown> = {}) => ({
+    found: true, product_name: 'PURINA ONE® Stérilisé Croquettes au Saumon', brand: 'Purina', species: 'cat', product_type: 'dry cat food',
+    ingredients_verbatim: 'Saumon (17%), protéines de volaille déshydratées, blé, maïs', active_ingredients_verbatim: null,
+    adequacy_statement_verbatim: 'Aliment complet pour chats adultes stérilisés.',
+    guaranteed_analysis: [{ label: 'Protéine', qualifier: 'not_stated', value: 34, unit: '%' }, { label: 'Matières grasses brutes', qualifier: 'not_stated', value: 12.5, unit: '%' }],
+    calorie_statement_verbatim: null, source_urls: ['https://www.purina.fr/chat/purina-one-sterilise-saumon'], barcode_seen_on_source: false, ...over,
+  });
+  const stub = (json: Record<string, unknown>) =>
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => (url.startsWith('https://api.openai.com/')
+      ? new Response(JSON.stringify({ output: [{ type: 'web_search_call' }, { type: 'message', content: [{ type: 'output_text', text: JSON.stringify(json), annotations: [] }] }] }), { status: 200 })
+      : new Response(PAGE, { status: 200 }))));
+  const run = () => researchProduct({ apiKey: 'k', model: 'm', gtin14: '07613032759155', barcode: '7613032759155', knownBrand: 'Purina', userAgent: 'test', now: new Date('2026-10-29T00:00:00Z') });
+
+  it('verifies a page the model names without a search citation, ignoring markup, entities, ® and decimal commas', async () => {
+    stub(answer());
+    const r = await run();
+    expect(r.discarded).toEqual([]);
+    expect(r.sources[0]).toMatchObject({ sourceType: 'manufacturer', sourceName: 'purina.fr', matchConfidence: 'brand_and_product' });
+    expect(r.facts?.productName?.value).toBe('PURINA ONE® Stérilisé Croquettes au Saumon');
+    expect(r.facts?.ingredients?.value.slice(0, 2)).toEqual(['Saumon (17%)', 'protéines de volaille déshydratées']);
+    expect(r.facts?.adequacy?.value).toMatchObject({ type: 'complete', species: 'cat', lifeStages: ['adult_maintenance'] });
+    expect(r.facts?.guaranteedAnalysis?.value.map((g) => g.value)).toEqual([34, 12.5]); // "12,5 %" on the page
+  });
+  it('says what it looked for when the page does not show the product', async () => {
+    stub(answer({ product_name: 'Purina Gourmet Gold Mousse au Thon' }));
+    const r = await run();
+    expect(r.facts).toBeNull();
+    expect(r.discarded).toEqual(['the cited page does not show this product’s barcode or its brand and name (brand "Purina" found, name "Purina Gourmet Gold Mousse au Thon" not found)']);
   });
 });
 
