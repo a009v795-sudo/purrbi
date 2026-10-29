@@ -163,7 +163,8 @@ const sources: Sources = {
     if (verdictMode === 'fail') throw new Error('mock verdict outage');
     if (verdictMode === 'invalid') return { text: 'TEST FIXTURE: the safest food.', model: 'mock' };
     const subject = o.input.pet ? o.input.pet.name : 'a cat or dog';
-    const score = o.input.assessment.score === null ? 'not available yet' : `${o.input.assessment.score}/100${o.input.assessment.label === 'Partial assessment' ? ', a partial assessment' : ''}`;
+    const a = o.input.assessment;
+    const score = a.score === null ? 'not available yet' : a.label === 'Partial assessment' ? `a partial assessment, between ${a.low} and ${a.high} once the label is complete` : `${a.score}/100`;
     const first = o.input.cautions[0]?.value ? ` (first: ${o.input.cautions[0].value})` : '';
     return { text: `TEST FIXTURE verdict: Purrbi’s label score for this product is ${score}; for ${subject}, check the cautions listed below${first} against what you already know before choosing it.`, model: 'mock' };
   },
@@ -612,7 +613,7 @@ describe('concise result: highlights and verdict', () => {
     const s = await read(ref);
     expect(s).toMatchObject({ verdictSource: 'rules', verdictStatus: 'ready' });
     expect(s.verdict).not.toMatch(/safest/);
-    expect(s.verdict).toMatch(/Purrbi’s label score for TEST FIXTURE Salmon Cat Treats is \d+\/100/);
+    expect(s.verdict).toMatch(/Purrbi could assess \d+ of 100 points’ worth of TEST FIXTURE Salmon Cat Treats’s label, a partial assessment/);
     expect(s.diagnosticNotes.join(' ')).toMatch(/Verdict \(mock\) not used: (length|claim Purrbi does not make)/);
   });
   it('keeps the rule-based verdict when the model is unavailable, and tries again next time', async () => {
