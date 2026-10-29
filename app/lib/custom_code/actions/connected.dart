@@ -12,13 +12,42 @@ import 'package:flutter/material.dart' hide RepeatMode;
 // DO NOT REMOVE OR MODIFY THE CODE ABOVE!
 
 import 'package:internet_connection_checker_plus/internet_connection_checker_plus.dart';
+import 'package:http/http.dart' as http;
 import 'package:flutter/widgets.dart';
 import 'dart:async';
 
 // Global instances (do not remove)
 StreamSubscription<InternetStatus>? _connectionSubscription;
 AppLifecycleListener? _lifecycleListener;
-final InternetConnection _connection = InternetConnection();
+// Reachability of the Firebase services Purrbi uses; no third-party hosts are contacted. A keyless
+// request to the Auth API is refused before any project is involved (no cost). The check uses GET
+// because Google answers the package's default HEAD without CORS headers, which a browser cannot
+// read. Any HTTP answer below 500 means "reachable".
+final InternetConnection _connection = InternetConnection.createInstance(
+  useDefaultOptions: false,
+  checkInterval: const Duration(seconds: 30),
+  customCheckOptions: [
+    InternetCheckOption(
+      uri: Uri.parse('https://identitytoolkit.googleapis.com/v1/projects'),
+      timeout: const Duration(seconds: 5),
+    ),
+    InternetCheckOption(
+      uri: Uri.parse('https://firebase.googleapis.com/v1beta1/projects'),
+      timeout: const Duration(seconds: 5),
+    ),
+  ],
+  customConnectivityCheck: (option) async {
+    try {
+      final response = await http
+          .get(option.uri, headers: option.headers)
+          .timeout(option.timeout);
+      return InternetCheckResult(
+          option: option, isSuccess: response.statusCode < 500);
+    } catch (_) {
+      return InternetCheckResult(option: option, isSuccess: false);
+    }
+  },
+);
 
 Future connected() async {
   // Add your function code here!

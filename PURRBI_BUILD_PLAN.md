@@ -82,6 +82,7 @@ References (read-only): Moxis FlutterFlow `moxis-one-x51584` (pulled and export,
 - Document ids in actions: FlutterFlow can't read `.id` from a reference inside an action, so the id is taken from page state through a code expression (`(petRef).id.trim()`); query items use `item.reference.id`.
 - FlutterFlow's export includes its own `firebase/` rules with **open reads**; they are never deployed (only `backend/` is) and `app/.gitignore` keeps them out of the repository.
 - Firebase client config (`google-services.json`, `GoogleService-Info.plist`, `firebase_config.dart`) is not committed while the repository is public (secret scanning push protection would flag the Firebase API key); builds here use the local export.
+- **Template defect fixed:** the template's connectivity check (`connected` custom action) polled four unrelated third-party hosts every 10 s (icanhazip.com, one.one.one.one, jsonplaceholder.typicode.com, pokeapi.co), and the sign-in/sign-up buttons refused to work when they were unreachable. It now checks only Firebase's own Auth/Firebase API hosts every 30 s with a keyless GET (refused before any project is involved, so no cost; GET because Google answers HEAD without CORS headers).
 - Still template content: profile/edit-profile fields, Terms link on Welcome without action.
 
 ## Environment limits found in this session
