@@ -190,6 +190,7 @@ describe('failed-call reasons and the research domain filter', () => {
     expect(bodies).toHaveLength(2);
     expect((bodies[0].tools as { filters?: unknown }[])[0].filters).toEqual({ allowed_domains: ['fda.gov'] });
     expect((bodies[1].tools as { filters?: unknown }[])[0].filters).toBeUndefined();
+    expect(JSON.stringify(bodies[1].input)).toContain('Search and cite only pages on these sites: fda.gov.');
   });
   it('does not retry other failures', async () => {
     const fetchMock = vi.fn(async () => new Response('{"error":{"message":"bad key"}}', { status: 401 }));

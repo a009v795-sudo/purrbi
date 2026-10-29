@@ -158,3 +158,47 @@ describe('life stage', () => {
     expect(petLifeStage(pet({ birthDate: null, approxAgeMonths: null }), NOW).stage).toBe('unknown');
   });
 });
+
+describe('EU labels (found by the live scan of a French label)', () => {
+  it('recognises the analytical constituents in French, German, Spanish/Portuguese, Italian and Dutch', async () => {
+    const { nutrientKeyFromLabel } = await import('../../src/domain/nutrition');
+    const cases: [string, string][] = [
+      ['Crude Protein', 'crude_protein'], ['Protéine', 'crude_protein'], ['Protéines brutes', 'crude_protein'], ['Rohprotein', 'crude_protein'],
+      ['Proteína bruta', 'crude_protein'], ['Proteine grezze', 'crude_protein'], ['Ruw eiwit', 'crude_protein'],
+      ['Crude Fat', 'crude_fat'], ['Teneur en matières grasses', 'crude_fat'], ['Matières grasses brutes', 'crude_fat'], ['Rohfett', 'crude_fat'],
+      ['Grasa bruta', 'crude_fat'], ['Grassi grezzi', 'crude_fat'], ['Ruw vet', 'crude_fat'], ['Gordura bruta', 'crude_fat'],
+      ['Crude Fiber', 'crude_fiber'], ['Fibre', 'crude_fiber'], ['Cellulose brute', 'crude_fiber'], ['Rohfaser', 'crude_fiber'],
+      ['Fibra bruta', 'crude_fiber'], ['Fibra grezza', 'crude_fiber'], ['Ruwe celstof', 'crude_fiber'],
+      ['Moisture', 'moisture'], ['Humidité', 'moisture'], ['Feuchtigkeit', 'moisture'], ['Humedad', 'moisture'], ['Umidità', 'moisture'], ['Vocht', 'moisture'],
+      ['Crude Ash', 'ash'], ['Cendres brutes', 'ash'], ['Matières minérales', 'ash'], ['Rohasche', 'ash'], ['Ceniza bruta', 'ash'], ['Ceneri grezze', 'ash'], ['Ruwe as', 'ash'],
+      ['Phosphore', 'phosphorus'], ['Natrium', 'sodium'], ['Acides gras Oméga 3', 'omega_3'], ['Acides gras Omega 6', 'omega_6'],
+      ['Iodate de calcium anhydre', 'other'], ['Sulfate de zinc', 'other'], ['Vitamine A', 'other'],
+    ];
+    for (const [label, key] of cases) expect([label, nutrientKeyFromLabel(label)]).toEqual([label, key]);
+  });
+  it('re-matches a stored French analysis so the product can be scored, and drops min/max the label never printed', async () => {
+    const { rematchAnalysis, hasCoreGuaranteedAnalysis } = await import('../../src/domain/nutrition');
+    // As stored by the live scan of 7613032759155 (read from its French label image).
+    const stored = [
+      { nutrient: 'other', label: 'Protéine', qualifier: 'min', value: 35, unit: '%' },
+      { nutrient: 'other', label: 'Teneur en matières grasses', qualifier: 'max', value: 13, unit: '%' },
+      { nutrient: 'crude_fiber', label: 'Fibre', qualifier: 'max', value: 2, unit: '%' },
+      { nutrient: 'other', label: 'Humidité', qualifier: 'max', value: 10, unit: '%' },
+      { nutrient: 'calcium', label: 'Iodate de calcium anhydre', qualifier: 'max', value: 0.2, unit: '%' },
+    ] as const;
+    expect(hasCoreGuaranteedAnalysis(stored as never)).toBe(false);
+    const fixed = rematchAnalysis(stored as never);
+    expect(hasCoreGuaranteedAnalysis(fixed)).toBe(true);
+    expect(fixed.map((e) => [e.nutrient, e.qualifier])).toEqual([
+      ['crude_protein', 'not_stated'], ['crude_fat', 'not_stated'], ['crude_fiber', 'not_stated'], ['moisture', 'not_stated'], ['other', 'not_stated'],
+    ]);
+  });
+  it('leaves an English (US or Canadian) guaranteed analysis and its printed min/max unchanged', async () => {
+    const { rematchAnalysis } = await import('../../src/domain/nutrition');
+    const us = [
+      { nutrient: 'crude_protein', label: 'Crude Protein', qualifier: 'min', value: 30, unit: '%' },
+      { nutrient: 'crude_fiber', label: 'Crude Fibre', qualifier: 'max', value: 4, unit: '%' },
+    ] as const;
+    expect(rematchAnalysis(us as never)).toEqual(us);
+  });
+});

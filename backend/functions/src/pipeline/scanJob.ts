@@ -22,6 +22,7 @@ import { lookupOpenFacts as lookupOpenFactsImpl, openFactsToFacts, type OpenFact
 import { researchProduct as researchImpl, type ResearchOutcome } from '../sources/research';
 import { currentCalls, runWithCallLog } from '../util/diagnostics';
 import { SourceError } from '../util/http';
+import { rematchAnalysis } from '../domain/nutrition';
 import { SCAN_STATUS, type ErrorCode, type RuntimeConfig } from './config';
 import { enrichmentFacts, fillMissing, labelToFacts, missingInfo, type PhotoRequest } from './facts';
 import { explanationFields, jobFields, resultFields, type JobInfo } from './serialize';
@@ -377,6 +378,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
     facts = merged.facts;
   }
   if (labelUsed) job.evidenceNotes.push('Used details read from your label photo (AI, not reviewed).');
+  if (facts.guaranteedAnalysis) facts = { ...facts, guaranteedAnalysis: { ...facts.guaranteedAnalysis, value: rematchAnalysis(facts.guaranteedAnalysis.value) } };
   scope = scopeOf(facts, origin);
 
   // 5. Recall check (FDA), cached; skipped for out-of-scope products.

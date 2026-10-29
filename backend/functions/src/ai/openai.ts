@@ -104,7 +104,8 @@ export async function researchJson<T>(opts: {
     // The result stays restricted: callers keep only citations on the allowed sites whose quote is
     // found again on the fetched page.
     if (!(opts.allowedDomains?.length && err instanceof SourceError && err.status === 400)) throw err;
-    ({ json } = await send({ ...body, tools: [{ type: 'web_search' }] }));
+    const sites = `Search and cite only pages on these sites: ${opts.allowedDomains.join(', ')}.`;
+    ({ json } = await send({ ...body, tools: [{ type: 'web_search' }], input: [{ role: 'system', content: `${opts.system} ${sites}` }, body.input[1]] }));
   }
   const message = json?.output?.find((o) => o.type === 'message');
   const part = message?.content?.find((c) => c.type === 'output_text');

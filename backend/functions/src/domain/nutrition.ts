@@ -2,28 +2,58 @@
 // dry-matter figures are derived and labelled as calculated.
 import type { CalorieStatement, CaloriePer, GuaranteedAnalysisEntry, NutrientKey } from './types';
 
+// Matched on the label without accents. English (US guaranteed analysis) first, then the EU
+// "analytical constituents" terms in French, German, Spanish/Portuguese, Italian and Dutch.
 const NUTRIENT_PATTERNS: [RegExp, NutrientKey][] = [
-  [/\b(crude )?protein\b/, 'crude_protein'],
-  [/\b(crude )?fat\b|\bfat content\b|\boils and fats\b/, 'crude_fat'],
-  [/\b(crude )?fib(er|re)s?\b/, 'crude_fiber'],
-  [/\bmoisture\b|\bwater\b/, 'moisture'],
-  [/\b(crude )?ash\b|\binorganic matter\b/, 'ash'],
-  [/\bcalcium\b/, 'calcium'],
-  [/\bphosphorus\b/, 'phosphorus'],
-  [/\bsodium\b/, 'sodium'],
-  [/\bmagnesium\b/, 'magnesium'],
-  [/\btaurine\b/, 'taurine'],
+  [/\b(crude )?protein\b|\bprotei(ne|nes|na|nas)\b|\brohprotein\b|\b(ruw )?eiwit\b/, 'crude_protein'],
+  [/\b(crude )?fat\b|\bfat content\b|\boils and fats\b|\bmatieres? grasses?\b|\bgraisses?\b|\blipides?\b|\brohfett\b|\bfett(gehalt)?\b|\bgrasas?\b|\bmateria grasa\b|\bgrass[io]\b|\b(ruw )?vet(gehalte)?\b|\bgordura\b/, 'crude_fat'],
+  [/\b(crude )?fib(er|re)s?\b|\bcellulose brute\b|\brohfaser\b|\bfibras?\b|\bruwe? (celstof|vezels?)\b/, 'crude_fiber'],
+  [/\bmoisture\b|\bwater\b|\bhumidite\b|\bfeuchtigkeit\b|\bfeuchte\b|\bwasser(gehalt)?\b|\bhumedad\b|\bhumidade\b|\bumidita\b|\bvocht(gehalte)?\b/, 'moisture'],
+  [/\b(crude )?ash\b|\binorganic matter\b|\bcendres?\b|\bmatieres? minerales?\b|\brohasche\b|\bcenizas?\b|\bcinzas?\b|\bmateria (mineral|inorganica)\b|\bceneri\b|\bruwe as\b/, 'ash'],
+  [/\bcalcium\b|\bkalzium\b|\bcalcio\b/, 'calcium'],
+  [/\bphosphor(us|e)?\b|\bfosforo\b|\bfosfor\b/, 'phosphorus'],
+  [/\bsodium\b|\bnatrium\b|\bsodio\b/, 'sodium'],
+  [/\bmagnesium\b|\bmagnesio\b/, 'magnesium'],
+  [/\btaurin[ea]?\b/, 'taurine'],
   [/\bdha\b|\bdocosahexaenoic\b/, 'dha'],
   [/\bepa\b|\beicosapentaenoic\b/, 'epa'],
   [/\bomega[- ]?3\b/, 'omega_3'],
   [/\bomega[- ]?6\b/, 'omega_6'],
-  [/\bcarbohydrates?\b/, 'carbohydrate'],
+  [/\bcarbohydrates?\b|\bglucides?\b|\bkohlenhydrate\b|\bcarbohidratos?\b|\bcarboidrati\b|\bkoolhydraten\b/, 'carbohydrate'],
 ];
 
+// Additives declared as compounds ("sulfate de zinc", "iodate de calcium anhydre") are not analytical
+// constituents, even when their name contains a mineral.
+const COMPOUND = /\b(sulfate|sulphate|sulfat|sulfato|solfato|iodate|iodat|iodato|yodato|oxide|oxyde|oxid|oxido|ossido|carbonate|carbonat|carbonato|chloride|chlorure|chlorid|cloruro|selenite|selenit|selenito|chelate|chelat|chelato|quelato|monohydrate|hydrate|anhydre|anhydrous|wasserfrei|anidro)\b/;
+
+// EU labels declare analytical constituents without minimum or maximum.
+const EU_CONSTITUENT = /\bprotei(ne|nes|na|nas)\b|\brohprotein\b|\beiwit\b|\bmatieres? grasses?\b|\brohfett\b|\bgrasas?\b|\bgrass[io]\b|\bcellulose brute\b|\brohfaser\b|\bfibras?\b|\bcelstof\b|\bhumidite\b|\bfeuchtigkeit\b|\bhumedad\b|\bumidita\b|\bvocht\b|\bcendres?\b|\brohasche\b|\bcenizas?\b|\bceneri\b|\bruwe as\b|\bmatieres? minerales?\b/;
+
+/** Lower case, accents removed, single spaces: "Protéine brute" → "proteine brute". */
+export function plainLabel(label: string): string {
+  return label.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
 export function nutrientKeyFromLabel(label: string): NutrientKey {
-  const t = label.toLowerCase();
+  const t = plainLabel(label);
+  if (COMPOUND.test(t)) return 'other';
   for (const [re, key] of NUTRIENT_PATTERNS) if (re.test(t)) return key;
   return 'other';
+}
+
+/**
+ * Matches every analysis line again with the current names, so products read before a name was
+ * known (e.g. a French label) are assessed correctly without reading the label again. On an EU
+ * label (any line in an EU language), a line keeps "min"/"max" only when its own text prints it.
+ */
+export function rematchAnalysis(entries: GuaranteedAnalysisEntry[]): GuaranteedAnalysisEntry[] {
+  const euLabel = entries.some((e) => EU_CONSTITUENT.test(plainLabel(e.label ?? '')));
+  return entries.map((e) => {
+    const t = plainLabel(e.label ?? '');
+    const nutrient = t ? nutrientKeyFromLabel(e.label) : e.nutrient;
+    const qualifier = euLabel && (e.qualifier === 'min' || e.qualifier === 'max') && !/\b(min|max)/.test(t) ? 'not_stated' : e.qualifier;
+    return nutrient === e.nutrient && qualifier === e.qualifier ? e : { ...e, nutrient, qualifier };
+  });
 }
 
 export function normalizeUnit(raw: string | null | undefined): GuaranteedAnalysisEntry['unit'] {
