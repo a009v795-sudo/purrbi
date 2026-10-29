@@ -33,6 +33,8 @@ const USER_AGENT = defineString('SOURCE_USER_AGENT', { default: 'Purrbi/0.1 (dev
 // The project's Storage bucket (deploy-config.json storageBucket, written to .env.<projectId> by the deploy
 // workflow). Empty means the default bucket, which is what the emulators use.
 const STORAGE_BUCKET = defineString('STORAGE_BUCKET', { default: '' });
+// Development only: comma-separated barcodes whose first attempt fails like a source outage (retry test).
+const RETRY_TEST_BARCODES = defineString('RETRY_TEST_BARCODES', { default: '' });
 const storageBucket = () => getStorage().bucket(STORAGE_BUCKET.value() || undefined);
 
 function config(): RuntimeConfig {
@@ -49,6 +51,7 @@ function config(): RuntimeConfig {
     productFreshDays: 30,
     recallFreshHours: 24, // openFDA enforcement data is updated weekly
     limits: DEFAULT_LIMITS,
+    retryTestBarcodes: RETRY_TEST_BARCODES.value().split(',').map((s) => s.trim()).filter(Boolean),
   };
 }
 

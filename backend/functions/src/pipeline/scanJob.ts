@@ -176,10 +176,20 @@ async function claimAndRun(deps: Deps, uid: string, scanId: string, kind: 'scan'
     }
     await ref.update({ gtin: barcode.gtin14, barcodeKind: barcode.kind });
     log('scan claimed', { gtin: barcode.gtin14, retry: claimed.isRetry });
+    if (!claimed.isRetry && isRetryTestBarcode(deps.config, barcode.gtin14)) {
+      throw new JobError('source_unavailable', 'Simulated source outage for the retry test (development switch RETRY_TEST_BARCODES). Tap Retry.', true);
+    }
     await runAssessment(deps, job, { uid, scanId, barcode, petId: (claimed.data.petId as string) ?? null, allowFetch: true, allowExplain: true, skipPhotos: claimed.data.skipPhotos === true });
   } catch (err) {
     await failScan(deps, uid, scanId, job, err);
   }
+}
+
+function isRetryTestBarcode(config: RuntimeConfig, gtin14: string): boolean {
+  return (config.retryTestBarcodes ?? []).some((code) => {
+    const b = normalizeBarcode(code);
+    return b.ok && b.gtin14 === gtin14;
+  });
 }
 
 async function failScan(deps: Deps, uid: string, scanId: string, job: JobInfo, err: unknown) {

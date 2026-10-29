@@ -299,6 +299,22 @@ describe('failures stay specific', () => {
     expect(s.status).toBe('needs_photos');
     expect(s.productName).toBe('TEST FIXTURE Chicken Dry Cat Food');
   });
+  it('a barcode on the development retry-test list fails its first attempt only, then completes on retry', async () => {
+    const d = deps({ retryTestBarcodes: [BC.treat] });
+    const ref = await newScan('u1', BC.treat);
+    await processScan(d, 'u1', ref.id);
+    let s = await read(ref);
+    expect(s).toMatchObject({ status: 'failed', errorCode: 'source_unavailable', errorRetryable: true });
+    expect(s.errorMessage).toContain('Simulated');
+    expect(calls['lookup:opff']).toBeUndefined();
+    const before = s;
+    await ref.update({ retryRequested: true });
+    await handleScanUpdate(d, 'u1', ref.id, before, await read(ref));
+    s = await read(ref);
+    expect(s.status).toBe('complete');
+    expect(s.claimCount).toBe(2);
+    expect(calls['lookup:opff']).toBe(1);
+  });
   it('an invalid barcode fails without retry', async () => {
     const ref = await newScan('u1', '036000291453');
     await processScan(deps(), 'u1', ref.id);

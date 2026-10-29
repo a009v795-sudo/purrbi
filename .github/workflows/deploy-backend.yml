@@ -46,8 +46,13 @@ jobs:
           if [ -z "$STORAGE_BUCKET" ]; then
             echo "::error::storageBucket is empty in backend/deploy-config.json"; exit 1
           fi
-          # Functions parameters for this project (read by firebase deploy); no secrets here.
-          printf 'STORAGE_BUCKET=%s\n' "$STORAGE_BUCKET" > "functions/.env.$PROJECT_ID"
+          # Functions parameters for this project (read by firebase deploy, which needs a value for every
+          # parameter in a non-interactive deploy): the bucket and deploy-config.json functionParams.
+          # No secrets here; OPENAI_API_KEY comes from Secret Manager.
+          {
+            printf 'STORAGE_BUCKET="%s"\n' "$STORAGE_BUCKET"
+            jq -r '.functionParams // {} | to_entries[] | "\(.key)=\"\(.value)\""' deploy-config.json
+          } > "functions/.env.$PROJECT_ID"
           echo "Functions parameters (functions/.env.$PROJECT_ID):"; cat "functions/.env.$PROJECT_ID"
           # Deploy-only Firebase config that names the Storage bucket. Firebase has no "default bucket"
           # record for this project (its lookup answers 404 although the bucket is linked), so the CLI

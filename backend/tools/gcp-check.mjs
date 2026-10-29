@@ -154,6 +154,7 @@ async function verify() {
       triggerRegion: f.eventTrigger?.triggerRegion ?? null,
       secrets,
       storageBucket: f.serviceConfig?.environmentVariables?.STORAGE_BUCKET ?? null,
+      retryTestBarcodes: f.serviceConfig?.environmentVariables?.RETRY_TEST_BARCODES ?? null, // development switch
       updateTime: f.updateTime,
     };
     report.functions.push(row);

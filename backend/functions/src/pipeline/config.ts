@@ -24,6 +24,9 @@ export interface RuntimeConfig {
   productFreshDays: number;
   recallFreshHours: number;
   limits: Limits;
+  /** Development only: barcodes whose first attempt fails like a source outage, to check the owner
+   *  retry path on a deployed backend. Empty unless deploy-config.json sets RETRY_TEST_BARCODES. */
+  retryTestBarcodes?: string[];
 }
 
 export const DEFAULT_LIMITS: Limits = {
