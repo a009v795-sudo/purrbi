@@ -13,7 +13,8 @@ const norm = (s: string) =>
 // EU labels declare a "complete" or "complementary" feed in the label language (fr, de, es, it, nl, pt).
 const EU_COMPLETE = /\b(aliment complet|alleinfutter(mittel)?|(alimento|pienso|mangime) completo|volledig(e)? (dier)?voe(der|ding))\b/;
 const EU_COMPLEMENTARY = /\b(aliment complementaire|erganzungsfutter(mittel)?|(alimento|pienso) complementario|(alimento|mangime) complementare|alimento complementar|aanvullend(e)? (dier)?voe(der|ding))\b/;
-const INTERMITTENT = /\b(intermittent|supplemental feeding|for supplemental|complementary (pet )?(food|feed)|complementary feedingstuff|not (a )?complete (and balanced )?(diet|food|meal))\b/;
+const INTERMITTENT =
+  /\b(intermittent|supplemental feeding|for supplemental|complementary (pet )?(food|feed)|complementary feedingstuff|not (a )?complete (and balanced )?(diet|food|meal)|not (a )?substitute for (a )?complete (pet )?(food|feed|diet)|as with all treats)\b/;
 const COMPLETE =
   /\b(complete and balanced|formulated to meet the nutritional levels|nutrient profiles|nutritional levels established|animal feeding tests|feeding (trials?|protocols)|complete (pet |dry |wet )?(food|feed)|complete feedingstuff)\b/;
 // Life-stage words in the same languages.

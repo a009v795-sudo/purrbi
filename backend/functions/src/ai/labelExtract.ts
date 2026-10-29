@@ -132,8 +132,11 @@ const textOf = (p: RawPanel) => (p.text ?? '').trim();
 const clear = (p: RawPanel) => p.legibility === 'clear' && !!textOf(p);
 const words = (s: string) => normalizeIngredientName(s).replace(/[^a-z0-9]+/g, ' ').trim().split(' ').filter(Boolean).slice(0, 400);
 
-/** Share of words two transcriptions have in common, in order (1 = the same wording). */
-export function wordAgreement(a: string, b: string): number {
+/**
+ * Share of words two transcriptions have in common, in order (1 = the same wording). `within` compares
+ * with the shorter text instead: 1 when one reading's text is contained in the other's.
+ */
+export function wordAgreement(a: string, b: string, within = false): number {
   const x = words(a);
   const y = words(b);
   if (!x.length || !y.length) return 0;
@@ -143,7 +146,7 @@ export function wordAgreement(a: string, b: string): number {
     for (let j = 1; j <= y.length; j++) cur[j] = x[i - 1] === y[j - 1] ? prev[j - 1] + 1 : Math.max(prev[j], cur[j - 1]);
     prev = cur;
   }
-  return prev[y.length] / Math.max(x.length, y.length);
+  return prev[y.length] / (within ? Math.min(x.length, y.length) : Math.max(x.length, y.length));
 }
 
 /** The ingredient list in a panel: the text after its printed heading, up to the next section. */
@@ -297,9 +300,11 @@ export function combineReadings(a: Reading, b: Reading, scanGtin14: string): Val
   out.calories = a.calories.filter((c) => b.calories.some((d) => d.per === c.per && Math.abs(d.kcal - c.kcal) <= 1));
   if (a.calories.length + b.calories.length > 0 && !out.calories.length) rejected.push('calorie statement: the two readings differ');
 
+  // The same statement, possibly with a neighbouring sentence in one reading: the shorter one is kept.
   const sameStages = (x: AdequacyStatement, y: AdequacyStatement) => [...x.lifeStages].sort().join() === [...y.lifeStages].sort().join();
-  if (a.adequacy && b.adequacy && a.adequacy.type === b.adequacy.type && a.adequacy.species === b.adequacy.species && sameStages(a.adequacy, b.adequacy) && wordAgreement(a.adequacy.text, b.adequacy.text) >= 0.8) out.adequacy = a.adequacy;
-  else if (a.adequacy || b.adequacy) rejected.push('adequacy statement: the two readings differ');
+  const [qa, qb] = [a.adequacy, b.adequacy];
+  if (qa && qb && qa.type === qb.type && qa.species === qb.species && sameStages(qa, qb) && wordAgreement(qa.text, qb.text, true) >= 0.9) out.adequacy = qa.text.length <= qb.text.length ? qa : qb;
+  else if (qa || qb) rejected.push(`adequacy statement: the two readings differ ("${qa?.text.slice(0, 60) ?? 'none'}" / "${qb?.text.slice(0, 60) ?? 'none'}")`);
 
   const sameName = (x: string, y: string) => normalizeIngredientName(x) === normalizeIngredientName(y);
   out.activeIngredients = a.actives.filter((x) => b.actives.some((y) => sameName(x.name, y.name) && x.amount === y.amount && (x.unit ?? '').toLowerCase() === (y.unit ?? '').toLowerCase()));

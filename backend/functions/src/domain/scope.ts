@@ -34,7 +34,7 @@ const NON_FOOD = /\b(litter|toy|toys|collar|leash|harness|bowl|bed|scratcher|car
 const SUPPLEMENT =
   /\b(supplements?|multivitamins?|vitamins?|probiotics?|prebiotics?|glucosamine|chondroitin|joint (support|health|care|chews?)|hip (and|&) joint|fish oil|salmon oil|krill oil|pollock oil|calming (chews?|aid|supplement)|digestive (aid|support|chews?)|immune (support|chews?)|skin (and|&) coat (chews?|supplement|oil)|urinary (support|health) chews?|l lysine|lysine)\b/;
 const TREAT =
-  /\b(treats?|snacks?|dental (chews?|sticks?)|chews?|biscuits?|jerky|cookies|bully stick|rawhide|lickable|puree tubes?|creamy treats?|training bites|crunchies)\b/;
+  /\b(treats?|snacks?|dental (chews?|sticks?)|chews?|biscuits?|jerky|cookies|bully stick|rawhide|lickable|puree tubes?|creamy treats?|training bites|crunchies|nibbles)\b/;
 const COMPLEMENTARY = /\b(toppers?|mixers?|meal enhancers?|broths?|bone broth|gravy topper|food topper|complementary (pet )?(food|feed)|complementary feedingstuff)\b/;
 const COMPLETE_FOOD =
   /\b(kibble|dry (dog |cat )?food|wet (dog |cat )?food|complete (pet |dry |wet )?(food|feed)|dinner|entree|pate|recipe|formula|chunks in gravy|loaf|stew|canned (dog |cat )?food|dog food|cat food|pet food)\b/;
@@ -120,7 +120,8 @@ export function classifyScope(input: ScopeInput): ScopeResult {
     category = 'complete_food';
     signals.push('category:adequacy-complete');
   } else if (adequacyType === 'intermittent') {
-    category = 'complementary';
+    // "As with all treats, give as part of a balanced diet": the statement itself names a treat.
+    category = TREAT.test(norm(input.adequacy?.text ?? '')) ? 'treat' : 'complementary';
     signals.push('category:adequacy-intermittent');
   } else if (COMPLETE_FOOD.test(all)) {
     category = 'complete_food';

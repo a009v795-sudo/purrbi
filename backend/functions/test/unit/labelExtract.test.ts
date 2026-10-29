@@ -33,7 +33,7 @@ describe('grounded label reading', () => {
     expect(label.calories).toEqual([]);
     expect(label.adequacy).toBeNull();
     expect(label.ingredients).toEqual([]); // front callouts are not an ingredient list
-    expect(label.rejected).toEqual(expect.arrayContaining(['analysis: "Protein 32%" not confirmed by the second reading', 'calorie statement: the two readings differ', 'adequacy statement: the two readings differ']));
+    expect(label.rejected).toEqual(expect.arrayContaining(['analysis: "Protein 32%" not confirmed by the second reading', 'calorie statement: the two readings differ', 'adequacy statement: the two readings differ ("Complete and balanced" / "none")']));
     expect(label.version).toBe(LABEL_EXTRACTION_VERSION);
   });
   it('keeps what both readings of a legible back label say, parsed by Purrbi’s own rules', () => {
@@ -55,6 +55,14 @@ describe('grounded label reading', () => {
     expect(label.ingredients).toEqual([]); // the second reading could not read the whole list
     expect(label.guaranteedAnalysis.map((g) => `${g.nutrient}:${g.value}`)).toEqual(['crude_fat:16', 'ash:8']);
     expect(label.rejected).toEqual(expect.arrayContaining(['ingredients: only one reading found a printed ingredient list', 'analysis: "Protéine / Proteína / Protein 35%" not confirmed by the second reading']));
+  });
+  it('keeps a treat statement that one reading printed on its own and the other inside the feeding guide', () => {
+    // As printed on a real UK treat pack (Coshida Crunchy n Creamy, back label).
+    const alone: RawPanel = { kind: 'adequacy_statement', legibility: 'clear', heading: null, text: 'This product is not a substitute for complete pet food. As with all treats, give as part of a balanced diet.' };
+    const guide: RawPanel = { kind: 'feeding_directions', legibility: 'clear', heading: null, text: 'This is a guideline only. This product is not a substitute for complete pet food. As with all treats, give as part of a balanced diet. Feed at room temperature.' };
+    const label = combineReadings(read([FRONT, alone]), read([FRONT, guide], {}, 'model-b'), GTIN);
+    expect(label.adequacy).toMatchObject({ type: 'intermittent', text: alone.text });
+    expect(label.rejected).toEqual([]);
   });
   it('says the photo is unreadable when the readings share nothing', () => {
     const blurry: RawPanel = { kind: 'ingredients', legibility: 'partial', heading: null, text: 'COMPOSITION: Dinde [?] (22%), [?]' };

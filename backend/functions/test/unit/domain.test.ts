@@ -208,6 +208,17 @@ describe('EU labels (found by the live scan of a French label)', () => {
   });
 });
 
+describe('treat statements (found by the live photo of a UK treat pack)', () => {
+  it('reads "not a substitute for complete pet food" as intermittent feeding, and a statement naming treats as a treat', async () => {
+    const { parseAdequacyStatement } = await import('../../src/domain/adequacy');
+    const { classifyScope } = await import('../../src/domain/scope');
+    const a = parseAdequacyStatement('This product is not a substitute for complete pet food. As with all treats, give as part of a balanced diet.');
+    expect(a).toMatchObject({ type: 'intermittent' });
+    expect(classifyScope({ origin: 'opff', categoriesTags: ['en:cat-food'], texts: ['Cat nibbles'], adequacy: a }).category).toBe('treat');
+    expect(classifyScope({ origin: 'opff', categoriesTags: ['en:cat-food'], texts: ['Salmon mixer'], adequacy: parseAdequacyStatement('Complementary pet food for adult cats.') }).category).toBe('complementary');
+  });
+});
+
 describe('EU adequacy statements (found by the live scan of a French label)', () => {
   it('reads complete and complementary feeds, species and life stages in the label languages', async () => {
     const { parseAdequacyStatement } = await import('../../src/domain/adequacy');
