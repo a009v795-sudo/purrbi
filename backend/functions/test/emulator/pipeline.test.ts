@@ -211,6 +211,20 @@ describe('path A: enough information', () => {
     expect(calls['lookup:opff']).toBe(1); // reused, not fetched again
     expect((await read(b)).adequacySummary).toBe('Complete and balanced for adult maintenance');
   });
+  it('drops a saved database analysis that cannot be per 100 g, and asks for the nutrition panel', async () => {
+    const a = await newScan('u1', BC.treat);
+    await processScan(deps(), 'u1', a.id);
+    const gtin = (await read(a)).gtin;
+    const per100g = (nutrient: string, label: string, value: number) => ({ nutrient, label, qualifier: 'not_stated', value, unit: '%' });
+    await db.doc(`products/${gtin}`).update({ 'facts.guaranteedAnalysis': { value: [per100g('crude_protein', 'Crude protein', 1), per100g('crude_fat', 'Crude fat', 0.8)], source: src('opff', BC.treat) } });
+    const b = await newScan('u1', BC.treat);
+    await processScan(deps(), 'u1', b.id);
+    const s = await read(b);
+    expect(s.status).toBe('needs_photos');
+    expect(s.missingInfo).toEqual(['nutrition']);
+    expect(s.evidenceNotes.join(' ')).toMatch(/1% protein and 0.8% fat, which cannot be per 100 g/);
+    expect((await db.doc(`products/${gtin}`).get()).data()!.facts.guaranteedAnalysis).toBeUndefined();
+  });
 });
 
 describe('path B: missing label information', () => {

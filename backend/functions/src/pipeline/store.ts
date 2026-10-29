@@ -134,32 +134,31 @@ export async function writeProduct(
   const version = !args.previous ? 1 : args.previous.factsHash === hash ? args.previous.factsVersion : args.previous.factsVersion + 1;
   const ref = db.doc(`products/${publicFacts.gtin}`);
   const batch = db.batch();
-  batch.set(
-    ref,
-    {
-      gtin: publicFacts.gtin,
-      barcode: publicFacts.barcode,
-      productName: publicFacts.productName?.value ?? '',
-      brand: publicFacts.brand?.value ?? '',
-      imageUrl: publicFacts.imageUrl?.value ?? '',
-      species: args.scope.species,
-      category: args.scope.category,
-      scope: args.scope.status,
-      scopeReason: args.scope.reason,
-      origin: args.origin,
-      verification: publicFacts.sources.some((s) => s.sourceType === 'manufacturer' || s.sourceType === 'retailer_or_web')
-        ? 'database_and_verified_web'
-        : publicFacts.sources.some((s) => s.sourceType === 'database_image')
-          ? 'database_and_label_image'
-          : 'database_record',
-      facts: publicFacts,
-      factsHash: hash,
-      factsVersion: version,
-      lastRetrievedAt: Timestamp.fromDate(args.now),
-      updatedAt: Timestamp.fromDate(args.now),
-    },
-    { merge: true },
-  );
+  const record = {
+    gtin: publicFacts.gtin,
+    barcode: publicFacts.barcode,
+    productName: publicFacts.productName?.value ?? '',
+    brand: publicFacts.brand?.value ?? '',
+    imageUrl: publicFacts.imageUrl?.value ?? '',
+    species: args.scope.species,
+    category: args.scope.category,
+    scope: args.scope.status,
+    scopeReason: args.scope.reason,
+    origin: args.origin,
+    verification: publicFacts.sources.some((s) => s.sourceType === 'manufacturer' || s.sourceType === 'retailer_or_web')
+      ? 'database_and_verified_web'
+      : publicFacts.sources.some((s) => s.sourceType === 'database_image')
+        ? 'database_and_label_image'
+        : 'database_record',
+    facts: publicFacts,
+    factsHash: hash,
+    factsVersion: version,
+    lastRetrievedAt: Timestamp.fromDate(args.now),
+    updatedAt: Timestamp.fromDate(args.now),
+  };
+  // Each listed field is replaced whole (a plain merge would keep facts that were dropped, e.g. an
+  // implausible analysis); fields written elsewhere (recall) are kept.
+  batch.set(ref, record, { mergeFields: Object.keys(record) });
   for (const s of publicFacts.sources) {
     batch.set(ref.collection('evidence').doc(s.sourceId.replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 200)), {
       ...s,

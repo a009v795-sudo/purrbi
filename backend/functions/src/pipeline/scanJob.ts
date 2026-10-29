@@ -19,7 +19,7 @@ import type { GeneralAssessment, PetProfile, ProductFacts, RecallCheck, ScopeRes
 import { explainTerms as explainImpl, explanationKey, needsExplanation, type CitedExplanation, type ExplainRequest } from '../knowledge/explain';
 import { readDatabaseLabelImages as databaseImagesImpl } from '../sources/labelImages';
 import { checkRecalls as checkRecallsImpl } from '../sources/openfda';
-import { lookupOpenFacts as lookupOpenFactsImpl, openFactsToFacts, type OpenFactsDb, type OpenFactsLookup } from '../sources/openFacts';
+import { databaseGuarantees, implausibleAnalysis, lookupOpenFacts as lookupOpenFactsImpl, openFactsToFacts, type OpenFactsDb, type OpenFactsLookup } from '../sources/openFacts';
 import { RESEARCH_VERSION, researchProduct as researchImpl, type ResearchOutcome } from '../sources/research';
 import { currentCalls, errorDetail, runWithCallLog } from '../util/diagnostics';
 import { SourceError } from '../util/http';
@@ -247,6 +247,8 @@ async function publicEvidence(deps: Deps, job: JobInfo, o: AssessOptions, stored
     const pet = await deps.sources.lookupOpenFacts('opff', o.barcode, config.userAgent, now);
     if (pet.found) {
       job.evidenceNotes.push('Found in Open Pet Food Facts.');
+      const unusable = implausibleAnalysis(databaseGuarantees(pet.product.nutriments));
+      if (unusable) job.evidenceNotes.push(unusable);
       // Keep earlier verified enrichment for fields the database record still lacks.
       const facts = fillMissing(openFactsToFacts(pet, gtin, o.barcode.digits), enrichmentFacts(stored?.facts)).facts;
       return { facts, origin: 'opff', fetchedPublic: true, notes: [], openFacts: pet };
@@ -288,8 +290,16 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   // Label images read by an older label reader are dropped (and read again below when allowed).
   const stale = dropStaleImageReads(facts, LABEL_EXTRACTION_VERSION);
   facts = stale.facts;
-  const rewriteProduct = stale.dropped.length > 0;
+  let rewriteProduct = stale.dropped.length > 0;
   if (rewriteProduct) job.diagnosticNotes.push(`Dropped ${stale.dropped.join(', ')} read from database label images by an older label reader.`);
+  // A saved database analysis that cannot be per 100 g (saved before this check existed) is dropped too.
+  const unusable = facts.guaranteedAnalysis?.source.sourceType === 'database' ? implausibleAnalysis(facts.guaranteedAnalysis.value) : null;
+  if (unusable) {
+    const { guaranteedAnalysis: _implausible, ...rest } = facts;
+    facts = rest;
+    rewriteProduct = true;
+    job.evidenceNotes.push(unusable);
+  }
   let scope = scopeOf(facts, origin);
 
   // 2. Optional enrichment for missing public facts (pet products only; at most once per freshness window).

@@ -208,6 +208,19 @@ describe('EU labels (found by the live scan of a French label)', () => {
   });
 });
 
+describe('database analysis plausibility (found by a live scan of a French dog biscuit)', () => {
+  it('does not use protein and fat that cannot be per 100 g, and says why', async () => {
+    const { nutrimentsToGuarantees, implausibleAnalysis, databaseGuarantees } = await import('../../src/sources/openFacts');
+    // As listed in Open Pet Food Facts for U "Biscuits fourrés" (3256228550729); the pack prints protein 10 %, fat 8 %.
+    const listed = { proteins_100g: 1, proteins_unit: 'g', fat_100g: 0.8, fat_unit: 'g', fiber_100g: 0.6, fiber_unit: 'g', carbohydrates_100g: 1.2, carbohydrates_unit: 'g' };
+    expect(nutrimentsToGuarantees(listed)).toEqual([]);
+    expect(implausibleAnalysis(databaseGuarantees(listed))).toMatch(/1% protein and 0.8% fat, which cannot be per 100 g/);
+    // A wet food lists its moisture, and a dry food has far more protein and fat: both are kept.
+    expect(nutrimentsToGuarantees({ proteins_100g: 2, fat_100g: 0.5, moisture_100g: 92 }).length).toBe(3);
+    expect(nutrimentsToGuarantees({ 'crude-protein_100g': 30, 'crude-fat_100g': 15 }).length).toBe(2);
+  });
+});
+
 describe('calorie statements', () => {
   it('does not take an upper bound ("<2 kcal", "menos de 2 kcal") for the calorie content', async () => {
     const { parseCalorieText } = await import('../../src/domain/nutrition');

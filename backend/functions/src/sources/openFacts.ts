@@ -125,8 +125,26 @@ const NUTRIMENT_IDS: [string, string][] = [
   ['carbohydrates', 'Carbohydrates'],
 ];
 
-/** Maps Product Opener nutriments (values per 100 g, mass nutrients in grams) to guarantees. */
+/**
+ * Why a database record's analysis cannot be per 100 g, or null. Without a moisture value, protein and
+ * fat together below 4 % fit no cat or dog food or treat: such values are per serving or mistyped.
+ */
+export function implausibleAnalysis(entries: GuaranteedAnalysisEntry[]): string | null {
+  const v = (k: string) => entries.find((e) => e.nutrient === k && e.unit === '%')?.value;
+  const protein = v('crude_protein');
+  const fat = v('crude_fat');
+  if (protein === undefined || fat === undefined || v('moisture') !== undefined || protein + fat >= 4) return null;
+  return `Open Pet Food Facts lists ${protein}% protein and ${fat}% fat, which cannot be per 100 g of this product (likely per serving or a typing error), so its analysis was not used.`;
+}
+
+/** Maps Product Opener nutriments (values per 100 g, mass nutrients in grams) to guarantees, unless implausible. */
 export function nutrimentsToGuarantees(nutriments: Record<string, unknown> | undefined): GuaranteedAnalysisEntry[] {
+  const entries = databaseGuarantees(nutriments);
+  return implausibleAnalysis(entries) ? [] : entries;
+}
+
+/** The record's analysis as listed, before the plausibility check. */
+export function databaseGuarantees(nutriments: Record<string, unknown> | undefined): GuaranteedAnalysisEntry[] {
   if (!nutriments) return [];
   const out: GuaranteedAnalysisEntry[] = [];
   for (const [id, label] of NUTRIMENT_IDS) {
