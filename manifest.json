@@ -1,0 +1,292 @@
+{
+  "generatedAt": "2026-10-29T05:47:31.511Z",
+  "source": "world.openpetfoodfacts.org search",
+  "license": "Product photos: Open Pet Food Facts contributors, CC BY-SA 3.0 (https://creativecommons.org/licenses/by-sa/3.0/); product data: Open Database License (ODbL).",
+  "humanFood": {
+    "code": "3168930010265",
+    "name": "cruesly mélange de noix"
+  },
+  "items": [
+    {
+      "code": "7613031571390",
+      "name": "Croquettes Pour Chat Adulte Stérilisé Boeuf Bifensis",
+      "label": "cat food"
+    },
+    {
+      "code": "4000487227361",
+      "name": "150G Fun Tastix Jambon / Fromage Fido",
+      "label": "dog food"
+    },
+    {
+      "code": "0079100510214",
+      "name": "pup peroni",
+      "label": "treat"
+    },
+    {
+      "code": "0850191800046",
+      "name": "Probiotic Supplements For Dogs",
+      "label": "supplement"
+    }
+  ],
+  "photoCandidate": {
+    "code": "4008429037894",
+    "name": "Dreamies med kylling",
+    "species": "cat",
+    "photos": [
+      {
+        "file": "photos/4008429037894-1.jpg",
+        "source": "https://images.openpetfoodfacts.org/images/products/400/842/903/7894/1.jpg"
+      },
+      {
+        "file": "photos/4008429037894-2.jpg",
+        "source": "https://images.openpetfoodfacts.org/images/products/400/842/903/7894/2.jpg"
+      },
+      {
+        "file": "photos/4008429037894-3.jpg",
+        "source": "https://images.openpetfoodfacts.org/images/products/400/842/903/7894/3.jpg"
+      },
+      {
+        "file": "photos/4008429037894-4.jpg",
+        "source": "https://images.openpetfoodfacts.org/images/products/400/842/903/7894/4.jpg"
+      }
+    ]
+  },
+  "incomplete": [
+    {
+      "code": "4008429037894",
+      "name": "Dreamies med kylling",
+      "species": "cat",
+      "photos": [
+        {
+          "file": "photos/4008429037894-1.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/400/842/903/7894/1.jpg"
+        },
+        {
+          "file": "photos/4008429037894-2.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/400/842/903/7894/2.jpg"
+        },
+        {
+          "file": "photos/4008429037894-3.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/400/842/903/7894/3.jpg"
+        },
+        {
+          "file": "photos/4008429037894-4.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/400/842/903/7894/4.jpg"
+        }
+      ]
+    },
+    {
+      "code": "3700260245117",
+      "name": "Croquettes pour chats",
+      "species": "cat",
+      "photos": [
+        {
+          "file": "photos/3700260245117-1.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/370/026/024/5117/1.jpg"
+        },
+        {
+          "file": "photos/3700260245117-2.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/370/026/024/5117/2.jpg"
+        },
+        {
+          "file": "photos/3700260245117-3.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/370/026/024/5117/3.jpg"
+        },
+        {
+          "file": "photos/3700260245117-4.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/370/026/024/5117/4.jpg"
+        }
+      ]
+    },
+    {
+      "code": "7613032759155",
+      "name": "Purina - chat stérilisé saumon",
+      "species": "cat",
+      "photos": [
+        {
+          "file": "photos/7613032759155-1.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/761/303/275/9155/1.jpg"
+        },
+        {
+          "file": "photos/7613032759155-2.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/761/303/275/9155/2.jpg"
+        },
+        {
+          "file": "photos/7613032759155-3.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/761/303/275/9155/3.jpg"
+        },
+        {
+          "file": "photos/7613032759155-4.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/761/303/275/9155/4.jpg"
+        }
+      ]
+    },
+    {
+      "code": "5010394996587",
+      "name": "MARKIES ORIGINAL",
+      "species": "dog",
+      "photos": [
+        {
+          "file": "photos/5010394996587-1.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/501/039/499/6587/1.jpg"
+        },
+        {
+          "file": "photos/5010394996587-2.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/501/039/499/6587/2.jpg"
+        },
+        {
+          "file": "photos/5010394996587-3.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/501/039/499/6587/3.jpg"
+        },
+        {
+          "file": "photos/5010394996587-4.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/501/039/499/6587/4.jpg"
+        }
+      ]
+    },
+    {
+      "code": "3182550831383",
+      "name": "adult mini 8+",
+      "species": "dog",
+      "photos": [
+        {
+          "file": "photos/3182550831383-1.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/318/255/083/1383/1.jpg"
+        },
+        {
+          "file": "photos/3182550831383-2.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/318/255/083/1383/2.jpg"
+        },
+        {
+          "file": "photos/3182550831383-3.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/318/255/083/1383/3.jpg"
+        },
+        {
+          "file": "photos/3182550831383-4.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/318/255/083/1383/4.jpg"
+        }
+      ]
+    },
+    {
+      "code": "8410650233925",
+      "name": "ultima nature",
+      "species": "cat",
+      "photos": [
+        {
+          "file": "photos/8410650233925-1.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/841/065/023/3925/1.jpg"
+        },
+        {
+          "file": "photos/8410650233925-2.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/841/065/023/3925/2.jpg"
+        },
+        {
+          "file": "photos/8410650233925-3.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/841/065/023/3925/3.jpg"
+        },
+        {
+          "file": "photos/8410650233925-4.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/841/065/023/3925/4.jpg"
+        }
+      ]
+    },
+    {
+      "code": "5410213009854",
+      "name": "Picnic Festival",
+      "species": "dog",
+      "photos": [
+        {
+          "file": "photos/5410213009854-1.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/541/021/300/9854/1.jpg"
+        },
+        {
+          "file": "photos/5410213009854-2.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/541/021/300/9854/2.jpg"
+        },
+        {
+          "file": "photos/5410213009854-3.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/541/021/300/9854/3.jpg"
+        },
+        {
+          "file": "photos/5410213009854-4.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/541/021/300/9854/4.jpg"
+        }
+      ]
+    },
+    {
+      "code": "7613034146656",
+      "name": "One mini adult",
+      "species": "dog",
+      "photos": [
+        {
+          "file": "photos/7613034146656-1.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/761/303/414/6656/1.jpg"
+        },
+        {
+          "file": "photos/7613034146656-2.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/761/303/414/6656/2.jpg"
+        },
+        {
+          "file": "photos/7613034146656-3.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/761/303/414/6656/3.jpg"
+        },
+        {
+          "file": "photos/7613034146656-4.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/761/303/414/6656/4.jpg"
+        }
+      ]
+    },
+    {
+      "code": "3256228550729",
+      "name": "Biscuit fourrés",
+      "species": "dog",
+      "photos": [
+        {
+          "file": "photos/3256228550729-1.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/325/622/855/0729/1.jpg"
+        },
+        {
+          "file": "photos/3256228550729-2.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/325/622/855/0729/2.jpg"
+        },
+        {
+          "file": "photos/3256228550729-3.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/325/622/855/0729/3.jpg"
+        },
+        {
+          "file": "photos/3256228550729-4.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/325/622/855/0729/4.jpg"
+        }
+      ]
+    },
+    {
+      "code": "7613033737060",
+      "name": "Party Mix",
+      "species": "cat",
+      "photos": [
+        {
+          "file": "photos/7613033737060-1.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/761/303/373/7060/1.jpg"
+        },
+        {
+          "file": "photos/7613033737060-2.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/761/303/373/7060/2.jpg"
+        },
+        {
+          "file": "photos/7613033737060-3.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/761/303/373/7060/3.jpg"
+        },
+        {
+          "file": "photos/7613033737060-4.jpg",
+          "source": "https://images.openpetfoodfacts.org/images/products/761/303/373/7060/4.jpg"
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "catFoods": 40,
+    "dogFoods": 40,
+    "treats": 42,
+    "supplements": 2
+  }
+}
