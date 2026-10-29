@@ -39,6 +39,7 @@ export interface SourceRef {
   retrievedAt: string; // ISO-8601
   matchConfidence: MatchConfidence;
   license?: string;
+  readerVersion?: string; // AI-read label images: the label reader that read them
 }
 
 export interface Fact<T> {

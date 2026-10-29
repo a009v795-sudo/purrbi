@@ -66,9 +66,10 @@ export async function readDatabaseLabelImages(opts: {
       await opts.beforeAiCall();
       const label = await opts.extract({ imageBase64: file.bytes.toString('base64'), mimeType, purpose: PURPOSE_TEXT[img.purpose], scanGtin14: opts.gtin14 });
       if (label.status !== 'processed') {
-        result.skipped.push(`${img.purpose}: ${label.status}`);
+        result.skipped.push(`${img.purpose}: ${label.status}${label.rejected.length ? ` (${label.rejected.slice(0, 3).join('; ')})` : ''}`);
         continue;
       }
+      if (label.rejected.length) result.skipped.push(`${img.purpose}, not kept: ${label.rejected.slice(0, 3).join('; ')}`);
       const source: SourceRef = {
         sourceId: `opff-image:${opts.code}:${img.purpose}`,
         sourceType: 'database_image',
@@ -77,6 +78,7 @@ export async function readDatabaseLabelImages(opts: {
         retrievedAt: opts.now.toISOString(),
         matchConfidence: 'exact_barcode',
         license: 'CC BY-SA 3.0 (image), contributors of Open Pet Food Facts',
+        ...(label.version ? { readerVersion: label.version } : {}),
       };
       // Identity fields stay with the database record; the image only fills label panels.
       const facts = labelToFacts({ ...label, productName: null, brand: null }, source);

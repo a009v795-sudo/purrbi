@@ -43,7 +43,7 @@ export async function consumeAiBudget(db: Firestore, limits: Limits, now: Date):
 /** When optional AI enrichment was last attempted for a product, and what it found (public facts only). */
 export interface Enrichment {
   databaseImagesAt?: Date | null;
-  databaseImages?: { read: string[]; skipped: string[] };
+  databaseImages?: { read: string[]; skipped: string[]; version?: string };
   researchAt?: Date | null;
   research?: { filled: string[]; discarded: string[]; source: string; version?: string };
 }

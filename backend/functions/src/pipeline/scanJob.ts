@@ -8,7 +8,7 @@
 // is recorded (sanitized) under the job's trace id.
 import { randomUUID } from 'node:crypto';
 import type { Firestore } from 'firebase-admin/firestore';
-import { extractLabel as extractLabelImpl, type ValidatedLabel } from '../ai/labelExtract';
+import { extractLabel as extractLabelImpl, LABEL_EXTRACTION_VERSION, type ValidatedLabel } from '../ai/labelExtract';
 import { parseAdequacyStatement } from '../domain/adequacy';
 import { normalizeBarcode, type NormalizedBarcode } from '../domain/barcode';
 import { personalize } from '../domain/personalize';
@@ -25,7 +25,7 @@ import { currentCalls, errorDetail, runWithCallLog } from '../util/diagnostics';
 import { SourceError } from '../util/http';
 import { rematchAnalysis } from '../domain/nutrition';
 import { SCAN_STATUS, type ErrorCode, type RuntimeConfig } from './config';
-import { enrichmentFacts, fillMissing, labelToFacts, missingInfo, type PhotoRequest } from './facts';
+import { dropStaleImageReads, enrichmentFacts, fillMissing, labelToFacts, missingInfo, type PhotoRequest } from './facts';
 import { explanationFields, jobFields, resultFields, type JobInfo } from './serialize';
 import {
   consumeAiBudget,
@@ -285,6 +285,11 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   const evidence = await publicEvidence(deps, job, o, stored, now);
   let { facts, origin, fetchedPublic } = evidence;
   const notes = evidence.notes;
+  // Label images read by an older label reader are dropped (and read again below when allowed).
+  const stale = dropStaleImageReads(facts, LABEL_EXTRACTION_VERSION);
+  facts = stale.facts;
+  const rewriteProduct = stale.dropped.length > 0;
+  if (rewriteProduct) job.diagnosticNotes.push(`Dropped ${stale.dropped.join(', ')} read from database label images by an older label reader.`);
   let scope = scopeOf(facts, origin);
 
   // 2. Optional enrichment for missing public facts (pet products only; at most once per freshness window).
@@ -302,7 +307,8 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   const panelNeeds = () => missingInfo(facts, scope, scope.category).map((r) => r.purpose).filter((p) => p === 'ingredients' || p === 'nutrition');
 
   // 2a. Label images already published in the pet database, read by AI.
-  if (aiOk && config.databaseImagesEnabled && panelNeeds().length && Object.keys(meta.labelImageUrls).length && ageDays(meta.enrichment.databaseImagesAt, now) > config.productFreshDays) {
+  const imagesDue = ageDays(meta.enrichment.databaseImagesAt, now) > config.productFreshDays || meta.enrichment.databaseImages?.version !== LABEL_EXTRACTION_VERSION;
+  if (aiOk && config.databaseImagesEnabled && panelNeeds().length && Object.keys(meta.labelImageUrls).length && imagesDue) {
     await setStatus(deps, o.uid, o.scanId, SCAN_STATUS.researching, 'Reading the label images in the product database', 30);
     const code = facts.sources.find((s) => s.sourceType === 'database')?.sourceId.split(':')[1] ?? o.barcode.digits;
     const product = { image_ingredients_url: meta.labelImageUrls.ingredients, image_nutrition_url: meta.labelImageUrls.nutrition };
@@ -322,7 +328,8 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       fetchedPublic = fetchedPublic || merged.filled.length > 0;
     }
     meta.enrichment.databaseImagesAt = now;
-    meta.enrichment.databaseImages = { read: r.read, skipped: r.skipped };
+    meta.enrichment.databaseImages = { read: r.read, skipped: r.skipped, version: LABEL_EXTRACTION_VERSION };
+    job.diagnosticNotes.push(...r.skipped.slice(0, 4).map((x) => `Database label image ${x}`));
     metaChanged = true;
     if (r.read.length) job.evidenceNotes.push(`Read the ${r.read.map((x) => (x === 'nutrition' ? 'nutrition panel' : 'ingredient list')).join(' and ')} from a label image in Open Pet Food Facts (AI, not reviewed).`);
     log('database label images', { read: r.read, skipped: r.skipped });
@@ -369,14 +376,16 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
 
   // 3. Save public facts (never the owner's private label data) and the enrichment bookkeeping.
   let factsVersion = stored?.factsVersion ?? 0;
-  if ((fetchedPublic || !stored) && facts.sources.length) factsVersion = await writeProduct(db, { facts, scope, origin, previous: stored, now, traceId: job.traceId });
+  if ((fetchedPublic || rewriteProduct || !stored) && facts.sources.length) factsVersion = await writeProduct(db, { facts, scope, origin, previous: stored, now, traceId: job.traceId });
   if (metaChanged) await writeProductMeta(db, gtin, meta, now);
 
   // 4. The owner's own label photos fill remaining gaps (private, unreviewed).
   const extractions = await readLabelExtractions(db, o.uid, gtin);
   let labelUsed = false;
+  const olderReads = extractions.filter((e) => e.label.status === 'processed' && e.label.version !== LABEL_EXTRACTION_VERSION).length;
+  if (olderReads) job.diagnosticNotes.push(`${olderReads} label photo reading${olderReads === 1 ? ' was' : 's were'} made by an older label reader and not used; the photo is asked for again if still needed.`);
   for (const e of extractions) {
-    if (e.label.status !== 'processed') continue;
+    if (e.label.status !== 'processed' || e.label.version !== LABEL_EXTRACTION_VERSION) continue;
     const src: SourceRef = { sourceId: `label:${e.photoId}`, sourceType: 'user_label', sourceName: 'Your label photo', retrievedAt: e.processedAt.toISOString(), matchConfidence: 'exact_barcode' };
     const merged = fillMissing(facts, labelToFacts(e.label, src));
     if (merged.filled.length) labelUsed = true;
@@ -594,6 +603,7 @@ async function photoJob(deps: Deps, uid: string, photoId: string): Promise<void>
         const image = await deps.readImage(String(claimed.photo.imageUrl ?? ''), uid);
         const label = await deps.sources.extractLabel({ apiKey: config.openaiApiKey(), model: config.visionModel, imageBase64: image.base64, mimeType: image.mimeType, purpose: purposeText(purpose), scanGtin14: gtin });
         deps.log.info('label extracted', { traceId, uid, scanId, photoId, status: label.status, panels: label.panels, rejected: label.rejected });
+        job.diagnosticNotes.push(`Label photo (${label.model}): ${label.status}${label.rejected.length ? `; not kept: ${label.rejected.slice(0, 4).join('; ')}` : ''}`);
         if (label.status === 'processed') {
           await saveLabelExtraction(db, uid, gtin, { photoId, scanId, purpose, processedAt: deps.now(), label });
           await photoRef.update({

@@ -2,9 +2,9 @@
 // Every mocked product is a labelled TEST FIXTURE; these tests check states, persistence, privacy
 // and error handling — not real product data (see test/live for live contract tests).
 import { initializeApp, getApps } from 'firebase-admin/app';
-import { getFirestore, Timestamp, type Firestore } from 'firebase-admin/firestore';
+import { FieldValue, getFirestore, Timestamp, type Firestore } from 'firebase-admin/firestore';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import type { ValidatedLabel } from '../../src/ai/labelExtract';
+import { LABEL_EXTRACTION_VERSION, type ValidatedLabel } from '../../src/ai/labelExtract';
 import { gs1CheckDigit, type NormalizedBarcode } from '../../src/domain/barcode';
 import type { ProductFacts, RecallCheck } from '../../src/domain/types';
 import { explanationKey } from '../../src/knowledge/explain';
@@ -98,7 +98,7 @@ const sources: Sources = {
     calls.dbImages = (calls.dbImages ?? 0) + 1;
     if (!o.product.image_nutrition_url) return { facts: [], read: [], skipped: ['no image'] };
     await o.beforeAiCall();
-    const source = { sourceId: `opff-image:${o.code}:nutrition`, sourceType: 'database_image' as const, sourceName: 'Open Pet Food Facts label image', url: o.product.image_nutrition_url, retrievedAt: NOW.toISOString(), matchConfidence: 'exact_barcode' as const };
+    const source = { sourceId: `opff-image:${o.code}:nutrition`, sourceType: 'database_image' as const, sourceName: 'Open Pet Food Facts label image', url: o.product.image_nutrition_url, retrievedAt: NOW.toISOString(), matchConfidence: 'exact_barcode' as const, readerVersion: LABEL_EXTRACTION_VERSION };
     return { read: ['nutrition'], skipped: [], facts: [{
       sources: [source], classificationSignals: [],
       guaranteedAnalysis: { value: [
@@ -123,7 +123,7 @@ const sources: Sources = {
   async extractLabel(o): Promise<ValidatedLabel> {
     calls.extract = (calls.extract ?? 0) + 1;
     if (o.purpose.includes('front')) {
-      return { status: 'different_product', reason: 'barcode mismatch (mocked)', panels: ['front', 'barcode'], productName: null, brand: null, species: 'unknown', productTypeClaim: null, ingredientsText: null, ingredients: [], guaranteedAnalysis: [], calories: [], adequacy: null, feedingDirections: null, activeIngredients: [], uncertainFields: [], rejected: [], model: 'mock' };
+      return { status: 'different_product', reason: 'barcode mismatch (mocked)', panels: ['front', 'barcode'], productName: null, brand: null, species: 'unknown', productTypeClaim: null, ingredientsText: null, ingredients: [], guaranteedAnalysis: [], calories: [], adequacy: null, feedingDirections: null, activeIngredients: [], uncertainFields: [], rejected: [], model: 'mock', version: LABEL_EXTRACTION_VERSION };
     }
     return {
       status: 'processed', reason: '', panels: ['guaranteed_analysis', 'adequacy_statement', 'calorie_statement'], productName: null, brand: null, species: 'cat', productTypeClaim: null,
@@ -136,7 +136,7 @@ const sources: Sources = {
       ],
       calories: [{ kcal: 3900, per: 'kg' }],
       adequacy: { text: 'TEST FIXTURE is formulated to meet the nutritional levels established by the AAFCO Cat Food Nutrient Profiles for adult maintenance.', type: 'complete', species: 'cat', lifeStages: ['adult_maintenance'], method: 'formulation', largeSizeGrowth: null, style: 'aafco' },
-      feedingDirections: null, activeIngredients: [], uncertainFields: [], rejected: [], model: 'mock',
+      feedingDirections: null, activeIngredients: [], uncertainFields: [], rejected: [], model: 'mock', version: LABEL_EXTRACTION_VERSION,
     };
   },
 };
@@ -239,6 +239,20 @@ describe('path B: missing label information', () => {
     const product = (await db.doc(`products/${s.gtin}`).get()).data()!;
     expect(product.facts.adequacy).toBeUndefined();
     expect(product.facts.guaranteedAnalysis).toBeUndefined();
+  });
+  it('does not use a label photo read by an older label reader, and asks for it again', async () => {
+    const a = await newScan('u1', BC.food);
+    await processScan(deps(), 'u1', a.id);
+    const photo = await db.collection('users/u1/photos').add({ scanId: a.id, purpose: 'nutrition', imageUrl: 'https://firebasestorage.googleapis.com/v0/b/x/o/users%2Fu1%2Fuploads%2F1.jpg', status: 'uploaded', createdAt: Timestamp.fromDate(NOW) });
+    await processPhoto(deps(), 'u1', photo.id);
+    const gtin = (await read(a)).gtin;
+    await db.doc(`users/u1/labelFacts/${gtin}`).update({ [`extractions.${photo.id}.label.version`]: FieldValue.delete() });
+    const b = await newScan('u1', BC.food);
+    await processScan(deps(), 'u1', b.id);
+    const s = await read(b);
+    expect(s.status).toBe('needs_photos');
+    expect(s.missingInfo).toEqual(['nutrition']);
+    expect(s.diagnosticNotes).toContain('1 label photo reading was made by an older label reader and not used; the photo is asked for again if still needed.');
   });
   it('does not ask again for photos already processed (reuse on rescan)', async () => {
     const a = await newScan('u1', BC.food);
@@ -436,6 +450,26 @@ describe('fallbacks before asking the owner for photos', () => {
     expect(calls['lookup:opff']).toBe(2);
     expect(calls.dbImages).toBe(1);
     expect((await read(again)).status).toBe('complete');
+  });
+  it('reads a database label image again when an older label reader read it', async () => {
+    const ref = await newScan('u1', BC.imageOnly);
+    await processScan(deps(), 'u1', ref.id);
+    const gtin = (await read(ref)).gtin;
+    // As the previous reader saved it: no reader version on the image source or in the bookkeeping.
+    const facts = (await db.doc(`products/${gtin}`).get()).data()!.facts;
+    const old = (x: Record<string, unknown>) => Object.fromEntries(Object.entries(x).filter(([k]) => k !== 'readerVersion'));
+    facts.sources = facts.sources.map(old);
+    for (const k of ['guaranteedAnalysis', 'adequacy', 'calories']) facts[k].source = old(facts[k].source);
+    await db.doc(`products/${gtin}`).update({ facts });
+    await db.doc(`productMeta/${gtin}`).update({ 'enrichment.databaseImages.version': FieldValue.delete() });
+    const again = await newScan('u1', BC.imageOnly);
+    await processScan(deps(), 'u1', again.id);
+    expect(calls.dbImages).toBe(2);
+    const s = await read(again);
+    expect(s.status).toBe('complete');
+    expect(s.diagnosticNotes[0]).toBe('Dropped guaranteedAnalysis, calories, adequacy read from database label images by an older label reader.');
+    const product = (await db.doc(`products/${gtin}`).get()).data()!;
+    expect(product.facts.guaranteedAnalysis.source.readerVersion).toBe(LABEL_EXTRACTION_VERSION);
   });
   it('fills missing label facts from the manufacturer page (research), once per freshness window', async () => {
     const ref = await newScan('u1', BC.webOnly);

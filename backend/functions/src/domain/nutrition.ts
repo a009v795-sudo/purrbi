@@ -51,7 +51,7 @@ export function rematchAnalysis(entries: GuaranteedAnalysisEntry[]): GuaranteedA
   return entries.map((e) => {
     const t = plainLabel(e.label ?? '');
     const nutrient = t ? nutrientKeyFromLabel(e.label) : e.nutrient;
-    const qualifier = euLabel && (e.qualifier === 'min' || e.qualifier === 'max') && !/\b(min|max)/.test(t) ? 'not_stated' : e.qualifier;
+    const qualifier = euLabel && (e.qualifier === 'min' || e.qualifier === 'max') && !/\b(min|max)(imum|i)?\b/.test(t) ? 'not_stated' : e.qualifier;
     return nutrient === e.nutrient && qualifier === e.qualifier ? e : { ...e, nutrient, qualifier };
   });
 }

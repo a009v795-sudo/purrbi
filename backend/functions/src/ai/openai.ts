@@ -7,6 +7,9 @@ export interface JsonSchemaFormat {
   schema: Record<string, unknown>;
 }
 
+/** Reasoning models (o-series, GPT-5 family) take a reasoning effort, not a temperature, and spend output tokens on reasoning. */
+export const isReasoningModel = (model: string) => /^(o\d|gpt-5)/i.test(model);
+
 function requireKey(apiKey: string | undefined): string {
   if (!apiKey) throw new SourceError('OpenAI', 'config', 'OPENAI_API_KEY is not configured');
   return apiKey;
@@ -22,10 +25,11 @@ export async function chatJson<T>(opts: {
   timeoutMs: number;
   maxTokens?: number;
 }): Promise<{ data: T; model: string; usage: unknown }> {
+  const reasoning = isReasoningModel(opts.model);
   const body = {
     model: opts.model,
-    temperature: 0,
-    max_completion_tokens: opts.maxTokens ?? 2500,
+    ...(reasoning ? { reasoning_effort: 'low' } : { temperature: 0 }),
+    max_completion_tokens: reasoning ? Math.max(16000, opts.maxTokens ?? 0) : (opts.maxTokens ?? 2500),
     response_format: { type: 'json_schema', json_schema: { name: opts.format.name, strict: true, schema: opts.format.schema } },
     messages: [
       { role: 'system', content: opts.system },
@@ -60,9 +64,6 @@ export interface UrlCitation {
   url: string;
   title?: string;
 }
-
-/** Reasoning models (o-series, GPT-5 family) take a reasoning effort and spend output tokens on reasoning. */
-const isReasoningModel = (model: string) => /^(o\d|gpt-5)/i.test(model);
 
 /**
  * Responses API with the web_search tool and a strict JSON schema. Returns parsed data, the url

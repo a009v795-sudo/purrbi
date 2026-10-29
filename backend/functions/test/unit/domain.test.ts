@@ -201,6 +201,11 @@ describe('EU labels (found by the live scan of a French label)', () => {
     ] as const;
     expect(rematchAnalysis(us as never)).toEqual(us);
   });
+  it('does not take "minérales" for a printed "min"', async () => {
+    const { rematchAnalysis } = await import('../../src/domain/nutrition');
+    const fr = rematchAnalysis([{ nutrient: 'ash', label: 'Matières minérales', qualifier: 'min', value: 8, unit: '%' }]);
+    expect(fr[0]).toMatchObject({ nutrient: 'ash', qualifier: 'not_stated' });
+  });
 });
 
 describe('EU adequacy statements (found by the live scan of a French label)', () => {
