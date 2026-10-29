@@ -7,6 +7,8 @@ import '/flutter_flow/flutter_flow_widgets.dart';
 import '/pages/components/main_appbar/main_appbar_widget.dart';
 import 'dart:ui';
 import '/actions/actions.dart' as action_blocks;
+import '/custom_code/actions/index.dart' as actions;
+import '/custom_code/widgets/index.dart' as custom_widgets;
 import '/flutter_flow/custom_functions.dart' as functions;
 import '/index.dart';
 import 'package:cloud_firestore/cloud_firestore.dart' hide Type;
@@ -53,6 +55,8 @@ class _IdentifierPageWidgetState extends State<IdentifierPageWidget> {
 
   @override
   Widget build(BuildContext context) {
+    context.watch<FFAppState>();
+
     return GestureDetector(
       onTap: () {
         FocusScope.of(context).unfocus();
@@ -283,26 +287,65 @@ class _IdentifierPageWidgetState extends State<IdentifierPageWidget> {
                                       hoverColor: Colors.transparent,
                                       highlightColor: Colors.transparent,
                                       onTap: () async {
+                                        var _shouldSetState = false;
+                                        if (_model.creating!) {
+                                          if (_shouldSetState)
+                                            safeSetState(() {});
+                                          return;
+                                        }
                                         if (!isWeb) {
-                                          _model.scannedCode =
+                                          if (!FFAppState().connected) {
+                                            await action_blocks
+                                                .internetSnackbar(context);
+                                            if (_shouldSetState)
+                                              safeSetState(() {});
+                                            return;
+                                          }
+                                          await actions.traceScan(
+                                            'camera_open',
+                                            '',
+                                            '',
+                                            '',
+                                          );
+                                          _model.scannedBarcode =
                                               await FlutterBarcodeScanner
                                                   .scanBarcode(
                                             '#C62828', // scanning line color
                                             '', // cancel button text
                                             true, // whether to show the torch (camera LED) toggle icon
-                                            ScanMode.QR,
+                                            ScanMode.BARCODE,
                                           );
 
-                                          _model.lastScan = functions
-                                              .cleanBarcode(_model.scannedCode);
+                                          _shouldSetState = true;
+                                          if (functions.isScanCancelled(
+                                              _model.scannedBarcode)) {
+                                            await actions.traceScan(
+                                              'camera_cancelled',
+                                              '',
+                                              '',
+                                              '',
+                                            );
+                                            if (_shouldSetState)
+                                              safeSetState(() {});
+                                            return;
+                                          }
+                                          _model.lastScan =
+                                              functions.cleanBarcode(
+                                                  _model.scannedBarcode);
                                           safeSetState(() {});
                                           if (!functions.isLikelyBarcode(
                                               _model.lastScan)) {
+                                            await actions.traceScan(
+                                              'camera_unreadable',
+                                              '',
+                                              '',
+                                              '',
+                                            );
                                             ScaffoldMessenger.of(context)
                                                 .showSnackBar(
                                               SnackBar(
                                                 content: Text(
-                                                  'No barcode was read. Try again, holding the code steady in the frame, or type the number below.',
+                                                  'No product barcode was read. Try again, holding the code steady in the frame, or type the number below.',
                                                   style: TextStyle(),
                                                 ),
                                                 duration: Duration(
@@ -310,6 +353,15 @@ class _IdentifierPageWidgetState extends State<IdentifierPageWidget> {
                                               ),
                                             );
                                           } else {
+                                            _model.creating = true;
+                                            safeSetState(() {});
+                                            await actions.traceScan(
+                                              'create_start',
+                                              '',
+                                              '',
+                                              'camera',
+                                            );
+
                                             var scansRecordReference =
                                                 ScansRecord.createDoc(
                                                     currentUserReference!);
@@ -323,7 +375,7 @@ class _IdentifierPageWidgetState extends State<IdentifierPageWidget> {
                                                 source: 'camera',
                                                 status: 'queued',
                                                 clientVersion:
-                                                    'purrbi-app-1.0.0',
+                                                    'purrbi-app-1.1.0',
                                               ),
                                               ...mapToFirestore(
                                                 {
@@ -332,7 +384,7 @@ class _IdentifierPageWidgetState extends State<IdentifierPageWidget> {
                                                 },
                                               ),
                                             });
-                                            _model.newScan = ScansRecord
+                                            _model.cameraScan = ScansRecord
                                                 .getDocumentFromData({
                                               ...createScansRecordData(
                                                 barcode: _model.lastScan,
@@ -343,7 +395,7 @@ class _IdentifierPageWidgetState extends State<IdentifierPageWidget> {
                                                 source: 'camera',
                                                 status: 'queued',
                                                 clientVersion:
-                                                    'purrbi-app-1.0.0',
+                                                    'purrbi-app-1.1.0',
                                               ),
                                               ...mapToFirestore(
                                                 {
@@ -351,8 +403,22 @@ class _IdentifierPageWidgetState extends State<IdentifierPageWidget> {
                                                 },
                                               ),
                                             }, scansRecordReference);
+                                            _shouldSetState = true;
                                             _model.createdScan =
-                                                _model.newScan?.reference;
+                                                _model.cameraScan?.reference;
+                                            safeSetState(() {});
+                                            _model.createdScanId =
+                                                ((_model.createdScan!))
+                                                    .id
+                                                    .trim();
+                                            safeSetState(() {});
+                                            await actions.traceScan(
+                                              'create_done',
+                                              _model.createdScanId,
+                                              '',
+                                              'camera',
+                                            );
+                                            _model.creating = false;
                                             safeSetState(() {});
 
                                             context.pushNamed(
@@ -380,7 +446,8 @@ class _IdentifierPageWidgetState extends State<IdentifierPageWidget> {
                                           safeSetState(() {});
                                         }
 
-                                        safeSetState(() {});
+                                        if (_shouldSetState)
+                                          safeSetState(() {});
                                       },
                                       child: Container(
                                         width: 84.57,
@@ -392,15 +459,34 @@ class _IdentifierPageWidgetState extends State<IdentifierPageWidget> {
                                         ),
                                         alignment:
                                             AlignmentDirectional(0.0, 0.0),
-                                        child: Icon(
-                                          Icons.camera_alt,
-                                          color: Colors.white,
-                                          size: 40.0,
+                                        child: Stack(
+                                          alignment:
+                                              AlignmentDirectional(0.0, 0.0),
+                                          children: [
+                                            if (!_model.creating!)
+                                              Icon(
+                                                Icons.camera_alt,
+                                                color: Colors.white,
+                                                size: 40.0,
+                                              ),
+                                            if (_model.creating ?? true)
+                                              Container(
+                                                width: 36.0,
+                                                height: 36.0,
+                                                child: custom_widgets
+                                                    .CirculatIndicatorWhite(
+                                                  width: 36.0,
+                                                  height: 36.0,
+                                                ),
+                                              ),
+                                          ],
                                         ),
                                       ),
                                     ),
                                     Text(
-                                      'TAP TO SCAN',
+                                      _model.creating!
+                                          ? 'STARTING…'
+                                          : 'TAP TO SCAN',
                                       textAlign: TextAlign.center,
                                       style: FlutterFlowTheme.of(context)
                                           .bodyMedium
@@ -711,6 +797,17 @@ class _IdentifierPageWidgetState extends State<IdentifierPageWidget> {
                                 ),
                                 FFButtonWidget(
                                   onPressed: () async {
+                                    var _shouldSetState = false;
+                                    if (_model.creating!) {
+                                      if (_shouldSetState) safeSetState(() {});
+                                      return;
+                                    }
+                                    if (!FFAppState().connected) {
+                                      await action_blocks
+                                          .internetSnackbar(context);
+                                      if (_shouldSetState) safeSetState(() {});
+                                      return;
+                                    }
                                     _model.lastScan = functions.cleanBarcode(
                                         _model.manualBarcodeFieldTextController
                                             .text);
@@ -721,7 +818,7 @@ class _IdentifierPageWidgetState extends State<IdentifierPageWidget> {
                                           .showSnackBar(
                                         SnackBar(
                                           content: Text(
-                                            'Enter the 8 to 14 digits printed under the barcode.',
+                                            'Check the number: a barcode has 8, 12, 13 or 14 digits, and the last digit must match the others.',
                                             style: TextStyle(),
                                           ),
                                           duration:
@@ -729,6 +826,15 @@ class _IdentifierPageWidgetState extends State<IdentifierPageWidget> {
                                         ),
                                       );
                                     } else {
+                                      _model.creating = true;
+                                      safeSetState(() {});
+                                      await actions.traceScan(
+                                        'create_start',
+                                        '',
+                                        '',
+                                        'manual',
+                                      );
+
                                       var scansRecordReference =
                                           ScansRecord.createDoc(
                                               currentUserReference!);
@@ -740,7 +846,7 @@ class _IdentifierPageWidgetState extends State<IdentifierPageWidget> {
                                               ''),
                                           source: 'manual',
                                           status: 'queued',
-                                          clientVersion: 'purrbi-app-1.0.0',
+                                          clientVersion: 'purrbi-app-1.1.0',
                                         ),
                                         ...mapToFirestore(
                                           {
@@ -749,7 +855,7 @@ class _IdentifierPageWidgetState extends State<IdentifierPageWidget> {
                                           },
                                         ),
                                       });
-                                      _model.typedScan =
+                                      _model.manualScan =
                                           ScansRecord.getDocumentFromData({
                                         ...createScansRecordData(
                                           barcode: _model.lastScan,
@@ -758,7 +864,7 @@ class _IdentifierPageWidgetState extends State<IdentifierPageWidget> {
                                               ''),
                                           source: 'manual',
                                           status: 'queued',
-                                          clientVersion: 'purrbi-app-1.0.0',
+                                          clientVersion: 'purrbi-app-1.1.0',
                                         ),
                                         ...mapToFirestore(
                                           {
@@ -766,8 +872,20 @@ class _IdentifierPageWidgetState extends State<IdentifierPageWidget> {
                                           },
                                         ),
                                       }, scansRecordReference);
+                                      _shouldSetState = true;
                                       _model.createdScan =
-                                          _model.typedScan?.reference;
+                                          _model.manualScan?.reference;
+                                      safeSetState(() {});
+                                      _model.createdScanId =
+                                          ((_model.createdScan!)).id.trim();
+                                      safeSetState(() {});
+                                      await actions.traceScan(
+                                        'create_done',
+                                        _model.createdScanId,
+                                        '',
+                                        'manual',
+                                      );
+                                      _model.creating = false;
                                       safeSetState(() {});
 
                                       context.pushNamed(
@@ -785,7 +903,7 @@ class _IdentifierPageWidgetState extends State<IdentifierPageWidget> {
                                       );
                                     }
 
-                                    safeSetState(() {});
+                                    if (_shouldSetState) safeSetState(() {});
                                   },
                                   text: 'Look up',
                                   options: FFButtonOptions(

@@ -137,7 +137,6 @@ class _CategopriePageWidgetState extends State<CategopriePageWidget>
                                 0,
                                 8.0,
                               ),
-                              shrinkWrap: true,
                               scrollDirection: Axis.vertical,
                               itemCount: mainList.length,
                               separatorBuilder: (_, __) =>

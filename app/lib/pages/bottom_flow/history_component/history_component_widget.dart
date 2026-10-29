@@ -504,8 +504,13 @@ class _HistoryComponentWidgetState extends State<HistoryComponentWidget> {
                                                       ),
                                                 ),
                                               Text(
-                                                dateTimeFormat("yMMMd",
-                                                    listItemItem.createdAt!),
+                                                dateTimeFormat(
+                                                    "yMMMd",
+                                                    listItemItem.createdAt !=
+                                                            null
+                                                        ? listItemItem
+                                                            .createdAt!
+                                                        : getCurrentTimestamp),
                                                 style: FlutterFlowTheme.of(
                                                         context)
                                                     .labelSmall
@@ -884,8 +889,13 @@ class _HistoryComponentWidgetState extends State<HistoryComponentWidget> {
                                                       ),
                                                 ),
                                               Text(
-                                                dateTimeFormat("yMMMd",
-                                                    listItemItem.createdAt!),
+                                                dateTimeFormat(
+                                                    "yMMMd",
+                                                    listItemItem.createdAt !=
+                                                            null
+                                                        ? listItemItem
+                                                            .createdAt!
+                                                        : getCurrentTimestamp),
                                                 style: FlutterFlowTheme.of(
                                                         context)
                                                     .labelSmall

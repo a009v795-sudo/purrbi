@@ -457,6 +457,81 @@ class ScansRecord extends FirestoreRecord {
   int get evidenceRevision => _evidenceRevision ?? 0;
   bool hasEvidenceRevision() => _evidenceRevision != null;
 
+  // "scoreText" field.
+  String? _scoreText;
+  String get scoreText => _scoreText ?? '';
+  bool hasScoreText() => _scoreText != null;
+
+  // "scoreCoverage" field.
+  int? _scoreCoverage;
+  int get scoreCoverage => _scoreCoverage ?? 0;
+  bool hasScoreCoverage() => _scoreCoverage != null;
+
+  // "scoreMaxPossible" field.
+  int? _scoreMaxPossible;
+  int get scoreMaxPossible => _scoreMaxPossible ?? 0;
+  bool hasScoreMaxPossible() => _scoreMaxPossible != null;
+
+  // "scoreBasis" field.
+  String? _scoreBasis;
+  String get scoreBasis => _scoreBasis ?? '';
+  bool hasScoreBasis() => _scoreBasis != null;
+
+  // "verdict" field.
+  String? _verdict;
+  String get verdict => _verdict ?? '';
+  bool hasVerdict() => _verdict != null;
+
+  // "verdictSource" field.
+  String? _verdictSource;
+  String get verdictSource => _verdictSource ?? '';
+  bool hasVerdictSource() => _verdictSource != null;
+
+  // "verdictStatus" field.
+  String? _verdictStatus;
+  String get verdictStatus => _verdictStatus ?? '';
+  bool hasVerdictStatus() => _verdictStatus != null;
+
+  // "positives" field.
+  List<HighlightStruct>? _positives;
+  List<HighlightStruct> get positives => _positives ?? const [];
+  bool hasPositives() => _positives != null;
+
+  // "cautions" field.
+  List<HighlightStruct>? _cautions;
+  List<HighlightStruct> get cautions => _cautions ?? const [];
+  bool hasCautions() => _cautions != null;
+
+  // "ingredientsPreview" field.
+  String? _ingredientsPreview;
+  String get ingredientsPreview => _ingredientsPreview ?? '';
+  bool hasIngredientsPreview() => _ingredientsPreview != null;
+
+  // "ingredientsCount" field.
+  int? _ingredientsCount;
+  int get ingredientsCount => _ingredientsCount ?? 0;
+  bool hasIngredientsCount() => _ingredientsCount != null;
+
+  // "verificationStatus" field.
+  String? _verificationStatus;
+  String get verificationStatus => _verificationStatus ?? '';
+  bool hasVerificationStatus() => _verificationStatus != null;
+
+  // "recallStatusLabel" field.
+  String? _recallStatusLabel;
+  String get recallStatusLabel => _recallStatusLabel ?? '';
+  bool hasRecallStatusLabel() => _recallStatusLabel != null;
+
+  // "recallSeverity" field.
+  String? _recallSeverity;
+  String get recallSeverity => _recallSeverity ?? '';
+  bool hasRecallSeverity() => _recallSeverity != null;
+
+  // "recallCheckedLabel" field.
+  String? _recallCheckedLabel;
+  String get recallCheckedLabel => _recallCheckedLabel ?? '';
+  bool hasRecallCheckedLabel() => _recallCheckedLabel != null;
+
   DocumentReference get parentReference => reference.parent.parent!;
 
   void _initializeFields() {
@@ -592,6 +667,27 @@ class ScansRecord extends FirestoreRecord {
     );
     _labelEvidenceUsed = snapshotData['labelEvidenceUsed'] as bool?;
     _evidenceRevision = castToType<int>(snapshotData['evidenceRevision']);
+    _scoreText = snapshotData['scoreText'] as String?;
+    _scoreCoverage = castToType<int>(snapshotData['scoreCoverage']);
+    _scoreMaxPossible = castToType<int>(snapshotData['scoreMaxPossible']);
+    _scoreBasis = snapshotData['scoreBasis'] as String?;
+    _verdict = snapshotData['verdict'] as String?;
+    _verdictSource = snapshotData['verdictSource'] as String?;
+    _verdictStatus = snapshotData['verdictStatus'] as String?;
+    _positives = getStructList(
+      snapshotData['positives'],
+      HighlightStruct.fromMap,
+    );
+    _cautions = getStructList(
+      snapshotData['cautions'],
+      HighlightStruct.fromMap,
+    );
+    _ingredientsPreview = snapshotData['ingredientsPreview'] as String?;
+    _ingredientsCount = castToType<int>(snapshotData['ingredientsCount']);
+    _verificationStatus = snapshotData['verificationStatus'] as String?;
+    _recallStatusLabel = snapshotData['recallStatusLabel'] as String?;
+    _recallSeverity = snapshotData['recallSeverity'] as String?;
+    _recallCheckedLabel = snapshotData['recallCheckedLabel'] as String?;
   }
 
   static Query<Map<String, dynamic>> collection([DocumentReference? parent]) =>
@@ -699,6 +795,19 @@ Map<String, dynamic> createScansRecordData({
   String? personalHeadline,
   bool? labelEvidenceUsed,
   int? evidenceRevision,
+  String? scoreText,
+  int? scoreCoverage,
+  int? scoreMaxPossible,
+  String? scoreBasis,
+  String? verdict,
+  String? verdictSource,
+  String? verdictStatus,
+  String? ingredientsPreview,
+  int? ingredientsCount,
+  String? verificationStatus,
+  String? recallStatusLabel,
+  String? recallSeverity,
+  String? recallCheckedLabel,
 }) {
   final firestoreData = mapToFirestore(
     <String, dynamic>{
@@ -769,6 +878,19 @@ Map<String, dynamic> createScansRecordData({
       'personalHeadline': personalHeadline,
       'labelEvidenceUsed': labelEvidenceUsed,
       'evidenceRevision': evidenceRevision,
+      'scoreText': scoreText,
+      'scoreCoverage': scoreCoverage,
+      'scoreMaxPossible': scoreMaxPossible,
+      'scoreBasis': scoreBasis,
+      'verdict': verdict,
+      'verdictSource': verdictSource,
+      'verdictStatus': verdictStatus,
+      'ingredientsPreview': ingredientsPreview,
+      'ingredientsCount': ingredientsCount,
+      'verificationStatus': verificationStatus,
+      'recallStatusLabel': recallStatusLabel,
+      'recallSeverity': recallSeverity,
+      'recallCheckedLabel': recallCheckedLabel,
     }.withoutNulls,
   );
 
@@ -872,7 +994,22 @@ class ScansRecordDocumentEquality implements Equality<ScansRecord> {
         listEquality.equals(e1?.missingInfo, e2?.missingInfo) &&
         listEquality.equals(e1?.photoRequests, e2?.photoRequests) &&
         e1?.labelEvidenceUsed == e2?.labelEvidenceUsed &&
-        e1?.evidenceRevision == e2?.evidenceRevision;
+        e1?.evidenceRevision == e2?.evidenceRevision &&
+        e1?.scoreText == e2?.scoreText &&
+        e1?.scoreCoverage == e2?.scoreCoverage &&
+        e1?.scoreMaxPossible == e2?.scoreMaxPossible &&
+        e1?.scoreBasis == e2?.scoreBasis &&
+        e1?.verdict == e2?.verdict &&
+        e1?.verdictSource == e2?.verdictSource &&
+        e1?.verdictStatus == e2?.verdictStatus &&
+        listEquality.equals(e1?.positives, e2?.positives) &&
+        listEquality.equals(e1?.cautions, e2?.cautions) &&
+        e1?.ingredientsPreview == e2?.ingredientsPreview &&
+        e1?.ingredientsCount == e2?.ingredientsCount &&
+        e1?.verificationStatus == e2?.verificationStatus &&
+        e1?.recallStatusLabel == e2?.recallStatusLabel &&
+        e1?.recallSeverity == e2?.recallSeverity &&
+        e1?.recallCheckedLabel == e2?.recallCheckedLabel;
   }
 
   @override
@@ -963,7 +1100,22 @@ class ScansRecordDocumentEquality implements Equality<ScansRecord> {
         const ListEquality().hash(e?.missingInfo),
         const ListEquality().hash(e?.photoRequests),
         e?.labelEvidenceUsed,
-        e?.evidenceRevision
+        e?.evidenceRevision,
+        e?.scoreText,
+        e?.scoreCoverage,
+        e?.scoreMaxPossible,
+        e?.scoreBasis,
+        e?.verdict,
+        e?.verdictSource,
+        e?.verdictStatus,
+        const ListEquality().hash(e?.positives),
+        const ListEquality().hash(e?.cautions),
+        e?.ingredientsPreview,
+        e?.ingredientsCount,
+        e?.verificationStatus,
+        e?.recallStatusLabel,
+        e?.recallSeverity,
+        e?.recallCheckedLabel
       ]);
 
   @override

@@ -7,6 +7,7 @@ export 'choose_style_model_struct.dart';
 export 'evidence_source_struct.dart';
 export 'finding_struct.dart';
 export 'help_support_model_struct.dart';
+export 'highlight_struct.dart';
 export 'ingredient_note_struct.dart';
 export 'intro_model_struct.dart';
 export 'job_info_struct.dart';

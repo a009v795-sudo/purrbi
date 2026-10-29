@@ -17,3 +17,7 @@ export '/custom_code/functions/status_label.dart';
 export '/custom_code/functions/progress_fraction.dart';
 export '/custom_code/functions/disclosure_label.dart';
 export '/custom_code/functions/ref_id.dart';
+export '/custom_code/functions/scan_status_text.dart';
+export '/custom_code/functions/is_stuck_scan.dart';
+export '/custom_code/functions/photo_stage_label.dart';
+export '/custom_code/functions/is_scan_cancelled.dart';

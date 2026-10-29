@@ -11,12 +11,13 @@ export 'app_logo_model.dart';
 class AppLogoWidget extends StatefulWidget {
   const AppLogoWidget({
     super.key,
-    required this.height,
-    required this.width,
-  });
+    double? height,
+    double? width,
+  })  : this.height = height ?? 120.0,
+        this.width = width ?? 120.0;
 
-  final double? height;
-  final double? width;
+  final double height;
+  final double width;
 
   @override
   State<AppLogoWidget> createState() => _AppLogoWidgetState();
@@ -49,8 +50,8 @@ class _AppLogoWidgetState extends State<AppLogoWidget> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 120.0,
-      height: 120.0,
+      width: widget!.width,
+      height: widget!.width,
       decoration: BoxDecoration(
         color: FlutterFlowTheme.of(context).primaryBackground,
         shape: BoxShape.circle,

@@ -72,6 +72,26 @@ class PhotosRecord extends FirestoreRecord {
   DateTime? get updatedAt => _updatedAt;
   bool hasUpdatedAt() => _updatedAt != null;
 
+  // "stage" field.
+  String? _stage;
+  String get stage => _stage ?? '';
+  bool hasStage() => _stage != null;
+
+  // "stageNote" field.
+  String? _stageNote;
+  String get stageNote => _stageNote ?? '';
+  bool hasStageNote() => _stageNote != null;
+
+  // "agreements" field.
+  List<String>? _agreements;
+  List<String> get agreements => _agreements ?? const [];
+  bool hasAgreements() => _agreements != null;
+
+  // "conflicts" field.
+  List<String>? _conflicts;
+  List<String> get conflicts => _conflicts ?? const [];
+  bool hasConflicts() => _conflicts != null;
+
   DocumentReference get parentReference => reference.parent.parent!;
 
   void _initializeFields() {
@@ -86,6 +106,10 @@ class PhotosRecord extends FirestoreRecord {
     _uncertainFields = getDataList(snapshotData['uncertainFields']);
     _processedAt = snapshotData['processedAt'] as DateTime?;
     _updatedAt = snapshotData['updatedAt'] as DateTime?;
+    _stage = snapshotData['stage'] as String?;
+    _stageNote = snapshotData['stageNote'] as String?;
+    _agreements = getDataList(snapshotData['agreements']);
+    _conflicts = getDataList(snapshotData['conflicts']);
   }
 
   static Query<Map<String, dynamic>> collection([DocumentReference? parent]) =>
@@ -134,6 +158,8 @@ Map<String, dynamic> createPhotosRecordData({
   String? statusMessage,
   DateTime? processedAt,
   DateTime? updatedAt,
+  String? stage,
+  String? stageNote,
 }) {
   final firestoreData = mapToFirestore(
     <String, dynamic>{
@@ -145,6 +171,8 @@ Map<String, dynamic> createPhotosRecordData({
       'statusMessage': statusMessage,
       'processedAt': processedAt,
       'updatedAt': updatedAt,
+      'stage': stage,
+      'stageNote': stageNote,
     }.withoutNulls,
   );
 
@@ -167,7 +195,11 @@ class PhotosRecordDocumentEquality implements Equality<PhotosRecord> {
         listEquality.equals(e1?.fieldsFound, e2?.fieldsFound) &&
         listEquality.equals(e1?.uncertainFields, e2?.uncertainFields) &&
         e1?.processedAt == e2?.processedAt &&
-        e1?.updatedAt == e2?.updatedAt;
+        e1?.updatedAt == e2?.updatedAt &&
+        e1?.stage == e2?.stage &&
+        e1?.stageNote == e2?.stageNote &&
+        listEquality.equals(e1?.agreements, e2?.agreements) &&
+        listEquality.equals(e1?.conflicts, e2?.conflicts);
   }
 
   @override
@@ -182,7 +214,11 @@ class PhotosRecordDocumentEquality implements Equality<PhotosRecord> {
         const ListEquality().hash(e?.fieldsFound),
         const ListEquality().hash(e?.uncertainFields),
         e?.processedAt,
-        e?.updatedAt
+        e?.updatedAt,
+        e?.stage,
+        e?.stageNote,
+        const ListEquality().hash(e?.agreements),
+        const ListEquality().hash(e?.conflicts)
       ]);
 
   @override

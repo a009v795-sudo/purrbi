@@ -74,6 +74,15 @@ jobs:
           cache: true
       - run: flutter --version
       - run: flutter pub get
+      # The release APK is signed with the debug key. Keeping that key between builds (in this
+      # repository's private Actions cache, never in the public repository) lets a new APK install over
+      # the previous one; on a cache miss Gradle makes a new key and the old APK must be uninstalled first.
+      - name: Reuse the development signing key between builds
+        if: ${{ !inputs.compile_check }}
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: purrbi-dev-debug-keystore-v1
       - run: flutter build apk --release --build-number=${{ inputs.build_number }}
       - name: Checksum and metadata
         run: |

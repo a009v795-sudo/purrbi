@@ -7,6 +7,8 @@ import '/flutter_flow/flutter_flow_widgets.dart';
 import '/pages/components/main_appbar/main_appbar_widget.dart';
 import 'dart:ui';
 import '/actions/actions.dart' as action_blocks;
+import '/custom_code/actions/index.dart' as actions;
+import '/custom_code/widgets/index.dart' as custom_widgets;
 import '/flutter_flow/custom_functions.dart' as functions;
 import '/index.dart';
 import 'identifier_page_widget.dart' show IdentifierPageWidget;
@@ -24,20 +26,24 @@ class IdentifierPageModel extends FlutterFlowModel<IdentifierPageWidget> {
 
   DocumentReference? createdScan;
 
+  bool? creating = false;
+
+  String? createdScanId = '';
+
   ///  State fields for stateful widgets in this page.
 
   // Model for MainAppbar component.
   late MainAppbarModel mainAppbarModel;
-  var scannedCode = '';
+  var scannedBarcode = '';
   // Stores action output result for [Backend Call - Create Document] action in Container widget.
-  ScansRecord? newScan;
+  ScansRecord? cameraScan;
   // State field(s) for manualBarcodeField widget.
   FocusNode? manualBarcodeFieldFocusNode;
   TextEditingController? manualBarcodeFieldTextController;
   String? Function(BuildContext, String?)?
       manualBarcodeFieldTextControllerValidator;
   // Stores action output result for [Backend Call - Create Document] action in Button widget.
-  ScansRecord? typedScan;
+  ScansRecord? manualScan;
 
   @override
   void initState(BuildContext context) {
