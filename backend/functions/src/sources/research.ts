@@ -142,6 +142,8 @@ export interface ResearchOutcome {
   discarded: string[];
   model: string;
   verified?: string[]; // how the page was matched to this product (barcode shown, same recipe), for the evidence notes
+  /** No candidate page could be reached (timeout, 429, 5xx): a technical failure, tried again soon, not a negative. */
+  fetchFailed?: boolean;
 }
 
 interface ResearchOptions {
@@ -171,13 +173,15 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
   ];
   const discarded: string[] = [];
   let model = opts.model;
+  let fetchFailed = false;
   for (const attempt of attempts) {
     const r = await researchAttempt(opts, attempt.user);
     model = r.model;
     if (r.facts) return { ...r, discarded: [...discarded, ...r.discarded.map((d) => `${attempt.label}: ${d}`)] };
     discarded.push(...r.discarded.map((d) => `${attempt.label}: ${d}`));
+    fetchFailed = fetchFailed || r.fetchFailed === true;
   }
-  return { facts: null, sources: [], discarded, model };
+  return { facts: null, sources: [], discarded, model, fetchFailed };
 }
 
 async function researchAttempt(opts: ResearchOptions, user: string): Promise<ResearchOutcome> {
@@ -211,7 +215,7 @@ async function researchAttempt(opts: ResearchOptions, user: string): Promise<Res
       discarded.push(`could not fetch ${url.slice(0, 120)} to verify it${err instanceof SourceError ? ` (${err.status ? `HTTP ${err.status}` : err.kind})` : ''}`);
     }
   }
-  if (!pages.length) return { facts: null, sources: [], discarded, model };
+  if (!pages.length) return { facts: null, sources: [], discarded, model, fetchFailed: true };
 
   const onPage = (needle: string | null | undefined) => {
     const n = wordsKey(needle ?? '');

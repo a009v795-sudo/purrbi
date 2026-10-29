@@ -44,9 +44,10 @@ export async function consumeAiBudget(db: Firestore, limits: Limits, now: Date):
 /** When optional AI enrichment was last attempted for a product, and what it found (public facts only). */
 export interface Enrichment {
   databaseImagesAt?: Date | null;
-  databaseImages?: { read: string[]; skipped: string[]; version?: string };
+  databaseImages?: { read: string[]; skipped: string[]; failed?: string[]; version?: string };
   researchAt?: Date | null;
-  research?: { filled: string[]; discarded: string[]; source: string; version?: string };
+  /** outcome "fetch_failed": no candidate page could be reached; tried again after a few hours, not a 30-day negative */
+  research?: { filled: string[]; discarded: string[]; source: string; version?: string; outcome?: 'done' | 'fetch_failed' };
 }
 
 export interface StoredProduct {
@@ -125,7 +126,8 @@ export async function readProductMeta(db: Firestore, gtin: string): Promise<Prod
 }
 
 export async function writeProductMeta(db: Firestore, gtin: string, meta: ProductMeta, now: Date): Promise<void> {
-  await db.doc(`productMeta/${gtin}`).set({ gtin, labelImageUrls: meta.labelImageUrls, enrichment: enrichmentDoc(meta.enrichment), updatedAt: Timestamp.fromDate(now) });
+  // Merged, so two jobs on the same product (two owners, or a scan and a photo) keep each other's fields.
+  await db.doc(`productMeta/${gtin}`).set({ gtin, labelImageUrls: meta.labelImageUrls, enrichment: enrichmentDoc(meta.enrichment), updatedAt: Timestamp.fromDate(now) }, { merge: true });
 }
 
 /** Writes public-source facts only (database / verified web). Returns the facts version. */
@@ -138,6 +140,7 @@ export async function writeProduct(
     previous: StoredProduct | null;
     now: Date;
     traceId: string;
+    retrievedAt?: Date; // when the database record was last fetched (unchanged when nothing was fetched)
   },
 ): Promise<number> {
   const publicFacts: ProductFacts = stripPrivate(args.facts);
@@ -166,7 +169,7 @@ export async function writeProduct(
     facts: publicFacts,
     factsHash: hash,
     factsVersion: version,
-    lastRetrievedAt: Timestamp.fromDate(args.now),
+    lastRetrievedAt: Timestamp.fromDate(args.retrievedAt ?? args.now),
     updatedAt: Timestamp.fromDate(args.now),
   };
   // Each listed field is replaced whole (a plain merge would keep facts that were dropped, e.g. an
@@ -224,6 +227,8 @@ export function stripPrivate(facts: ProductFacts): ProductFacts {
 
 const VERIFIED_DAYS = 180;
 const UNVERIFIED_DAYS = 30;
+const TRANSIENT_DAYS = 0.25; // a cited page that could not be fetched (timeout, 429, 5xx) is tried again after 6 hours
+const NOT_RETURNED_DAYS = 1; // a term the model left out is asked for again the next day
 
 /** Cached explanations that are still current; expired ones are treated as missing. */
 export async function readExplanations(db: Firestore, keys: string[], now: Date): Promise<Map<string, CitedExplanation>> {
@@ -236,7 +241,8 @@ export async function readExplanations(db: Firestore, keys: string[], now: Date)
     const e = snap.data() as CitedExplanation;
     if (e.status !== 'verified' && e.version !== EXPLAIN_VERSION) continue; // a failed lookup is tried again once the method changes
     const age = (now.getTime() - new Date(e.checkedAt).getTime()) / 86400000;
-    if (age <= (e.status === 'verified' ? VERIFIED_DAYS : UNVERIFIED_DAYS)) out.set(snap.id, e);
+    const lifetime = e.status === 'verified' ? VERIFIED_DAYS : /^cited page could not be fetched/.test(e.reason ?? '') ? TRANSIENT_DAYS : e.status === 'not_found' ? NOT_RETURNED_DAYS : UNVERIFIED_DAYS;
+    if (age <= lifetime) out.set(snap.id, e);
   }
   return out;
 }

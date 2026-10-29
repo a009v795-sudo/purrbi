@@ -89,6 +89,10 @@ export async function lookupOpenFacts(db: OpenFactsDb, barcode: NormalizedBarcod
       retries: 1,
       acceptStatuses: [404],
     });
+    // Only a 404 or an explicit "not found" means not found; an empty or unknown answer is a failure.
+    if (status !== 404 && (!json || typeof json.status !== 'number' || (json.status === 1 && !json.product))) {
+      throw new SourceError(name, 'parse', `unexpected answer for ${code} (HTTP ${status})`);
+    }
     if (status === 404 || !json || json.status !== 1 || !json.product) {
       const verbose = String(json?.status_verbose ?? '');
       const other = /different product type: ([a-z]+)/i.exec(verbose)?.[1]?.toLowerCase();

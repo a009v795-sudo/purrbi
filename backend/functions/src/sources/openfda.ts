@@ -62,7 +62,8 @@ export async function checkRecalls(
   let results: EnforcementResult[] = [];
   try {
     const { status, json } = await httpJson<{ results?: EnforcementResult[] }>(url, { source: 'openFDA', timeoutMs: 8000, retries: 1, acceptStatuses: [404] });
-    results = status === 404 ? [] : json?.results ?? [];
+    if (status !== 404 && !Array.isArray(json?.results)) throw new SourceError('openFDA', 'parse', `unexpected answer (HTTP ${status})`);
+    results = status === 404 ? [] : json!.results!;
   } catch (err) {
     const kind = err instanceof SourceError ? err.kind : 'network';
     return { status: 'unavailable', summary: `The FDA recall check couldn\u2019t be completed right now (${kind}). Try again later.`, checkedAt, source: null, records: [] };

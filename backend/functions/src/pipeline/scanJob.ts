@@ -261,10 +261,17 @@ async function publicEvidence(deps: Deps, job: JobInfo, o: AssessOptions, stored
   const fresh = stored?.lastRetrievedAt && now.getTime() - stored.lastRetrievedAt.getTime() < config.productFreshDays * 86400000;
   // A record classified by older rules is read again once (its product type and tag kinds were not saved).
   const current = stored?.scopeVersion === SCOPE_VERSION;
-  if (stored && ((fresh && current) || !o.allowFetch)) {
+  // A record not yet confirmed as a cat or dog product is checked again after a day: the databases are edited.
+  const recheck = !!stored && stored.scope !== 'supported' && ageDays(stored.lastRetrievedAt, now) > 1;
+  if (stored && ((fresh && current && !recheck) || !o.allowFetch)) {
     job.productCache = 'hit';
     job.evidenceNotes.push(`Product details reused from Purrbi’s saved record (retrieved ${stored.lastRetrievedAt?.toISOString().slice(0, 10) ?? 'earlier'}); no database call was needed.`);
     return { facts: stored.facts, origin: (stored.origin as DatabaseOrigin) ?? 'opff', fetchedPublic: false, notes: [], openFacts: null };
+  }
+  if (!o.allowFetch) {
+    // A photo or a pet change never calls the databases: with no saved record it starts from the label alone.
+    job.productCache = 'none';
+    return { facts: { gtin, barcode: o.barcode.digits, classificationSignals: [], sources: [] }, origin: 'label', fetchedPublic: false, notes: [], openFacts: null };
   }
   job.productCache = 'miss';
   try {
@@ -286,8 +293,15 @@ async function publicEvidence(deps: Deps, job: JobInfo, o: AssessOptions, stored
         ? `Not in Open Pet Food Facts; its record is in ${sister.source.sourceName}${sister.product.product_type ? ` (filed there as “${sister.product.product_type}”)` : ''}. Where a record is filed doesn’t decide what the product is.`
         : 'Not found in Open Pet Food Facts or its sister databases.',
     );
+    if (!sister && stored?.facts.sources.length) {
+      // The record is gone from the databases: the saved facts stay (never downgraded because a record is absent).
+      job.evidenceNotes.push('Its database record is no longer published; Purrbi’s saved record is used.');
+      return { facts: stored.facts, origin: (stored.origin as DatabaseOrigin) ?? 'label', fetchedPublic: false, notes: [], openFacts: null };
+    }
+    // Earlier verified enrichment (label images, matched web pages and label photos) is kept in every branch.
+    const base: ProductFacts = sister ? openFactsToFacts(sister, gtin, o.barcode.digits) : { gtin, barcode: o.barcode.digits, classificationSignals: [], sources: [] };
     return {
-      facts: sister ? openFactsToFacts(sister, gtin, o.barcode.digits) : { gtin, barcode: o.barcode.digits, classificationSignals: [], sources: [] },
+      facts: fillMissing(base, enrichmentFacts(stored?.facts)).facts,
       origin: sister ? (sister.db as DatabaseOrigin) : 'label',
       fetchedPublic: true,
       notes: [],
@@ -382,8 +396,12 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   // 2a. Label images already published in the pet database, read by AI.
   // Due per panel: a panel never tried (e.g. the front, once it is unresolved what the product is) is read
   // even when other panels were read recently.
-  const tried = new Set([...(meta.enrichment.databaseImages?.read ?? []), ...(meta.enrichment.databaseImages?.skipped ?? []).map((x) => x.split(/[,:]/)[0].trim())]);
-  const imagesDue = ageDays(meta.enrichment.databaseImagesAt, now) > config.productFreshDays || meta.enrichment.databaseImages?.version !== LABEL_EXTRACTION_VERSION || panelNeeds().some((p) => !tried.has(p));
+  // A technical failure (download error, AI error or budget) is tried again after 6 hours, not left for 30 days.
+  const panelOf = (x: string) => x.split(/[,:]/)[0].trim();
+  const lastImages = meta.enrichment.databaseImages?.version === LABEL_EXTRACTION_VERSION ? meta.enrichment.databaseImages : undefined;
+  const tried = new Set([...(lastImages?.read ?? []), ...(lastImages?.skipped ?? []).map(panelOf)]);
+  const failedRecently = new Set(ageDays(meta.enrichment.databaseImagesAt, now) * 24 < 6 ? (lastImages?.failed ?? []).map(panelOf) : []);
+  const imagesDue = ageDays(meta.enrichment.databaseImagesAt, now) > config.productFreshDays || !lastImages || panelNeeds().some((p) => !tried.has(p) && !failedRecently.has(p));
   if (aiOk && config.databaseImagesEnabled && panelNeeds().length && Object.keys(meta.labelImageUrls).length && imagesDue) {
     await setStatus(deps, o.uid, o.scanId, SCAN_STATUS.researching, 'Reading the label images in the product database', 30);
     const code = facts.sources.find((s) => s.sourceType === 'database')?.sourceId.split(':')[1] ?? o.barcode.digits;
@@ -404,11 +422,13 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       fetchedPublic = fetchedPublic || merged.filled.length > 0;
     }
     meta.enrichment.databaseImagesAt = now;
-    meta.enrichment.databaseImages = { read: r.read, skipped: r.skipped, version: LABEL_EXTRACTION_VERSION };
-    job.diagnosticNotes.push(...r.skipped.slice(0, 4).map((x) => `Database label image ${x}`));
+    // Definitive outcomes of earlier attempts are kept, so a panel already found unreadable is not read again.
+    const keep = (prev: string[] | undefined, next: string[]) => [...new Set([...(prev ?? []).filter((x) => !next.some((y) => panelOf(y) === panelOf(x))), ...next])];
+    meta.enrichment.databaseImages = { read: keep(lastImages?.read, r.read), skipped: keep(lastImages?.skipped, r.skipped), failed: r.failed ?? [], version: LABEL_EXTRACTION_VERSION };
+    job.diagnosticNotes.push(...r.skipped.slice(0, 4).map((x) => `Database label image ${x}`), ...(r.failed ?? []).slice(0, 2).map((x) => `Database label image not read (tried again later): ${x}`));
     metaChanged = true;
     if (r.read.length) job.evidenceNotes.push(`Read the ${r.read.map((x) => (x === 'nutrition' ? 'nutrition panel' : x === 'front' ? 'front of the package' : 'ingredient list')).join(' and ')} from a label image in ${origin === 'off' ? 'Open Food Facts' : 'Open Pet Food Facts'} (AI, two readings agreed; not reviewed).`);
-    log('database label images', { read: r.read, skipped: r.skipped });
+    log('database label images', { read: r.read, skipped: r.skipped, failed: r.failed ?? [] });
     scope = scopeOf(facts, origin);
   }
 
@@ -416,7 +436,10 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   // Research also runs when it is unresolved whether the product is for cats or dogs.
   const stillMissing = scope.status === 'unknown' || missingInfo(facts, scope, scope.category).some((r) => r.purpose !== 'front' || !facts.productName);
   const hasWeb = facts.sources.some((s) => s.sourceType === 'manufacturer' || s.sourceType === 'retailer_or_web');
-  const researchDue = ageDays(meta.enrichment.researchAt, now) > config.productFreshDays || meta.enrichment.research?.version !== RESEARCH_VERSION;
+  const researchDue =
+    ageDays(meta.enrichment.researchAt, now) > config.productFreshDays ||
+    meta.enrichment.research?.version !== RESEARCH_VERSION ||
+    (meta.enrichment.research?.outcome === 'fetch_failed' && ageDays(meta.enrichment.researchAt, now) * 24 >= 12);
   if (aiOk && config.researchEnabled && stillMissing && !hasWeb && researchDue) {
     await setStatus(deps, o.uid, o.scanId, SCAN_STATUS.researching, 'Looking for the manufacturer’s label information', 40);
     try {
@@ -435,7 +458,8 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       }
       const src = r.sources[0];
       meta.enrichment.researchAt = now;
-      meta.enrichment.research = { filled, discarded: r.discarded, source: src ? `${src.sourceName} (${src.sourceType})` : '', version: RESEARCH_VERSION };
+      const unreachable = !r.facts && r.fetchFailed === true;
+      meta.enrichment.research = { filled, discarded: r.discarded, source: src ? `${src.sourceName} (${src.sourceType})` : '', version: RESEARCH_VERSION, outcome: unreachable ? 'fetch_failed' : 'done' };
       metaChanged = true;
       const pageKind = src?.sourceType === 'manufacturer' ? 'manufacturer page' : 'web page';
       if (r.facts && r.verified?.length) job.evidenceNotes.push(...r.verified);
@@ -446,7 +470,9 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
           ? `Filled ${filled.filter((k) => k !== 'ingredients').map(fieldLabel).join(', ')} from ${src.sourceName} (${pageKind}), each checked against the page.`
           : confirmed
             ? 'No further label details could be verified on that page.'
-            : 'Searched the manufacturer’s and retailers’ pages; nothing could be verified against a page, so nothing was added.',
+            : unreachable
+              ? 'The manufacturer’s or retailers’ pages couldn’t be reached to check them, so nothing was added; Purrbi tries again later.'
+              : 'Searched the manufacturer’s and retailers’ pages; nothing could be verified against a page, so nothing was added.',
       );
       job.diagnosticNotes.push(...r.discarded.slice(0, 4).map((d) => `Research (${r.model}): ${d}`));
       log('research', { filled, discarded: r.discarded });
@@ -464,7 +490,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   // A saved classification that no longer holds (new evidence or rules) is updated, with its audit entry.
   const reclassified = !!stored && (stored.scope !== scope.status || stored.species !== scope.species || stored.category !== scope.category || stored.scopeVersion !== SCOPE_VERSION);
   if (reclassified && stored?.scope === 'out_of_scope' && scope.status !== 'out_of_scope') job.evidenceNotes.push('An earlier classification of this product as “not a cat or dog product” was reviewed against the product’s own evidence and replaced; the earlier one is kept in its history.');
-  if ((fetchedPublic || rewriteProduct || reclassified || !stored) && facts.sources.length) factsVersion = await writeProduct(db, { facts, scope, origin, previous: stored, now, traceId: job.traceId });
+  if ((fetchedPublic || rewriteProduct || reclassified || !stored) && facts.sources.length) factsVersion = await writeProduct(db, { facts, scope, origin, previous: stored, now, traceId: job.traceId, retrievedAt: job.productCache === 'miss' ? now : (stored?.lastRetrievedAt ?? now) });
   if (metaChanged) await writeProductMeta(db, gtin, meta, now);
   const contributor = createHash('sha256').update(o.uid).digest('hex').slice(0, 16);
   for (const p of promoted) await recordContribution(db, gtin, { ...p, contributor, traceId: job.traceId, now });
@@ -496,7 +522,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   // 5. Recall check (FDA), cached; skipped for out-of-scope products.
   let recall: RecallCheck | null = null;
   if (scope.status !== 'out_of_scope') {
-    const cachedRecall = stored?.recall && stored.recallCheckedAt && now.getTime() - stored.recallCheckedAt.getTime() < config.recallFreshHours * 3600000 ? stored.recall : null;
+    const cachedRecall = stored?.recall && stored.recall.status !== 'not_checked' && stored.recall.status !== 'unavailable' && stored.recallCheckedAt && now.getTime() - stored.recallCheckedAt.getTime() < config.recallFreshHours * 3600000 ? stored.recall : null;
     if (cachedRecall || !o.allowFetch) {
       recall = cachedRecall ?? stored?.recall ?? null;
       job.recallCache = recall ? 'hit' : 'skipped';
@@ -505,7 +531,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       job.recallCache = 'miss';
       await setStatus(deps, o.uid, o.scanId, SCAN_STATUS.checkingAlerts, 'Checking FDA recall records', 60);
       recall = await deps.sources.checkRecalls({ brand: facts.brand?.value, productName: facts.productName?.value, gtin14: gtin }, now);
-      if (recall.status !== 'unavailable' && facts.sources.length) await writeRecall(db, gtin, recall, now);
+      if (recall.status !== 'unavailable' && recall.status !== 'not_checked' && facts.sources.length) await writeRecall(db, gtin, recall, now);
     }
   }
 
@@ -873,7 +899,7 @@ export async function handleScanUpdate(deps: Deps, uid: string, scanId: string, 
   const barcode = normalizeBarcode(after.barcode);
   if (!barcode.ok) return;
   if (rising('skipPhotos') && after.status === SCAN_STATUS.needsPhotos) {
-    await ref.update({ status: SCAN_STATUS.complete, statusMessage: 'Assessment ready (some information is missing)', photoRequests: [], completedAt: Timestamp.fromDate(deps.now()), updatedAt: Timestamp.fromDate(deps.now()) });
+    await ref.update({ status: SCAN_STATUS.complete, statusMessage: 'Assessment ready (some information is missing)', photoRequests: [], missingInfo: [], completedAt: Timestamp.fromDate(deps.now()), updatedAt: Timestamp.fromDate(deps.now()) });
     return;
   }
   if (rising('refreshPersonalRequested') && [SCAN_STATUS.complete, SCAN_STATUS.needsPhotos].includes(after.status as never)) {

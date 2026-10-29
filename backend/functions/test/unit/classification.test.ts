@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { normalizeBarcode } from '../../src/domain/barcode';
 import { classifyScope, feedMarkers } from '../../src/domain/scope';
 import { lookupOpenFacts, openFactsToFacts } from '../../src/sources/openFacts';
+import { checkRecalls } from '../../src/sources/openfda';
 import { compareRecipes } from '../../src/sources/research';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -63,6 +64,17 @@ describe('Open*Facts lookups: a miss says where the record is filed', () => {
   it('reports that no database has it when every variant is "product not found"', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ status: 0, status_verbose: 'product not found' }), { status: 404 })));
     expect(await lookupOpenFacts('opff', barcode, 'test', new Date('2026-10-29T00:00:00Z'))).toMatchObject({ found: false, otherType: null });
+  });
+  it('an empty or unknown answer is a failure the owner can retry, never "not found"', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 200 })));
+    await expect(lookupOpenFacts('opff', barcode, 'test', new Date('2026-10-29T00:00:00Z'))).rejects.toMatchObject({ kind: 'parse' });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ hello: 'world' }), { status: 200 })));
+    await expect(lookupOpenFacts('opff', barcode, 'test', new Date('2026-10-29T00:00:00Z'))).rejects.toMatchObject({ kind: 'parse' });
+  });
+  it('a recall check that got an empty answer failed; it is not "none found"', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 200 })));
+    const r = await checkRecalls({ brand: 'TESTBRAND', productName: 'TEST FIXTURE', gtin14: '00099482480882' }, new Date('2026-10-29T00:00:00Z'));
+    expect(r.status).toBe('unavailable');
   });
   it('keeps the record type and what each classification input is', () => {
     const facts = openFactsToFacts({ found: true, db: 'off', code: '0099482480882', source: { sourceId: 'off:0099482480882', sourceType: 'database', sourceName: 'Open Food Facts', retrievedAt: '2026-10-29T00:00:00Z', matchConfidence: 'exact_barcode' }, product: { product_type: 'food', product_name: 'Grain free chicken & Pea recipe', brands: 'Whole Foods Market', categories_tags: [], labels_tags: ['en:no-gluten'], ingredients_text: WHOLE_PAWS_INGREDIENTS } }, '00099482480882', '099482480882');

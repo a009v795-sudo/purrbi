@@ -35,6 +35,8 @@ let calls: Record<string, number>;
 let opffDown = false;
 let verdictMode: 'ok' | 'invalid' | 'fail' = 'ok';
 let labelPatch: Partial<ValidatedLabel> | null = null; // changes the mocked reading of a label panel
+let imagesDown = false; // the database's image host fails (technical failure)
+let pagesDown = false; // research names pages that cannot be reached
 let verdictInputs: string[] = [];
 
 const NOW = new Date('2026-10-28T12:00:00Z');
@@ -102,6 +104,7 @@ const sources: Sources = {
   },
   async research(o) {
     calls.research = (calls.research ?? 0) + 1;
+    if (pagesDown) return { facts: null, sources: [], discarded: ['barcode search: could not fetch https://testbrand.example/lamb to verify it (HTTP 429)'], model: 'mock', fetchFailed: true };
     if (o.barcode === BC.misfiled) {
       const page = { sourceId: `web:teststore.example:${o.gtin14}`, sourceType: 'retailer_or_web' as const, sourceName: 'teststore.example', url: 'https://teststore.example/grain-free-chicken-pea-dog-food', retrievedAt: NOW.toISOString(), matchConfidence: 'brand_and_product' as const, readerVersion: RESEARCH_VERSION };
       return { facts: { classificationSignals: [{ text: 'intended for dogs', source: page.sourceId, kind: 'research' as const }] }, sources: [page], discarded: [], model: 'mock' };
@@ -124,15 +127,16 @@ const sources: Sources = {
   },
   async databaseImages(o) {
     calls.dbImages = (calls.dbImages ?? 0) + 1;
+    if (imagesDown) return { read: [], skipped: [], failed: ['nutrition: TEST FIXTURE image host answered with an error (HTTP 503)'], facts: [] };
     if (o.needs.includes('front') && o.product.image_front_url) {
       // The front of the package, as both readings read it: "Dry Cat Food".
       const front = { sourceId: `off-image:${o.code}:front`, sourceType: 'database_image' as const, sourceName: 'Open Food Facts label image', url: o.product.image_front_url, retrievedAt: NOW.toISOString(), matchConfidence: 'exact_barcode' as const, readerVersion: LABEL_EXTRACTION_VERSION };
-      return { read: ['front'], skipped: [], facts: [{ sources: [front], classificationSignals: [{ text: 'Dry Cat Food', source: front.sourceId, kind: 'photo' as const }, { text: 'for cats', source: front.sourceId, kind: 'photo' as const }] }] };
+      return { read: ['front'], skipped: [], failed: [], facts: [{ sources: [front], classificationSignals: [{ text: 'Dry Cat Food', source: front.sourceId, kind: 'photo' as const }, { text: 'for cats', source: front.sourceId, kind: 'photo' as const }] }] };
     }
-    if (!o.product.image_nutrition_url) return { facts: [], read: [], skipped: ['no image'] };
+    if (!o.product.image_nutrition_url) return { facts: [], read: [], skipped: ['no image'], failed: [] };
     await o.beforeAiCall();
     const source = { sourceId: `opff-image:${o.code}:nutrition`, sourceType: 'database_image' as const, sourceName: 'Open Pet Food Facts label image', url: o.product.image_nutrition_url, retrievedAt: NOW.toISOString(), matchConfidence: 'exact_barcode' as const, readerVersion: LABEL_EXTRACTION_VERSION };
-    return { read: ['nutrition'], skipped: [], facts: [{
+    return { read: ['nutrition'], skipped: [], failed: [], facts: [{
       sources: [source], classificationSignals: [],
       guaranteedAnalysis: { value: [
         { nutrient: 'crude_protein', label: 'Crude Protein', qualifier: 'min', value: 26, unit: '%' },
@@ -214,6 +218,8 @@ beforeEach(async () => {
   verdictMode = 'ok';
   verdictInputs = [];
   labelPatch = null;
+  imagesDown = false;
+  pagesDown = false;
   await fetch(`http://${process.env.FIRESTORE_EMULATOR_HOST}/emulator/v1/projects/demo-purrbi/databases/(default)/documents`, { method: 'DELETE' });
   await db.doc('users/u1/pets/cat1').set({ name: 'Miso', species: 'cat', birthDate: Timestamp.fromDate(new Date('2022-01-01')), allergiesStatus: 'reported', allergies: ['chicken'], profileVersion: 2 });
   await db.doc('users/u1/pets/cat2').set({ name: 'Pip', species: 'cat', birthDate: Timestamp.fromDate(new Date('2021-03-01')), allergiesStatus: 'none_reported', profileVersion: 1 });
@@ -343,7 +349,9 @@ describe('path B: missing label information', () => {
     await handleScanUpdate(deps(), 'u1', ref.id, before, await read(ref));
     const s = await read(ref);
     expect(s.status).toBe('complete');
-    expect(s.missingInfo).toEqual(['nutrition']);
+    expect(s.missingInfo).toEqual([]); // no photo is asked for any more…
+    expect(s.photoRequests).toEqual([]);
+    expect(s.missingForScore).toEqual(['guaranteed analysis (protein, fat, fiber)']); // …and what the score still needs is its own field
     expect(s.scoreAvailable).toBe(false);
   });
   it('treats an unknown barcode as "not found, add photos" — not as a failure', async () => {
@@ -729,6 +737,66 @@ describe('supplements', () => {
     expect(s.supplementActives.every((a: { evidence: string; sourceUrl: string }) => a.evidence === 'cited' && a.sourceUrl)).toBe(true);
     expect(s.supplementLimitations.length).toBeGreaterThan(0);
     expect(s.supplementSummary).toMatch(/joint/);
+  });
+});
+
+describe('no permanent negative caching', () => {
+  const at = (hours: number) => ({ ...deps({ researchEnabled: true }), now: () => new Date(NOW.getTime() + hours * 3600000) });
+  it('a label image that failed for a technical reason is read again after 6 hours, not 30 days', async () => {
+    imagesDown = true;
+    const a = await newScan('u1', BC.imageOnly);
+    await processScan(deps(), 'u1', a.id);
+    expect((await read(a)).status).toBe('needs_photos');
+    expect((await read(a)).diagnosticNotes.join(' ')).toMatch(/not read \(tried again later\)/);
+    imagesDown = false;
+    const b = await newScan('u1', BC.imageOnly);
+    await processScan(at(2), 'u1', b.id);
+    expect(calls.dbImages).toBe(1); // not hammered within the hour
+    const c = await newScan('u1', BC.imageOnly);
+    await processScan(at(7), 'u1', c.id);
+    expect(calls.dbImages).toBe(2);
+    expect((await read(c)).status).toBe('complete');
+  });
+  it('research whose pages could not be reached is tried again after 12 hours, and says so', async () => {
+    pagesDown = true;
+    const a = await newScan('u1', BC.webOnly);
+    await processScan(deps({ researchEnabled: true }), 'u1', a.id);
+    expect((await read(a)).evidenceNotes.join(' ')).toMatch(/couldn’t be reached to check them/);
+    pagesDown = false;
+    const b = await newScan('u1', BC.webOnly);
+    await processScan(at(3), 'u1', b.id);
+    expect(calls.research).toBe(1);
+    const c = await newScan('u1', BC.webOnly);
+    await processScan(at(13), 'u1', c.id);
+    expect(calls.research).toBe(2);
+    expect((await read(c)).status).toBe('complete');
+  });
+  it('a product not yet confirmed as a cat or dog product is checked in the database again after a day', async () => {
+    const a = await newScan('u1', BC.misfiled);
+    await processScan(deps(), 'u1', a.id);
+    expect((await read(a)).scope).toBe('unknown');
+    const b = await newScan('u1', BC.misfiled);
+    await processScan({ ...deps(), now: () => new Date(NOW.getTime() + 2 * 86400000) }, 'u1', b.id);
+    expect(calls['lookup:opff']).toBe(2); // within the 30-day window, but rechecked
+  });
+  it('a photo of a product no database knows does not call the databases again', async () => {
+    const ref = await newScan('u1', BC.unknown);
+    await processScan(deps(), 'u1', ref.id);
+    const lookups = calls['lookup:opff'];
+    const photo = await db.collection('users/u1/photos').add({ scanId: ref.id, purpose: 'nutrition', imageUrl: 'https://firebasestorage.googleapis.com/v0/b/x/o/users%2Fu1%2Fuploads%2F1.jpg', status: 'uploaded', createdAt: Timestamp.fromDate(NOW) });
+    opffDown = true; // even with the database unreachable, the photo is assessed
+    await processPhoto(deps(), 'u1', photo.id);
+    expect(calls['lookup:opff']).toBe(lookups);
+    expect((await read(ref)).status).not.toBe('failed');
+  });
+  it('a verified page’s species statement survives a later re-fetch of the database record', async () => {
+    const a = await newScan('u1', BC.misfiled);
+    await processScan(deps({ researchEnabled: true }), 'u1', a.id);
+    expect((await read(a)).productSpecies).toBe('dog');
+    const b = await newScan('u1', BC.misfiled);
+    await processScan({ ...deps({ researchEnabled: false, productFreshDays: 0 }) }, 'u1', b.id);
+    expect(calls['lookup:opff']).toBe(2); // the record was fetched again…
+    expect(await read(b)).toMatchObject({ scope: 'supported', productSpecies: 'dog' }); // …and the page's statement kept
   });
 });
 

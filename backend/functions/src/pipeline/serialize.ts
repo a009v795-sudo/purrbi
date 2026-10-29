@@ -182,10 +182,11 @@ export function resultFields(args: {
     supplementQualitySignals: general.supplement?.qualitySignals ?? [],
 
     summary: args.summary,
-    ingredientsPreview: (facts.ingredients?.value ?? []).slice(0, 5).join(', '),
+    ingredientsPreview: `${(facts.ingredients?.value ?? []).slice(0, 5).join(', ')}${(facts.ingredients?.value.length ?? 0) > 5 ? ', …' : ''}`,
     ingredientsCount: facts.ingredients?.value.length ?? 0,
     verificationStatus: verificationStatus(facts, args.labelIdentityVerified !== false),
     missingInfo: args.photoRequests.map((p) => p.purpose),
+    missingForScore: general.missingForScore, // what the score still needs (photo requests are separate)
     photoRequests: args.photoRequests.map((p) => ({ ...p })),
     labelEvidenceUsed: args.labelEvidenceUsed,
     evidenceRevision: args.factsVersion,

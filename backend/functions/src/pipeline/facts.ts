@@ -49,7 +49,9 @@ export function dropStaleImageReads(facts: ProductFacts, readerVersion: string, 
 /** Facts that came from enrichment (database label images, verified web pages), to carry over when the database record is re-fetched. */
 export function enrichmentFacts(facts: ProductFacts | undefined): Partial<ProductFacts> {
   if (!facts) return {};
-  const out: Partial<ProductFacts> = { sources: facts.sources.filter((s) => ENRICHMENT_SOURCES.has(s.sourceType)), classificationSignals: [] };
+  const sources = facts.sources.filter((s) => ENRICHMENT_SOURCES.has(s.sourceType));
+  const ids = new Set(sources.map((s) => s.sourceId));
+  const out: Partial<ProductFacts> = { sources, classificationSignals: facts.classificationSignals.filter((c) => ids.has(c.source)) };
   for (const k of FACT_KEYS) {
     const f = facts[k] as { source?: { sourceType: string } } | undefined;
     if (f?.source && ENRICHMENT_SOURCES.has(f.source.sourceType)) (out as Record<string, unknown>)[k] = f;

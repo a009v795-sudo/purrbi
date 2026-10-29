@@ -49,7 +49,8 @@ export function candidateImages(product: OpenFactsProduct, needs: PhotoPurpose[]
 export interface DatabaseImageOutcome {
   facts: Partial<ProductFacts>[];
   read: string[];
-  skipped: string[];
+  skipped: string[]; // definitive: unreadable, another product, unsupported image, readings that disagree
+  failed: string[]; // technical (download error, AI error or budget): the panel is tried again later
 }
 
 export async function readDatabaseLabelImages(opts: {
@@ -62,7 +63,7 @@ export async function readDatabaseLabelImages(opts: {
   extract: (o: { imageBase64: string; mimeType: string; purpose: string; scanGtin14: string }) => Promise<ValidatedLabel>;
   beforeAiCall: () => Promise<void>;
 }): Promise<DatabaseImageOutcome> {
-  const result: DatabaseImageOutcome = { facts: [], read: [], skipped: [] };
+  const result: DatabaseImageOutcome = { facts: [], read: [], skipped: [], failed: [] };
   for (const img of candidateImages(opts.product, opts.needs).slice(0, 3)) {
     const dbName = IMAGE_DB[new URL(img.url).hostname] ?? 'Open Pet Food Facts';
     try {
@@ -94,7 +95,7 @@ export async function readDatabaseLabelImages(opts: {
       result.facts.push(facts);
       result.read.push(img.purpose);
     } catch (err) {
-      result.skipped.push(`${img.purpose}: ${(err as Error).message.slice(0, 120)}`);
+      result.failed.push(`${img.purpose}: ${(err as Error).message.slice(0, 120)}`);
     }
   }
   return result;
