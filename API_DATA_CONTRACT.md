@@ -139,7 +139,7 @@ HTTP 200; the pet-food query (`"dog food" "cat food" "pet food"`) returns only a
 | `OPENAI_VISION_MODEL` / `OPENAI_RESEARCH_MODEL` / `OPENAI_EXPLAIN_MODEL` | param | `gpt-4o-mini` / `gpt-4.1-mini` / `gpt-4.1-mini` |
 | `SOURCE_USER_AGENT` | param | `Purrbi/0.1 (development build; contact@valenciainnovations.com)` |
 | Runtime identity | code (`setGlobalOptions`) | `purrbi-functions@` (all functions, including the account-deletion trigger) |
-| Region | code | `us-central1` (Firestore database also `us-central1`) |
+| Region | code | functions `us-central1`; Firestore database `nam5` (US multi-region; triggers are placed in `nam5`) |
 | Storage bucket | `deploy-config.json` → `STORAGE_BUCKET` | `purrbi-49c21.firebasestorage.app` (US-EAST1). App uploads go to `users/{uid}/uploads/…`; the backend reads only that bucket and the owner's folder |
 | Limits | code (`DEFAULT_LIMITS`) | 40 scans, 20 photos, 10 research calls per user per day; 500 AI calls per day globally; 10 MB per photo; 6 photos per scan; 8 new explanations per scan |
 | Caching | code | product facts 30 days; recall check 24 hours (openFDA updates weekly); enrichment attempts 30 days; explanations 180 days (unverified 30) |

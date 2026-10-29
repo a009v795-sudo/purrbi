@@ -2,7 +2,7 @@
   "projectId": "purrbi-49c21",
   "projectNumber": "1078394588658",
   "region": "us-central1",
-  "firestoreLocation": "us-central1",
+  "firestoreLocation": "nam5",
   "storageBucket": "purrbi-49c21.firebasestorage.app",
   "storageLocation": "US-EAST1",
   "workloadIdentityProvider": "projects/{projectNumber}/locations/global/workloadIdentityPools/github/providers/purrbi-github",

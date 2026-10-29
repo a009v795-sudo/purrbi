@@ -17,7 +17,7 @@ References (read-only): Moxis FlutterFlow `moxis-one-x51584` (pulled and export,
 |---|---|
 | Firebase project ID | `purrbi-49c21` (`backend/.firebaserc`, `backend/deploy-config.json`) |
 | Android package / iOS bundle ID | `com.mycompany.purrbiv2development` |
-| Cloud Firestore | `(default)` database, Native mode, **`us-central1`** (Firestore triggers run in the database's location; `nam5` maps onto `us-central1` but a regional database keeps database, triggers and functions together) |
+| Cloud Firestore | `(default)` database, Native mode, **`nam5`** (US multi-region; found by the setup script 2026-10-29 — it already existed). Firestore triggers are placed in the database's location (`nam5`) by the deploy tool and deliver to the functions in `us-central1` |
 | Cloud Storage | default bucket **`purrbi-49c21.firebasestorage.app`**, **`US-EAST1`** (owner's choice; Blaze; no-cost tier location). Verified 2026-10-29: the bucket exists (unauthenticated request → 403), there is no `purrbi-49c21.appspot.com` (404), the app's web/Android/iOS config all name this bucket, and the functions are pinned to it (`STORAGE_BUCKET` from `deploy-config.json`; refuses images from any other bucket or folder). Functions in `us-central1` read label photos across regions: negligible at photo sizes |
 | Cloud Functions | **`us-central1`**, Node 22, 2nd gen (+ one 1st-gen auth trigger), codebase `purrbi` |
 | Runtime identity | `purrbi-functions@purrbi-49c21.iam.gserviceaccount.com` |
@@ -65,7 +65,8 @@ References (read-only): Moxis FlutterFlow `moxis-one-x51584` (pulled and export,
 1. ~~FlutterFlow → Generate Config Files~~ — **done** (export configured for `purrbi-49c21`).
 2. ~~Blaze plan~~ — **done** (owner confirmed; set a budget alert if not yet).
 3. ~~Email/Password sign-in; Storage; FlutterFlow Users Collection~~ — **done, verified 2026-10-29**: sign-up endpoint answers `WEAK_PASSWORD` to a 1-character password (not `OPERATION_NOT_ALLOWED`; no account created); Storage bucket exists in US-EAST1; FlutterFlow's auth user collection is `users` (the `currentUser` bindings validate against it).
-4. **Next — Google Cloud Shell** (signed in as Owner): run `backend/tools/gcp/setup-dev-access.sh` once — APIs, Firestore `us-central1`, runtime and deploy identities, secret binding, OIDC sign-in, image cleanup policy. It prints the project number for `backend/deploy-config.json`.
+4. **Next — Google Cloud Shell** (signed in as Owner): run `backend/tools/gcp/setup-dev-access.sh` once — APIs, Firestore (exists: `nam5`), runtime and deploy identities, secret binding, OIDC sign-in, image cleanup policy. It prints the project number for `backend/deploy-config.json`.
+   - First run (2026-10-29): enabled the 19 APIs, created `purrbi-functions`, granted it Firestore user, then stopped on Google Cloud's IAM propagation delay ("service account … does not exist" right after creating it). Nothing else was changed. The script now retries that one error for up to 2.5 minutes per grant; re-running is safe.
 5. Then Claude runs `deploy-backend` and `live-e2e` from GitHub (manual runs) and builds the APK.
 
 ## FlutterFlow changes so far (main)
