@@ -15,7 +15,7 @@ const ROLES: { role: string; terms: string[] }[] = [
   { role: 'Thickener or binder', terms: ['guar gum', 'xanthan gum', 'carrageenan', 'cassia gum', 'agar', 'locust bean gum', 'gelatin', 'gelatine', 'modified starch'] },
   { role: 'Humectant or sweetener', terms: ['sucres', 'zucker', 'azúcar', 'glycérine', 'glycerin', 'glycerine', 'glycerol', 'propylene glycol', 'sugar', 'molasses', 'corn syrup', 'honey', 'sorbitol', 'caramel'] },
   { role: 'Colour', terms: ['iron oxide', 'titanium dioxide', 'caramel color', 'red 40', 'yellow 5', 'yellow 6', 'blue 2', 'colorant', 'colourant', 'colour', 'color'] },
-  { role: 'Protein source', terms: ['volaille', 'viande', 'poisson', 'protéines', 'proteines', 'sous-produits', 'canard', 'dinde', 'agneau', 'thon', 'oeuf', 'foie', 'fleisch', 'geflügel', 'huhn', 'fisch', 'lachs', 'pollo', 'carne', 'pescado', 'salmón', 'gluten de blé', 'gluten de ble', 'farine de protéines de maïs', 'farine de soja', 'soja', 'protein', 'pea protein', 'potato protein', 'soy protein', 'corn gluten meal', 'wheat gluten', 'meal', 'by-product', 'by-products', 'derivatives', 'chicken', 'turkey', 'beef', 'lamb', 'duck', 'salmon', 'tuna', 'whitefish', 'fish', 'egg', 'liver', 'heart', 'meat', 'poultry', 'venison', 'rabbit', 'pork', 'herring', 'menhaden', 'sardine', 'mackerel', 'krill', 'cod', 'trout', 'bison', 'quail', 'poulet', 'boeuf', 'saumon'] },
+  { role: 'Protein source', terms: ['volaille', 'viande', 'poisson', 'protéines', 'proteines', 'sous-produits', 'canard', 'dinde', 'agneau', 'thon', 'oeuf', 'foie', 'fleisch', 'geflügel', 'huhn', 'fisch', 'lachs', 'pollo', 'carne', 'pescado', 'salmón', 'gluten de blé', 'gluten de ble', 'farine de protéines de maïs', 'farine de soja', 'soja', 'protein', 'pea protein', 'potato protein', 'soy protein', 'soya', 'soy', 'corn gluten meal', 'wheat gluten', 'meal', 'by-product', 'by-products', 'derivatives', 'chicken', 'turkey', 'beef', 'lamb', 'duck', 'salmon', 'tuna', 'whitefish', 'fish', 'egg', 'liver', 'heart', 'meat', 'poultry', 'venison', 'rabbit', 'pork', 'herring', 'menhaden', 'sardine', 'mackerel', 'krill', 'cod', 'trout', 'bison', 'quail', 'poulet', 'boeuf', 'saumon'] },
   { role: 'Carbohydrate source', terms: ['blé', 'ble', 'maïs', 'mais', 'riz', 'orge', 'avoine', 'pommes de terre', 'céréales', 'cereales', 'weizen', 'reis', 'getreide', 'trigo', 'arroz', 'maíz', 'amidon', 'brown rice', 'rice', 'barley', 'oatmeal', 'oats', 'corn', 'maize', 'wheat', 'sweet potatoes', 'sweet potato', 'potatoes', 'potato', 'peas', 'pea', 'chickpeas', 'garbanzo beans', 'lentils', 'beans', 'tapioca', 'sorghum', 'millet', 'quinoa', 'cereals', 'starch', 'flour'] },
   { role: 'Fruit or vegetable', terms: ['carrots', 'carrot', 'cranberries', 'blueberries', 'apples', 'apple', 'spinach', 'kale', 'broccoli', 'parsley', 'vegetables', 'fruit', 'berries', 'tomato'] },
 ];
@@ -42,7 +42,7 @@ export function normalizeRole(text: string): string {
   if (/probiotic/.test(t)) return 'Probiotic';
   if (/\bfat\b|\boil\b/.test(t)) return 'Fat source';
   if (/fib(re|er)/.test(t)) return 'Fibre source';
-  if (/vitamin|mineral/.test(t)) return 'Vitamin or mineral';
+  if (/vitamin|mineral|micronutrient|trace element/.test(t)) return 'Vitamin or mineral';
   if (/amino acid/.test(t)) return 'Amino acid (nutrient)';
   if (/flavo/.test(t)) return 'Flavour';
   if (/protein/.test(t)) return 'Protein source';

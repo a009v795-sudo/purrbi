@@ -9,8 +9,9 @@ export function overallState(general: GeneralAssessment, recall: RecallCheck | n
   if (recall?.status === 'exact_active') return 'alert';
   if (scope.status === 'unknown') return 'unresolved'; // not yet known whether it is for cats or dogs
   if (!general.scoreApplicable) return 'not_scored';
-  if (general.score === null || !general.scoreBand) return 'incomplete';
-  if (general.scoreLabel === 'Partial assessment') return 'partial';
+  if (general.score === null) return 'incomplete';
+  if (general.scoreLabel === 'Partial assessment') return 'partial'; // scored, but on too little of the label for a band
+  if (!general.scoreBand) return 'incomplete';
   return general.scoreBand;
 }
 

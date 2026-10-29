@@ -4,6 +4,7 @@ import { personalize } from '../../src/domain/personalize';
 import { buildSummary, overallState } from '../../src/domain/summary';
 import { classifyScope } from '../../src/domain/scope';
 import type { ProductFacts, RecallCheck } from '../../src/domain/types';
+import { resultFields } from '../../src/pipeline/serialize';
 import { facts, NOW, pet, SRC } from '../helpers/fixtures';
 
 const scopeOf = (f: ProductFacts) =>
@@ -43,6 +44,9 @@ describe('general score', () => {
     expect(a).toMatchObject({ score: 74, scoreProvisional: true, scoreLabel: 'Partial assessment', scoreBand: null, scoreCoverage: 50, scoreMinPossible: 50, scoreMaxPossible: 100 });
     expect(a.scoreBasis).toBe('Based on 50 of 100 points’ worth of label information (nutritional adequacy statement not available yet); the complete label could put it between 50 and 100. Score capped at 74 until the adequacy statement is known.');
     expect(a.findings.find((x) => x.rule === 'G-ADEQUACY')!.kind).toBe('missing'); // shown as missing evidence, not as a fault
+    expect(overallState(a, noRecall, scopeOf(f))).toBe('partial'); // never "Information incomplete"
+    const shown = resultFields({ facts: f, scope: scopeOf(f), general: a, personal: personalize(null, f, scopeOf(f), a, noRecall, NOW), recall: noRecall, summary: [], state: 'partial', photoRequests: [], factsVersion: 1, labelEvidenceUsed: false });
+    expect(shown.scoreText).toBe('50–100'); // the range, never a bare number that reads as final
   });
   it('the same product scores the same quality whether or not the optional calorie statement is known', () => {
     const full = assessGeneral(facts(), scopeOf(facts()));

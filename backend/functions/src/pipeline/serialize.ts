@@ -113,7 +113,13 @@ export function resultFields(args: {
     scoreAvailable: general.score !== null,
     // The app shows scoreText, never score alone: an unscored result is never displayed as 0.
     score: general.score ?? 0,
-    scoreText: general.score === null ? (general.scoreApplicable ? 'Unscored' : 'Not scored') : String(general.score),
+    // A partial assessment shows the range the complete label could give, never a bare number that reads as final.
+    scoreText:
+      general.score === null
+        ? general.scoreApplicable ? 'Unscored' : 'Not scored'
+        : general.scoreLabel === 'Partial assessment' && general.scoreMinPossible != null && general.scoreMaxPossible != null && general.scoreMinPossible !== general.scoreMaxPossible
+          ? `${general.scoreMinPossible}–${general.scoreMaxPossible}`
+          : String(general.score),
     scoreMaxPossible: general.scoreMaxPossible ?? 0,
     scoreMinPossible: general.scoreMinPossible ?? 0,
     scoreCoverage: general.scoreCoverage ?? 0,
