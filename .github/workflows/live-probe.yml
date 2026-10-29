@@ -7,6 +7,10 @@ on:
       barcodes:
         description: Barcodes separated by spaces
         required: true
+      urls:
+        description: Product page URLs to read (optional, space separated); the first barcode is looked for on them
+        required: false
+        default: ''
 
 jobs:
   probe:
@@ -22,3 +26,9 @@ jobs:
         env:
           BARCODES: ${{ inputs.barcodes }}
         run: node backend/tools/probe-barcode.mjs $BARCODES
+      - name: Pages
+        if: ${{ inputs.urls != '' }}
+        env:
+          URLS: ${{ inputs.urls }}
+          BARCODES: ${{ inputs.barcodes }}
+        run: node backend/tools/probe-page.mjs $URLS --barcode ${BARCODES%% *}
