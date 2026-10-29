@@ -71,6 +71,7 @@ const SYSTEM = [
   'List every label panel that is visible: its kind; its legibility (clear: every word and number can be read; partial: only some of it; illegible); its printed heading, verbatim; and its text, verbatim, one printed line per line, keeping order, parentheses and percentages.',
   'The ingredient list is the text after a printed heading such as Ingredients, Composition, Zutaten, Ingredientes, Ingredienti, Samenstelling or Ingrédients. Front-of-pack pictures and feature callouts (for example "Fresh turkey" or "Potatoes and peas") are not an ingredient list: give them kind front or other.',
   'In a guaranteed analysis or analytical constituents table, write each row on one line: the row name(s) as printed, then its value as printed, for example "Crude Protein (min) 30.0%" or "Protéine / Proteína / Protein 35%".',
+  'species_claim: only from printed words such as "for dogs", "cat food", "chien"; never from pictures of animals. not_visible if no such words are legible.',
   'barcode_digits: the digits printed under a barcode if every digit is legible, otherwise null.',
 ].join(' ');
 

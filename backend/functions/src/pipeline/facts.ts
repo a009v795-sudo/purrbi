@@ -66,7 +66,7 @@ export function labelToFacts(label: ValidatedLabel, source: SourceRef): Partial<
   if (label.feedingDirections) out.feedingDirections = { value: label.feedingDirections, source };
   if (label.activeIngredients?.length) out.activeIngredients = { value: label.activeIngredients, source };
   const signals = [label.productName, label.productTypeClaim, label.species !== 'unknown' ? `for ${label.species.replace('_and_', ' and ')}s` : null];
-  out.classificationSignals = signals.filter((t): t is string => !!t).map((text) => ({ text, source: source.sourceId }));
+  out.classificationSignals = signals.filter((t): t is string => !!t).map((text) => ({ text, source: source.sourceId, kind: 'photo' as const }));
   return out;
 }
 

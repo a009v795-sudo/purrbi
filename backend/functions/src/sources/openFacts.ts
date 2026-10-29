@@ -21,6 +21,7 @@ const HOSTS: Record<OpenFactsDb, { host: string; name: string; license: string }
 
 const FIELDS = [
   'code',
+  'product_type',
   'product_name',
   'product_name_en',
   'generic_name',
@@ -42,6 +43,7 @@ const FIELDS = [
 
 export interface OpenFactsProduct {
   code?: string;
+  product_type?: string; // food, petfood, beauty, product: the project the record is filed in
   product_name?: string;
   product_name_en?: string;
   generic_name?: string;
@@ -61,24 +63,39 @@ export interface OpenFactsProduct {
   last_modified_t?: number;
 }
 
+/**
+ * Not found in this database. The four databases share one backend, so a miss says whether another
+ * one holds the barcode: otherType names its product type ("product found with a different product
+ * type: food"), null means no database has it, undefined means the answer did not say.
+ */
 export type OpenFactsLookup =
   | { found: true; db: OpenFactsDb; code: string; product: OpenFactsProduct; source: SourceRef }
-  | { found: false; db: OpenFactsDb; tried: string[] };
+  | { found: false; db: OpenFactsDb; tried: string[]; otherType?: string | null };
+
+/** The database that files records of a Product Opener product_type. */
+export const DB_FOR_TYPE: Record<string, OpenFactsDb> = { petfood: 'opff', food: 'off', beauty: 'obf', product: 'opf' };
 
 export async function lookupOpenFacts(db: OpenFactsDb, barcode: NormalizedBarcode, userAgent: string, now: Date): Promise<OpenFactsLookup> {
   const { host, name, license } = HOSTS[db];
   const tried: string[] = [];
+  let otherType: string | null | undefined;
   for (const code of lookupVariants(barcode)) {
     tried.push(code);
     const url = `https://${host}/api/v2/product/${encodeURIComponent(code)}?fields=${FIELDS}`;
-    const { status, json } = await httpJson<{ status?: number; product?: OpenFactsProduct }>(url, {
+    const { status, json } = await httpJson<{ status?: number; status_verbose?: string; product?: OpenFactsProduct }>(url, {
       source: name,
       headers: { 'User-Agent': userAgent, Accept: 'application/json' },
       timeoutMs: 8000,
       retries: 1,
       acceptStatuses: [404],
     });
-    if (status === 404 || !json || json.status !== 1 || !json.product) continue;
+    if (status === 404 || !json || json.status !== 1 || !json.product) {
+      const verbose = String(json?.status_verbose ?? '');
+      const other = /different product type: ([a-z]+)/i.exec(verbose)?.[1]?.toLowerCase();
+      if (other) return { found: false, db, tried, otherType: other }; // filed in another database
+      if (/^product not found$/i.test(verbose.trim()) && otherType === undefined) otherType = null;
+      continue;
+    }
     const productCode = json.product.code ?? code;
     return {
       found: true,
@@ -96,7 +113,7 @@ export async function lookupOpenFacts(db: OpenFactsDb, barcode: NormalizedBarcod
       },
     };
   }
-  return { found: false, db, tried };
+  return { found: false, db, tried, otherType };
 }
 
 // Pet-food keys first (crude-*), then the generic ones some records use; the first one found per
@@ -182,12 +199,13 @@ export function openFactsToFacts(lookup: Extract<OpenFactsLookup, { found: true 
     gtin: gtin14,
     barcode,
     classificationSignals: [
-      ...(p.categories_tags ?? []).map((t) => ({ text: t, source: src.sourceId })),
-      ...(p.labels_tags ?? []).map((t) => ({ text: t, source: src.sourceId })),
-      ...[name, p.generic_name_en || p.generic_name].filter(Boolean).map((t) => ({ text: t as string, source: src.sourceId })),
+      ...(p.categories_tags ?? []).map((t) => ({ text: t, source: src.sourceId, kind: 'category' as const })),
+      ...(p.labels_tags ?? []).map((t) => ({ text: t, source: src.sourceId, kind: 'label' as const })),
+      ...[name, p.generic_name_en || p.generic_name].filter(Boolean).map((t) => ({ text: t as string, source: src.sourceId, kind: 'name' as const })),
     ],
     sources: [src],
     ingredientsLanguage,
+    ...(p.product_type ? { recordType: p.product_type } : {}),
   };
   if (name) facts.productName = { value: name, source: src };
   if (brand) facts.brand = { value: brand, source: src };

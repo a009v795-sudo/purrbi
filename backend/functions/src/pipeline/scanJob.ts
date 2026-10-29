@@ -12,14 +12,14 @@ import { extractLabel as extractLabelImpl, LABEL_EXTRACTION_VERSION, type Valida
 import { parseAdequacyStatement } from '../domain/adequacy';
 import { normalizeBarcode, type NormalizedBarcode } from '../domain/barcode';
 import { personalize } from '../domain/personalize';
-import { classifyScope, type DatabaseOrigin } from '../domain/scope';
+import { classifyScope, SCOPE_VERSION, type DatabaseOrigin } from '../domain/scope';
 import { assessGeneral } from '../domain/score';
 import { buildSummary, overallState } from '../domain/summary';
 import type { GeneralAssessment, PetProfile, ProductFacts, RecallCheck, ScopeResult, SourceRef } from '../domain/types';
 import { explainTerms as explainImpl, explanationKey, needsExplanation, type CitedExplanation, type ExplainRequest } from '../knowledge/explain';
 import { readDatabaseLabelImages as databaseImagesImpl } from '../sources/labelImages';
 import { checkRecalls as checkRecallsImpl } from '../sources/openfda';
-import { databaseGuarantees, implausibleAnalysis, lookupOpenFacts as lookupOpenFactsImpl, openFactsToFacts, type OpenFactsDb, type OpenFactsLookup } from '../sources/openFacts';
+import { databaseGuarantees, DB_FOR_TYPE, implausibleAnalysis, lookupOpenFacts as lookupOpenFactsImpl, openFactsToFacts, type OpenFactsDb, type OpenFactsLookup } from '../sources/openFacts';
 import { RESEARCH_VERSION, researchProduct as researchImpl, type ResearchOutcome } from '../sources/research';
 import { currentCalls, errorDetail, runWithCallLog } from '../util/diagnostics';
 import { SourceError } from '../util/http';
@@ -100,6 +100,12 @@ function newJob(kind: JobInfo['kind'], traceId: string, now: Date): JobInfo {
 
 async function setStatus(deps: Deps, uid: string, scanId: string, status: string, message: string, progress: number) {
   await deps.db.doc(scanPath(uid, scanId)).update({ status, statusMessage: message, progress, updatedAt: Timestamp.fromDate(deps.now()) });
+}
+
+/** Which source failed and how, so a provider outage is never mistaken for "not found" or "unknown". */
+function sourceFailureMessage(err: SourceError): string {
+  const how = err.kind === 'rate_limited' ? 'is limiting requests right now' : err.kind === 'timeout' ? 'didn’t answer in time' : err.kind === 'parse' ? 'sent a response Purrbi couldn’t read' : err.status ? `answered with an error (HTTP ${err.status})` : 'couldn’t be reached';
+  return `${err.source} ${how}, so the lookup didn’t finish. Your scan is saved; try again in a moment.`;
 }
 
 function errorMessage(code: ErrorCode, detail?: string): string {
@@ -195,7 +201,7 @@ function isRetryTestBarcode(config: RuntimeConfig, gtin14: string): boolean {
 }
 
 async function failScan(deps: Deps, uid: string, scanId: string, job: JobInfo, err: unknown) {
-  const e = err instanceof JobError ? err : err instanceof SourceError ? new JobError('source_unavailable', errorMessage('source_unavailable'), true) : new JobError('analysis_failed', errorMessage('analysis_failed'), true);
+  const e = err instanceof JobError ? err : err instanceof SourceError ? new JobError('source_unavailable', sourceFailureMessage(err), true) : new JobError('analysis_failed', errorMessage('analysis_failed'), true);
   const calls = currentCalls();
   deps.log.error('scan failed', { traceId: job.traceId, uid, scanId, code: e.code, error: (err as Error)?.message, calls });
   try {
@@ -237,7 +243,9 @@ async function publicEvidence(deps: Deps, job: JobInfo, o: AssessOptions, stored
   const { config } = deps;
   const gtin = o.barcode.gtin14;
   const fresh = stored?.lastRetrievedAt && now.getTime() - stored.lastRetrievedAt.getTime() < config.productFreshDays * 86400000;
-  if (stored && (fresh || !o.allowFetch)) {
+  // A record classified by older rules is read again once (its product type and tag kinds were not saved).
+  const current = stored?.scopeVersion === SCOPE_VERSION;
+  if (stored && ((fresh && current) || !o.allowFetch)) {
     job.productCache = 'hit';
     job.evidenceNotes.push(`Product details reused from Purrbi’s saved record (retrieved ${stored.lastRetrievedAt?.toISOString().slice(0, 10) ?? 'earlier'}); no database call was needed.`);
     return { facts: stored.facts, origin: (stored.origin as DatabaseOrigin) ?? 'opff', fetchedPublic: false, notes: [], openFacts: null };
@@ -253,9 +261,15 @@ async function publicEvidence(deps: Deps, job: JobInfo, o: AssessOptions, stored
       const facts = fillMissing(openFactsToFacts(pet, gtin, o.barcode.digits), enrichmentFacts(stored?.facts)).facts;
       return { facts, origin: 'opff', fetchedPublic: true, notes: [], openFacts: pet };
     }
-    // Not in the pet database: check whether the barcode is a human food, cosmetic or other product.
-    const sister = await firstFound(deps, o.barcode, now);
-    job.evidenceNotes.push(sister ? `Not in Open Pet Food Facts; listed in ${sister.source.sourceName}.` : 'Not found in Open Pet Food Facts or its sister databases.');
+    // Not in the pet database. The databases share one backend, so its answer says whether another one
+    // files the barcode (as human food, a cosmetic or another product). That record is read for its
+    // facts; where it is filed is provenance only, never proof of what the product is.
+    const sister = pet.otherType === null ? null : await sisterRecord(deps, o.barcode, now, typeof pet.otherType === 'string' ? DB_FOR_TYPE[pet.otherType] : undefined);
+    job.evidenceNotes.push(
+      sister
+        ? `Not in Open Pet Food Facts; its record is in ${sister.source.sourceName}${sister.product.product_type ? ` (filed there as “${sister.product.product_type}”)` : ''}. Where a record is filed doesn’t decide what the product is.`
+        : 'Not found in Open Pet Food Facts or its sister databases.',
+    );
     return {
       facts: sister ? openFactsToFacts(sister, gtin, o.barcode.digits) : { gtin, barcode: o.barcode.digits, classificationSignals: [], sources: [] },
       origin: sister ? (sister.db as DatabaseOrigin) : 'label',
@@ -272,8 +286,18 @@ async function publicEvidence(deps: Deps, job: JobInfo, o: AssessOptions, stored
   }
 }
 
+const isCategorySignal = (s: ProductFacts['classificationSignals'][number]) => s.kind === 'category' || (!s.kind && /^[a-z]{2}:[a-z0-9-]+$/.test(s.text));
+
+/** Classifies from the product's own evidence: category tags apart, every other statement as text. */
 const scopeOf = (facts: ProductFacts, origin: DatabaseOrigin): ScopeResult =>
-  classifyScope({ origin, categoriesTags: facts.classificationSignals.map((s) => s.text), texts: [facts.productName?.value ?? ''], adequacy: facts.adequacy?.value });
+  classifyScope({
+    origin,
+    recordType: facts.recordType,
+    categoriesTags: facts.classificationSignals.filter(isCategorySignal).map((s) => s.text),
+    texts: [facts.productName?.value ?? '', ...facts.classificationSignals.filter((s) => !isCategorySignal(s)).map((s) => s.text)],
+    adequacy: facts.adequacy?.value,
+    ingredientsText: facts.ingredientsText?.value,
+  });
 
 /** Gathers evidence, assesses and saves. Explanations not yet cached are added in a second, separate update. */
 export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions): Promise<void> {
@@ -313,7 +337,8 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       metaChanged = true;
     }
   }
-  const aiOk = o.allowFetch && config.aiEnabled && scope.status !== 'out_of_scope' && origin !== 'off' && origin !== 'obf' && origin !== 'opf';
+  // Enrichment runs for every product not affirmatively out of scope, wherever its record is filed.
+  const aiOk = o.allowFetch && config.aiEnabled && scope.status !== 'out_of_scope';
   const panelNeeds = () => missingInfo(facts, scope, scope.category).map((r) => r.purpose).filter((p) => p === 'ingredients' || p === 'nutrition');
 
   // 2a. Label images already published in the pet database, read by AI.
@@ -347,7 +372,8 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   }
 
   // 2b. Bounded manufacturer/web research.
-  const stillMissing = missingInfo(facts, scope, scope.category).some((r) => r.purpose !== 'front' || !facts.productName);
+  // Research also runs when it is unresolved whether the product is for cats or dogs.
+  const stillMissing = scope.status === 'unknown' || missingInfo(facts, scope, scope.category).some((r) => r.purpose !== 'front' || !facts.productName);
   const hasWeb = facts.sources.some((s) => s.sourceType === 'manufacturer' || s.sourceType === 'retailer_or_web');
   const researchDue = ageDays(meta.enrichment.researchAt, now) > config.productFreshDays || meta.enrichment.research?.version !== RESEARCH_VERSION;
   if (aiOk && config.researchEnabled && stillMissing && !hasWeb && researchDue) {
@@ -355,7 +381,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
     try {
       await consumeQuota(db, o.uid, 'research', config.limits, now);
       await consumeAiBudget(db, config.limits, now);
-      const r = await deps.sources.research({ apiKey: config.openaiApiKey(), model: config.researchModel, gtin14: gtin, barcode: o.barcode.digits, knownName: facts.productName?.value, knownBrand: facts.brand?.value, userAgent: config.userAgent, now });
+      const r = await deps.sources.research({ apiKey: config.openaiApiKey(), model: config.researchModel, gtin14: gtin, barcode: o.barcode.digits, knownName: facts.productName?.value, knownBrand: facts.brand?.value, knownIngredients: facts.ingredients?.value, userAgent: config.userAgent, now });
       let filled: string[] = [];
       if (r.facts) {
         // "Active ingredients" are a supplement's; a food page's additive list is not used as such.
@@ -370,10 +396,15 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       meta.enrichment.researchAt = now;
       meta.enrichment.research = { filled, discarded: r.discarded, source: src ? `${src.sourceName} (${src.sourceType})` : '', version: RESEARCH_VERSION };
       metaChanged = true;
+      const pageKind = src?.sourceType === 'manufacturer' ? 'manufacturer page' : 'web page';
+      const confirmed = r.facts?.classificationSignals?.find((c) => c.kind === 'research' && /^intended for /.test(c.text))?.text;
+      if (confirmed && src) job.evidenceNotes.push(`${src.sourceName} (${pageKind}) says it is ${confirmed}; checked on the page.`);
       job.evidenceNotes.push(
         filled.length && src
-          ? `Filled ${filled.filter((k) => k !== 'ingredients').map(fieldLabel).join(', ')} from ${src.sourceName} (${src.sourceType === 'manufacturer' ? 'manufacturer page' : 'web page'}), each checked against the page.`
-          : 'Searched the manufacturer’s and retailers’ pages; nothing could be verified against a page, so nothing was added.',
+          ? `Filled ${filled.filter((k) => k !== 'ingredients').map(fieldLabel).join(', ')} from ${src.sourceName} (${pageKind}), each checked against the page.`
+          : confirmed
+            ? 'No further label details could be verified on that page.'
+            : 'Searched the manufacturer’s and retailers’ pages; nothing could be verified against a page, so nothing was added.',
       );
       job.diagnosticNotes.push(...r.discarded.slice(0, 4).map((d) => `Research (${r.model}): ${d}`));
       log('research', { filled, discarded: r.discarded });
@@ -388,7 +419,10 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
 
   // 3. Save public facts (never the owner's private label data) and the enrichment bookkeeping.
   let factsVersion = stored?.factsVersion ?? 0;
-  if ((fetchedPublic || rewriteProduct || !stored) && facts.sources.length) factsVersion = await writeProduct(db, { facts, scope, origin, previous: stored, now, traceId: job.traceId });
+  // A saved classification that no longer holds (new evidence or rules) is updated, with its audit entry.
+  const reclassified = !!stored && (stored.scope !== scope.status || stored.species !== scope.species || stored.category !== scope.category || stored.scopeVersion !== SCOPE_VERSION);
+  if (reclassified && stored?.scope === 'out_of_scope' && scope.status !== 'out_of_scope') job.evidenceNotes.push('An earlier classification of this product as “not a cat or dog product” was reviewed against the product’s own evidence and replaced; the earlier one is kept in its history.');
+  if ((fetchedPublic || rewriteProduct || reclassified || !stored) && facts.sources.length) factsVersion = await writeProduct(db, { facts, scope, origin, previous: stored, now, traceId: job.traceId });
   if (metaChanged) await writeProductMeta(db, gtin, meta, now);
 
   // 4. The owner's own label photos fill remaining gaps (private, unreviewed).
@@ -517,10 +551,21 @@ function fieldLabel(k: string): string {
   return ({ productName: 'product name', brand: 'brand', ingredientsText: 'ingredients', guaranteedAnalysis: 'guaranteed analysis', calories: 'calorie content', adequacy: 'adequacy statement', activeIngredients: 'active ingredients', feedingDirections: 'feeding directions', imageUrl: 'image' } as Record<string, string>)[k] ?? k;
 }
 
-async function firstFound(deps: Deps, barcode: NormalizedBarcode, now: Date): Promise<Extract<OpenFactsLookup, { found: true }> | null> {
+/**
+ * The record in the database the shared backend named (one call), or, when its answer did not say,
+ * in any sister database. A database that fails stops the lookup with that failure: a provider outage
+ * must never read as "not found".
+ */
+async function sisterRecord(deps: Deps, barcode: NormalizedBarcode, now: Date, db: OpenFactsDb | undefined): Promise<Extract<OpenFactsLookup, { found: true }> | null> {
+  if (db && db !== 'opff') {
+    const r = await deps.sources.lookupOpenFacts(db, barcode, deps.config.userAgent, now);
+    return r.found ? r : null;
+  }
   const dbs: OpenFactsDb[] = ['off', 'obf', 'opf'];
-  const results = await Promise.allSettled(dbs.map((db) => deps.sources.lookupOpenFacts(db, barcode, deps.config.userAgent, now)));
+  const results = await Promise.allSettled(dbs.map((d) => deps.sources.lookupOpenFacts(d, barcode, deps.config.userAgent, now)));
   for (const r of results) if (r.status === 'fulfilled' && r.value.found) return r.value;
+  const failed = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+  if (failed) throw failed.reason;
   return null;
 }
 

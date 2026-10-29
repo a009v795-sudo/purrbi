@@ -267,7 +267,7 @@ describe('manufacturer research', () => {
     <h2>Constituants analytiques</h2><p>Prot&eacute;ine : 34 %, Mati&egrave;res grasses brutes : 12,5 %, Cellulose brute : 3,5 %</p>
     <p>Aliment complet pour chats adultes st&eacute;rilis&eacute;s.</p></body></html>`;
   const answer = (over: Record<string, unknown> = {}) => ({
-    found: true, product_name: 'PURINA ONE® Stérilisé Croquettes au Saumon', brand: 'Purina', species: 'cat', product_type: 'dry cat food',
+    found: true, product_name: 'PURINA ONE® Stérilisé Croquettes au Saumon', brand: 'Purina', intended_for: 'cats', product_type: 'dry cat food',
     ingredients_verbatim: 'Saumon (17%), protéines de volaille déshydratées, blé, maïs', active_ingredients_verbatim: null,
     adequacy_statement_verbatim: 'Aliment complet pour chats adultes stérilisés.',
     guaranteed_analysis: [{ label: 'Protéine', qualifier: 'not_stated', value: 34, unit: '%' }, { label: 'Matières grasses brutes', qualifier: 'not_stated', value: 12.5, unit: '%' }],
@@ -293,7 +293,8 @@ describe('manufacturer research', () => {
     stub(answer({ product_name: 'Purina Gourmet Gold Mousse au Thon' }));
     const r = await run();
     expect(r.facts).toBeNull();
-    expect(r.discarded).toEqual(['the cited page does not show this product’s barcode or its brand and name (brand "Purina" found, name "Purina Gourmet Gold Mousse au Thon" not found)']);
+    // The barcode search and then the search by brand and name each found only this page.
+    expect(r.discarded).toEqual(['barcode search', 'name search'].map((a) => `${a}: the cited page does not show this product’s barcode or its brand and name (brand "Purina" found, name "Purina Gourmet Gold Mousse au Thon" not found)`));
   });
 });
 

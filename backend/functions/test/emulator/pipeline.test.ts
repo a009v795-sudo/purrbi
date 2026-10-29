@@ -23,6 +23,8 @@ const BC = {
   supplement: withCheck('501234567892'),
   imageOnly: withCheck('501234567893'),
   webOnly: withCheck('501234567894'),
+  misfiled: withCheck('501234567896'), // a pet food filed in the human-food database, as 099482480882 is
+  offDown: withCheck('501234567897'),
 };
 
 let db: Firestore;
@@ -67,6 +69,15 @@ const sources: Sources = {
         product_name: 'TEST FIXTURE Lamb Dry Dog Food', brands: 'TESTBRAND', categories_tags: ['en:dog-food'],
       } };
     }
+    // The shared backend's answer: not in the pet database, filed as human food elsewhere.
+    if (dbName === 'opff' && (barcode.digits === BC.misfiled || barcode.digits === BC.offDown)) return { found: false, db: dbName, tried: [barcode.digits], otherType: 'food' };
+    if (dbName === 'off' && barcode.digits === BC.misfiled) {
+      return { found: true, db: dbName, code: barcode.digits, source: src(dbName, barcode.digits), product: {
+        product_type: 'food', product_name: 'TEST FIXTURE Grain free chicken & Pea recipe', brands: 'TESTSTORE', categories_tags: [],
+        ingredients_text: 'Chicken, Chicken Meal, Peas, Turkey Meal, Chicken Fat (preserved with mixed tocopherols), Dried Plain Beet Pulp, Choline Chloride',
+      } };
+    }
+    if (dbName === 'off' && barcode.digits === BC.offDown) throw new SourceError('Open Food Facts', 'rate_limited', 'rate limited', 429);
     if (dbName === 'off' && barcode.digits === BC.human) {
       return { found: true, db: dbName, code: barcode.digits, source: src(dbName, barcode.digits), product: { product_name: 'TEST FIXTURE Hazelnut Spread', brands: 'TESTFOODS', categories_tags: ['en:spreads', 'en:sweet-spreads'] } };
     }
@@ -78,6 +89,10 @@ const sources: Sources = {
   },
   async research(o) {
     calls.research = (calls.research ?? 0) + 1;
+    if (o.barcode === BC.misfiled) {
+      const page = { sourceId: `web:teststore.example:${o.gtin14}`, sourceType: 'retailer_or_web' as const, sourceName: 'teststore.example', url: 'https://teststore.example/grain-free-chicken-pea-dog-food', retrievedAt: NOW.toISOString(), matchConfidence: 'brand_and_product' as const };
+      return { facts: { classificationSignals: [{ text: 'intended for dogs', source: page.sourceId, kind: 'research' as const }] }, sources: [page], discarded: [], model: 'mock' };
+    }
     if (o.barcode !== BC.webOnly) return { facts: null, sources: [], discarded: ['model reported no matching product'], model: 'mock' };
     const source = { sourceId: `web:testbrand.example:${o.gtin14}`, sourceType: 'manufacturer' as const, sourceName: 'testbrand.example', url: 'https://testbrand.example/lamb', retrievedAt: NOW.toISOString(), matchConfidence: 'brand_and_product' as const };
     const facts: Partial<ProductFacts> = {
@@ -307,6 +322,59 @@ describe('path B: missing label information', () => {
     expect(s.productFound).toBe(false);
     expect(s.missingInfo).toEqual(expect.arrayContaining(['front', 'ingredients']));
     expect(s.errorCode).toBe('');
+  });
+});
+
+describe('classification by evidence, not by database (regression: 099482480882)', () => {
+  it('reads the record where the shared backend says it is filed, keeps its facts, and researches instead of rejecting', async () => {
+    const ref = await newScan('u1', BC.misfiled);
+    await processScan(deps({ researchEnabled: true }), 'u1', ref.id);
+    const s = await read(ref);
+    expect(calls['lookup:off']).toBe(1);
+    expect(calls['lookup:obf']).toBeUndefined(); // only the database that files it is asked
+    expect(calls.research).toBe(1);
+    expect(s.scope).toBe('supported');
+    expect(s).toMatchObject({ productSpecies: 'dog', productCategory: 'complete_food', productName: 'TEST FIXTURE Grain free chicken & Pea recipe' });
+    expect(s.evidenceNotes.join(' ')).toMatch(/filed there as “food”\)\. Where a record is filed doesn’t decide what the product is/);
+    expect(s.evidenceNotes).toContain('teststore.example (web page) says it is intended for dogs; checked on the page.');
+    expect(s.ingredientNotes.length).toBeGreaterThan(3); // the database's ingredients are kept
+  });
+  it('stays unresolved and asks to confirm the product when research cannot tell — never "human food"', async () => {
+    const ref = await newScan('u1', BC.misfiled);
+    await processScan(deps(), 'u1', ref.id); // research switched off
+    const s = await read(ref);
+    expect(s.status).toBe('needs_photos');
+    expect(s.scope).toBe('unknown');
+    expect(s.outOfScopeKind).toBe('');
+    expect(s.missingInfo).toContain('front');
+    expect(s.productName).toBe('TEST FIXTURE Grain free chicken & Pea recipe');
+  });
+  it('a rate-limited database is a specific, retryable failure, never "not found" or "unknown"', async () => {
+    const ref = await newScan('u1', BC.offDown);
+    await processScan(deps(), 'u1', ref.id);
+    const s = await read(ref);
+    expect(s).toMatchObject({ status: 'failed', errorCode: 'source_unavailable', errorRetryable: true });
+    expect(s.errorMessage).toMatch(/^Open Food Facts is limiting requests right now/);
+  });
+  it('replaces a saved false "not a pet product" classification on rescan and keeps an audit trail', async () => {
+    const gtin = BC.misfiled.padStart(14, '0');
+    const offSrc = src('off', BC.misfiled);
+    // As the earlier rules saved it: out of scope, no rule version, signals without kinds.
+    await db.doc(`products/${gtin}`).set({
+      gtin, barcode: BC.misfiled, scope: 'out_of_scope', species: 'unknown', category: 'unknown', origin: 'off',
+      scopeReason: 'This barcode is listed as a human food product. Purrbi only assesses products made for cats and dogs.',
+      facts: { gtin, barcode: BC.misfiled, productName: { value: 'TEST FIXTURE Grain free chicken & Pea recipe', source: offSrc }, classificationSignals: [{ text: 'TEST FIXTURE Grain free chicken & Pea recipe', source: offSrc.sourceId }], sources: [offSrc] },
+      factsHash: 'old', factsVersion: 1, lastRetrievedAt: Timestamp.fromDate(NOW),
+    });
+    const ref = await newScan('u1', BC.misfiled);
+    await processScan(deps({ researchEnabled: true }), 'u1', ref.id);
+    expect(calls['lookup:opff']).toBe(1); // read again once under the new rules
+    expect((await read(ref)).scope).toBe('supported');
+    const product = (await db.doc(`products/${gtin}`).get()).data()!;
+    expect(product).toMatchObject({ scope: 'supported', species: 'dog', scopeVersion: 'scope-2.0.0' });
+    const audit = (await db.collection(`products/${gtin}/classifications`).get()).docs.map((d) => d.data());
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({ from: { scope: 'out_of_scope', version: 'scope-1' }, to: { scope: 'supported', species: 'dog', version: 'scope-2.0.0' } });
   });
 });
 

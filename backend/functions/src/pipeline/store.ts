@@ -6,6 +6,7 @@ import type { ValidatedLabel } from '../ai/labelExtract';
 import { EXPLAIN_VERSION, type CitedExplanation } from '../knowledge/explain';
 import type { PetProfile, ProductFacts, RecallCheck, ScopeResult, SourceRef } from '../domain/types';
 import type { Limits } from './config';
+import { SCOPE_VERSION } from '../domain/scope';
 
 export class QuotaError extends Error {
   constructor(readonly kind: 'scans' | 'photos' | 'research' | 'ai_budget') {
@@ -51,6 +52,11 @@ export interface Enrichment {
 export interface StoredProduct {
   facts: ProductFacts;
   origin: string;
+  scope: string; // the saved classification (supported, out_of_scope, unknown)
+  species: string;
+  category: string;
+  scopeReason: string;
+  scopeVersion: string | null; // the classification rules that produced it
   factsVersion: number;
   factsHash: string;
   lastRetrievedAt: Date | null;
@@ -91,6 +97,11 @@ export async function readProduct(db: Firestore, gtin: string): Promise<StoredPr
   return {
     facts: d.facts as ProductFacts,
     origin: (d.origin as string) ?? 'unknown',
+    scope: (d.scope as string) ?? '',
+    species: (d.species as string) ?? '',
+    category: (d.category as string) ?? '',
+    scopeReason: (d.scopeReason as string) ?? '',
+    scopeVersion: (d.scopeVersion as string) ?? null,
     factsVersion: (d.factsVersion as number) ?? 1,
     factsHash: (d.factsHash as string) ?? '',
     lastRetrievedAt: toDate(d.lastRetrievedAt),
@@ -144,6 +155,8 @@ export async function writeProduct(
     category: args.scope.category,
     scope: args.scope.status,
     scopeReason: args.scope.reason,
+    scopeSignals: args.scope.signals.slice(0, 20),
+    scopeVersion: SCOPE_VERSION,
     origin: args.origin,
     verification: publicFacts.sources.some((s) => s.sourceType === 'manufacturer' || s.sourceType === 'retailer_or_web')
       ? 'database_and_verified_web'
@@ -159,6 +172,18 @@ export async function writeProduct(
   // Each listed field is replaced whole (a plain merge would keep facts that were dropped, e.g. an
   // implausible analysis); fields written elsewhere (recall) are kept.
   batch.set(ref, record, { mergeFields: Object.keys(record) });
+  // When the classification changes (new evidence or new rules), the earlier one is kept: an audit
+  // trail in a server-only subcollection, never a silent rewrite.
+  const prev = args.previous;
+  if (prev && (prev.scope !== args.scope.status || prev.species !== args.scope.species || prev.category !== args.scope.category)) {
+    batch.set(ref.collection('classifications').doc(), {
+      at: Timestamp.fromDate(args.now),
+      traceId: args.traceId,
+      from: { scope: prev.scope, species: prev.species, category: prev.category, reason: prev.scopeReason, version: prev.scopeVersion ?? 'scope-1' },
+      to: { scope: args.scope.status, species: args.scope.species, category: args.scope.category, reason: args.scope.reason, version: SCOPE_VERSION },
+      signals: args.scope.signals.slice(0, 20),
+    });
+  }
   for (const s of publicFacts.sources) {
     batch.set(ref.collection('evidence').doc(s.sourceId.replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 200)), {
       ...s,

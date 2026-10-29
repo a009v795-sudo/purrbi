@@ -125,9 +125,22 @@ export interface ProductFacts {
   adequacy?: Fact<AdequacyStatement>;
   feedingDirections?: Fact<string>;
   activeIngredients?: Fact<ActiveIngredient[]>; // supplements: "active ingredients per chew"
-  /** raw classification inputs from sources (categories, labels, names) */
-  classificationSignals: { text: string; source: string }[];
+  /** raw classification inputs from sources (categories, labels, names), with what each one is */
+  classificationSignals: ClassificationSignal[];
+  /** the database record's own product type (Product Opener product_type: food, petfood, beauty, product); provenance only */
+  recordType?: string;
   sources: SourceRef[];
+}
+
+/**
+ * category: a database category tag (e.g. en:dog-food); label: a database label tag; name: a product or
+ * generic name; research: a statement verified on a fetched web page; photo: printed text read from a
+ * label photo. Signals saved before kinds existed have none.
+ */
+export interface ClassificationSignal {
+  text: string;
+  source: string;
+  kind?: 'category' | 'label' | 'name' | 'research' | 'photo';
 }
 
 // ---- Pets ----------------------------------------------------------------
