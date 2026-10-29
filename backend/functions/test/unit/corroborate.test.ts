@@ -39,3 +39,31 @@ describe('label photo stages', () => {
     expect(corroborateLabel(reading({ ingredients: RECIPE }), own).stage).toBe('extracted');
   });
 });
+
+describe('a partial analysis never blocks a fuller one', () => {
+  it('one verified row from a web page gives way to a complete analysis from a label', async () => {
+    const { fillMissing } = await import('../../src/pipeline/facts');
+    const web = { sourceId: 'web:x', sourceType: 'manufacturer' as const, sourceName: 'x', retrievedAt: '2026-10-29T00:00:00Z', matchConfidence: 'brand_and_product' as const };
+    const label = { ...web, sourceId: 'label:p1', sourceType: 'user_label' as const, sourceName: 'Your label photo' };
+    const base = facts({ guaranteedAnalysis: { value: [{ nutrient: 'crude_protein', label: 'Protéine', qualifier: 'not_stated', value: 37, unit: '%' }], source: web } });
+    const merged = fillMissing(base, { guaranteedAnalysis: { value: GA_FULL, source: label }, sources: [label] });
+    expect(merged.filled).toContain('guaranteedAnalysis');
+    expect(merged.facts.guaranteedAnalysis!.source.sourceId).toBe('label:p1');
+    // A complete analysis is never replaced.
+    const complete = fillMissing(facts(), { guaranteedAnalysis: { value: GA_FULL.slice(0, 2), source: label } });
+    expect(complete.filled).not.toContain('guaranteedAnalysis');
+  });
+});
+
+describe('ingredient roles in one vocabulary', () => {
+  it('maps roles written on cited pages to the curated words, and reads common French label terms', async () => {
+    const { normalizeRole, ingredientRole } = await import('../../src/domain/roles');
+    expect(normalizeRole('grain (wheat) — carbohydrate and protein source')).toBe('Protein source');
+    expect(normalizeRole('animal fat / fat source')).toBe('Fat source');
+    expect(normalizeRole('grain / carbohydrate and energy source')).toBe('Carbohydrate source');
+    expect(ingredientRole('Protéines de volaille déshydratées')).toBe('Protein source');
+    expect(ingredientRole('Blé (14%)')).toBe('Carbohydrate source');
+    expect(ingredientRole('Graisses animales')).toBe('Fat source');
+    expect(ingredientRole('Pulpe de betterave déshydratée')).toBe('Fibre source');
+  });
+});

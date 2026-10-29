@@ -6,13 +6,19 @@ import type { ProductCategory, ProductFacts, ScopeResult, SourceRef } from '../d
 type FactKey = 'productName' | 'brand' | 'imageUrl' | 'ingredientsText' | 'ingredients' | 'guaranteedAnalysis' | 'calories' | 'adequacy' | 'feedingDirections' | 'activeIngredients';
 export const FACT_KEYS: FactKey[] = ['productName', 'brand', 'imageUrl', 'ingredientsText', 'ingredients', 'guaranteedAnalysis', 'calories', 'adequacy', 'feedingDirections', 'activeIngredients'];
 
-/** Fills fields that `base` lacks from `extra`. Existing facts are never overwritten. */
+/**
+ * Fills fields that `base` lacks from `extra`. Existing facts are never overwritten, with one exception:
+ * an analysis without the required protein, fat and fiber guarantees (e.g. one row verified on a web page)
+ * gives way to a fuller one, so a partial reading never blocks the label photo that completes it.
+ */
 export function fillMissing(base: ProductFacts, extra: Partial<ProductFacts>): { facts: ProductFacts; filled: string[] } {
   const facts: ProductFacts = { ...base, classificationSignals: [...base.classificationSignals], sources: [...base.sources] };
   const filled: string[] = [];
+  const partialAnalysis = (ga: ProductFacts['guaranteedAnalysis']) => !!ga && !hasCoreGuaranteedAnalysis(ga.value);
+  const fuller = partialAnalysis(facts.guaranteedAnalysis) && !!extra.guaranteedAnalysis && (hasCoreGuaranteedAnalysis(extra.guaranteedAnalysis.value) || extra.guaranteedAnalysis.value.length > facts.guaranteedAnalysis!.value.length);
   for (const k of FACT_KEYS) {
     const v = extra[k];
-    if (v && !facts[k]) {
+    if (v && (!facts[k] || (k === 'guaranteedAnalysis' && fuller))) {
       (facts as unknown as Record<string, unknown>)[k] = v;
       filled.push(k);
     }

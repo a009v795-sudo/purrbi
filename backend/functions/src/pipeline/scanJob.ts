@@ -13,6 +13,7 @@ import { checkVerdict, ruleVerdict, verdictInput, verdictKey, withPetName, write
 import { parseAdequacyStatement } from '../domain/adequacy';
 import { normalizeBarcode, type NormalizedBarcode } from '../domain/barcode';
 import { buildHighlights } from '../domain/highlights';
+import { normalizeRole } from '../domain/roles';
 import { personalize } from '../domain/personalize';
 import { classifyScope, SCOPE_VERSION, type DatabaseOrigin } from '../domain/scope';
 import { assessGeneral } from '../domain/score';
@@ -754,7 +755,7 @@ function applyExplanations(general: GeneralAssessment, byKey: Map<string, CitedE
     if (e?.status === 'verified' && n.explanationKind === 'none') {
       Object.assign(n, { explanation: e.summary, explanationKind: 'cited_ai', explanationSourceTitle: e.sourceTitle, explanationSourceUrl: e.sourceUrl, explanationQuote: e.quote });
       // The role from the verified page fills in only where Purrbi's own role table has none.
-      if (!n.role && e.role) Object.assign(n, { role: e.role.slice(0, 60), roleSource: 'cited_ai' });
+      if (!n.role && e.role) Object.assign(n, { role: normalizeRole(e.role), roleSource: 'cited_ai' });
       applied++;
     }
   }

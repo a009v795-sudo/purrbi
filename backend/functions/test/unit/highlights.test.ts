@@ -80,6 +80,8 @@ describe('verdict', () => {
     expect(checkVerdict(ok.replace(`${v.assessment.score}/100`, '97/100'), v)).toMatch(/score not the assessment’s \(97\)/);
     expect(checkVerdict(ok.replace('compare the ingredient list', 'compare the 12 ingredients'), v)).toMatch(/number not in the assessment \(12\)/);
     expect(checkVerdict(ok.replace('this chicken recipe', 'this great, high-quality chicken recipe'), v)).toMatch(/claim Purrbi does not make/);
+    expect(checkVerdict(ok.replace('compare the ingredient list', 'compare the ingredient list and guaranteed analysis'), v)).toBeNull(); // a label term, not a promise
+    expect(checkVerdict(ok.replace('compare the ingredient list', 'it is guaranteed to suit your cat; compare the list'), v)).toMatch(/claim Purrbi does not make/);
     expect(checkVerdict('Contains chicken.', v)).toMatch(/length/);
     expect(checkVerdict(ok.replace('but it contains', 'a partial assessment, but it contains'), v)).toMatch(/calls a full assessment partial/);
     expect(checkVerdict(ok.replace(/chicken/g, 'poultry').replace('which you recorded as an allergy', 'which may matter'), v)).toMatch(/most serious caution/);

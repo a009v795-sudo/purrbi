@@ -6,17 +6,17 @@ import { normalizeIngredientName } from './ingredients';
 const ROLES: { role: string; terms: string[] }[] = [
   { role: 'Preservative', terms: ['mixed tocopherols', 'tocopherols', 'rosemary extract', 'citric acid', 'bha', 'bht', 'ethoxyquin', 'potassium sorbate', 'sodium nitrite', 'propyl gallate'] },
   { role: 'Probiotic', terms: ['fermentation product', 'lactobacillus', 'bacillus', 'enterococcus', 'bifidobacterium', 'probiotic'] },
-  { role: 'Fat source', terms: ['chicken fat', 'poultry fat', 'beef fat', 'pork fat', 'animal fat', 'fish oil', 'salmon oil', 'sunflower oil', 'canola oil', 'flaxseed oil', 'coconut oil', 'vegetable oil', 'soybean oil', 'olive oil', 'tallow', 'lard', 'oils and fats', 'fat'] },
-  { role: 'Fibre source', terms: ['beet pulp', 'cellulose', 'pumpkin', 'psyllium', 'inulin', 'chicory', 'fructooligosaccharides', 'pea fiber', 'pea fibre', 'tomato pomace', 'apple pomace', 'flaxseed', 'fibre', 'fiber'] },
-  { role: 'Vitamin or mineral', terms: ['vitamin', 'mineral', 'zinc', 'iron', 'copper', 'manganese', 'selenium', 'iodate', 'iodide', 'proteinate', 'chelate', 'choline chloride', 'calcium carbonate', 'dicalcium phosphate', 'calcium phosphate', 'potassium chloride', 'sodium selenite', 'biotin', 'folic acid', 'niacin', 'riboflavin', 'thiamine', 'pyridoxine', 'menadione', 'pantothenate', 'cobalamin', 'salt', 'sodium chloride'] },
+  { role: 'Fat source', terms: ['graisses animales', 'graisse', 'huile', 'huiles et graisses', 'öle und fette', 'aceite', 'grasa', 'chicken fat', 'poultry fat', 'beef fat', 'pork fat', 'animal fat', 'fish oil', 'salmon oil', 'sunflower oil', 'canola oil', 'flaxseed oil', 'coconut oil', 'vegetable oil', 'soybean oil', 'olive oil', 'tallow', 'lard', 'oils and fats', 'fat'] },
+  { role: 'Fibre source', terms: ['pulpe de betterave', 'cellulose', 'fibres végétales', 'rübenschnitzel', 'beet pulp', 'cellulose', 'pumpkin', 'psyllium', 'inulin', 'chicory', 'fructooligosaccharides', 'pea fiber', 'pea fibre', 'tomato pomace', 'apple pomace', 'flaxseed', 'fibre', 'fiber'] },
+  { role: 'Vitamin or mineral', terms: ['minéraux', 'mineraux', 'mineralstoffe', 'minerales', 'vitamines', 'vitamine', 'sel', 'vitamin', 'mineral', 'zinc', 'iron', 'copper', 'manganese', 'selenium', 'iodate', 'iodide', 'proteinate', 'chelate', 'choline chloride', 'calcium carbonate', 'dicalcium phosphate', 'calcium phosphate', 'potassium chloride', 'sodium selenite', 'biotin', 'folic acid', 'niacin', 'riboflavin', 'thiamine', 'pyridoxine', 'menadione', 'pantothenate', 'cobalamin', 'salt', 'sodium chloride'] },
   { role: 'Amino acid (nutrient)', terms: ['taurine', 'methionine', 'lysine', 'carnitine', 'arginine', 'tryptophan'] },
-  { role: 'Flavour', terms: ['natural flavor', 'natural flavour', 'animal digest', 'digest', 'yeast extract', 'flavor', 'flavour', 'palatant', 'garlic'] },
+  { role: 'Flavour', terms: ['levures', 'levure', 'arômes', 'aromes', 'hefe', 'natural flavor', 'natural flavour', 'animal digest', 'digest', 'yeast extract', 'flavor', 'flavour', 'palatant', 'garlic'] },
   { role: 'Plant material (not specified)', terms: ['vegetable by-products', 'vegetable by products', 'vegetable derivatives', 'derivatives of vegetable origin'] },
   { role: 'Thickener or binder', terms: ['guar gum', 'xanthan gum', 'carrageenan', 'cassia gum', 'agar', 'locust bean gum', 'gelatin', 'gelatine', 'modified starch'] },
-  { role: 'Humectant or sweetener', terms: ['glycerin', 'glycerine', 'glycerol', 'propylene glycol', 'sugar', 'molasses', 'corn syrup', 'honey', 'sorbitol', 'caramel'] },
+  { role: 'Humectant or sweetener', terms: ['sucres', 'zucker', 'azúcar', 'glycérine', 'glycerin', 'glycerine', 'glycerol', 'propylene glycol', 'sugar', 'molasses', 'corn syrup', 'honey', 'sorbitol', 'caramel'] },
   { role: 'Colour', terms: ['iron oxide', 'titanium dioxide', 'caramel color', 'red 40', 'yellow 5', 'yellow 6', 'blue 2', 'colorant', 'colourant', 'colour', 'color'] },
-  { role: 'Protein source', terms: ['protein', 'pea protein', 'potato protein', 'soy protein', 'corn gluten meal', 'wheat gluten', 'meal', 'by-product', 'by-products', 'derivatives', 'chicken', 'turkey', 'beef', 'lamb', 'duck', 'salmon', 'tuna', 'whitefish', 'fish', 'egg', 'liver', 'heart', 'meat', 'poultry', 'venison', 'rabbit', 'pork', 'herring', 'menhaden', 'sardine', 'mackerel', 'krill', 'cod', 'trout', 'bison', 'quail', 'poulet', 'boeuf', 'saumon'] },
-  { role: 'Carbohydrate source', terms: ['brown rice', 'rice', 'barley', 'oatmeal', 'oats', 'corn', 'maize', 'wheat', 'sweet potatoes', 'sweet potato', 'potatoes', 'potato', 'peas', 'pea', 'chickpeas', 'garbanzo beans', 'lentils', 'beans', 'tapioca', 'sorghum', 'millet', 'quinoa', 'cereals', 'starch', 'flour'] },
+  { role: 'Protein source', terms: ['volaille', 'viande', 'poisson', 'protéines', 'proteines', 'sous-produits', 'canard', 'dinde', 'agneau', 'thon', 'oeuf', 'foie', 'fleisch', 'geflügel', 'huhn', 'fisch', 'lachs', 'pollo', 'carne', 'pescado', 'salmón', 'gluten de blé', 'gluten de ble', 'farine de protéines de maïs', 'farine de soja', 'soja', 'protein', 'pea protein', 'potato protein', 'soy protein', 'corn gluten meal', 'wheat gluten', 'meal', 'by-product', 'by-products', 'derivatives', 'chicken', 'turkey', 'beef', 'lamb', 'duck', 'salmon', 'tuna', 'whitefish', 'fish', 'egg', 'liver', 'heart', 'meat', 'poultry', 'venison', 'rabbit', 'pork', 'herring', 'menhaden', 'sardine', 'mackerel', 'krill', 'cod', 'trout', 'bison', 'quail', 'poulet', 'boeuf', 'saumon'] },
+  { role: 'Carbohydrate source', terms: ['blé', 'ble', 'maïs', 'mais', 'riz', 'orge', 'avoine', 'pommes de terre', 'céréales', 'cereales', 'weizen', 'reis', 'getreide', 'trigo', 'arroz', 'maíz', 'amidon', 'brown rice', 'rice', 'barley', 'oatmeal', 'oats', 'corn', 'maize', 'wheat', 'sweet potatoes', 'sweet potato', 'potatoes', 'potato', 'peas', 'pea', 'chickpeas', 'garbanzo beans', 'lentils', 'beans', 'tapioca', 'sorghum', 'millet', 'quinoa', 'cereals', 'starch', 'flour'] },
   { role: 'Fruit or vegetable', terms: ['carrots', 'carrot', 'cranberries', 'blueberries', 'apples', 'apple', 'spinach', 'kale', 'broccoli', 'parsley', 'vegetables', 'fruit', 'berries', 'tomato'] },
 ];
 
@@ -33,4 +33,22 @@ export function ingredientRole(name: string): string | null {
     }
   }
   return best?.role ?? null;
+}
+
+/** A role written on a cited page, in the same words as the curated table where it says the same thing. */
+export function normalizeRole(text: string): string {
+  const t = text.toLowerCase();
+  if (/preserv/.test(t)) return 'Preservative';
+  if (/probiotic/.test(t)) return 'Probiotic';
+  if (/\bfat\b|\boil\b/.test(t)) return 'Fat source';
+  if (/fib(re|er)/.test(t)) return 'Fibre source';
+  if (/vitamin|mineral/.test(t)) return 'Vitamin or mineral';
+  if (/amino acid/.test(t)) return 'Amino acid (nutrient)';
+  if (/flavo/.test(t)) return 'Flavour';
+  if (/protein/.test(t)) return 'Protein source';
+  if (/carbohydrate|starch|energy/.test(t)) return 'Carbohydrate source';
+  if (/thicken|binder|gelling/.test(t)) return 'Thickener or binder';
+  if (/colou?r/.test(t)) return 'Colour';
+  const short = text.trim().replace(/\s+/g, ' ').slice(0, 40);
+  return short.charAt(0).toUpperCase() + short.slice(1);
 }
