@@ -1,0 +1,35 @@
+name: live-fixtures
+# Collects real products and package photos from Open Pet Food Facts for live tests run where that
+# site is not reachable (the Claude sandbox), and publishes them on the live-fixtures branch only
+# (never main). Photos: Open Pet Food Facts contributors, CC BY-SA 3.0; sources in manifest.json.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write # push the live-fixtures branch
+
+jobs:
+  fixtures:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Collect products and photos
+        run: node backend/tools/live-fixtures.mjs "$RUNNER_TEMP/fixtures"
+      - name: Shrink photos to at most 2000 px
+        run: |
+          if command -v mogrify >/dev/null && ls "$RUNNER_TEMP"/fixtures/photos/*.jpg >/dev/null 2>&1; then
+            mogrify -resize '2000x2000>' -quality 85 "$RUNNER_TEMP"/fixtures/photos/*.jpg
+          fi
+          ls -la "$RUNNER_TEMP/fixtures/photos"
+      - name: Publish on the live-fixtures branch
+        working-directory: ${{ runner.temp }}/fixtures
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git init -q -b live-fixtures
+          git add -A
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -q -m "Live-test fixtures from Open Pet Food Facts (CC BY-SA 3.0)"
+          git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" live-fixtures

@@ -81,12 +81,12 @@ APIS=(
   firebaserules.googleapis.com firebasestorage.googleapis.com firebase.googleapis.com
   secretmanager.googleapis.com iam.googleapis.com iamcredentials.googleapis.com sts.googleapis.com
   cloudresourcemanager.googleapis.com serviceusage.googleapis.com logging.googleapis.com
-  identitytoolkit.googleapis.com
+  identitytoolkit.googleapis.com cloudbilling.googleapis.com
 )
 if ! gcloud services enable "${APIS[@]}" --project "$PROJECT_ID" --quiet; then
   fail "Some APIs could not be enabled. Most often the project is not on the Blaze plan yet: Firebase console → Usage and billing → Details & settings → Modify plan."
 fi
-ok "${#APIS[@]} APIs enabled"
+ok "${#APIS[@]} APIs enabled (Cloud Billing API only lets the deploy tool read whether billing is on)"
 for svc in pubsub.googleapis.com eventarc.googleapis.com; do
   quiet gcloud beta services identity create --service="$svc" --project "$PROJECT_ID" --quiet || true
 done

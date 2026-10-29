@@ -15,10 +15,13 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { discover, search, UA } from './opff-discovery.mjs';
 import { publish } from './report.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const UA = 'Purrbi/0.1 (live e2e; contact@valenciainnovations.com)';
+// Where Open Pet Food Facts is unreachable, products and package photos come from the live-fixtures
+// branch (collected on GitHub by the live-fixtures workflow): LIVE_FIXTURES_DIR=<checkout>.
+const FIXTURES = process.env.LIVE_FIXTURES_DIR;
 const TERMINAL = new Set(['complete', 'needs_photos', 'out_of_scope', 'failed']);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -113,67 +116,6 @@ const create = (u, path, data, serverTimeFields = ['createdAt']) =>
   commit(u, [{ update: { name: docName(path), fields: fields(data) }, currentDocument: { exists: false }, updateTransforms: serverTimeFields.map((f) => ({ fieldPath: f, setToServerValue: 'REQUEST_TIME' })) }]);
 const query = (u, parent, structuredQuery) => call('POST', `${FS}/${parent}:runQuery`, { token: u?.token, body: { structuredQuery } });
 
-// ---- product discovery (real products from the databases' own search) --------------------------
-async function search(host, params) {
-  const fieldsList = 'code,product_name,brands,categories_tags,ingredients_text,image_ingredients_url,image_nutrition_url,images,nutriments';
-  const urls = [
-    `https://${host}/api/v2/search?${params}&fields=${fieldsList}&page_size=40&sort_by=unique_scans_n`,
-    `https://${host}/cgi/search.pl?action=process&${params.replace('categories_tags_en=', 'tagtype_0=categories&tag_contains_0=contains&tag_0=')}&json=1&page_size=40&fields=${fieldsList}`,
-  ];
-  for (const url of urls) {
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        const res = await fetch(url, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(25000) });
-        if (res.status === 503 || res.status === 429) {
-          await sleep(3000 * (attempt + 1));
-          continue;
-        }
-        if (!res.ok) break;
-        const products = ((await res.json()).products ?? []).filter((p) => /^\d{8,14}$/.test(p.code ?? ''));
-        if (products.length) return products;
-        break;
-      } catch {
-        await sleep(2000);
-      }
-    }
-  }
-  return [];
-}
-
-function rawImageUrls(p) {
-  const c = p.code;
-  const dir = c.length > 8 ? `${c.slice(0, 3)}/${c.slice(3, 6)}/${c.slice(6, 9)}/${c.slice(9)}` : c;
-  return Object.keys(p.images ?? {}).filter((k) => /^\d+$/.test(k)).map((k) => `https://images.openpetfoodfacts.org/images/products/${dir}/${k}.jpg`);
-}
-
-async function discover() {
-  const pickFood = (list) => list.find((p) => p.ingredients_text) ?? list[0];
-  const catFoods = await search('world.openpetfoodfacts.org', 'categories_tags_en=cat-food');
-  const dogFoods = await search('world.openpetfoodfacts.org', 'categories_tags_en=dog-food');
-  const treats = [...(await search('world.openpetfoodfacts.org', 'categories_tags_en=dog-treats')), ...(await search('world.openpetfoodfacts.org', 'categories_tags_en=cat-treats'))];
-  let supplements = [];
-  for (const cat of ['dog-supplements', 'cat-supplements', 'pet-supplements', 'dietary-supplements-for-dogs', 'dietary-supplements-for-cats']) {
-    supplements = await search('world.openpetfoodfacts.org', `categories_tags_en=${cat}`);
-    if (supplements.length) break;
-  }
-  // A product whose database record lacks the label panels and has no selected panel images, but
-  // does have contributor photos of the package: Purrbi must ask for photos, and those real
-  // photos stand in for the owner's own.
-  const photoCandidate = [...catFoods, ...dogFoods].find((p) => !p.ingredients_text && !p.image_ingredients_url && !p.image_nutrition_url && rawImageUrls(p).length >= 2);
-  const usedCodes = new Set();
-  const take = (p, label) => (p && !usedCodes.has(p.code) ? (usedCodes.add(p.code), { code: p.code, name: p.product_name ?? '', label }) : null);
-  return {
-    items: [
-      take(pickFood(catFoods), 'cat food'),
-      take(pickFood(dogFoods.filter((p) => !usedCodes.has(p.code))), 'dog food'),
-      take(treats.find((p) => !usedCodes.has(p.code)), 'treat'),
-      take(supplements.find((p) => !usedCodes.has(p.code)), 'supplement'),
-    ].filter(Boolean),
-    photoCandidate: photoCandidate ? { code: photoCandidate.code, name: photoCandidate.product_name ?? '', images: rawImageUrls(photoCandidate).slice(0, 3) } : null,
-    counts: { catFoods: catFoods.length, dogFoods: dogFoods.length, treats: treats.length, supplements: supplements.length },
-  };
-}
-
 // ---- scans -------------------------------------------------------------------------------------
 async function waitScan(u, path, until = (d) => TERMINAL.has(d.status) && d.explanationsStatus !== 'pending', timeoutMs = 240000) {
   const t0 = Date.now();
@@ -253,6 +195,15 @@ async function uploadPhoto(u, scanId, bytes, contentType) {
   return { status: 200, name, url: `https://firebasestorage.googleapis.com/v0/b/${cfg.bucket}/o/${encodeURIComponent(name)}?alt=media&token=${token}` };
 }
 
+async function photoBytes(photo) {
+  if (typeof photo === 'string') {
+    const img = await fetch(photo, { headers: { 'User-Agent': UA } }).catch(() => ({ ok: false, status: 'network' }));
+    return img.ok ? { bytes: Buffer.from(await img.arrayBuffer()), source: photo } : { error: img.status, source: photo };
+  }
+  if (photo?.file && FIXTURES) return { bytes: readFileSync(join(FIXTURES, photo.file)), source: photo.source };
+  return { error: photo?.fetch ?? 'missing', source: photo?.source };
+}
+
 // ---- run ---------------------------------------------------------------------------------------
 const users = [];
 try {
@@ -269,8 +220,13 @@ try {
   report.checks.petCreate = {};
   for (const [id, p] of Object.entries(pets)) report.checks.petCreate[id] = (await create(a, `users/${a.uid}/pets/${id}`, { ...p, ageCapturedAt: new Date() }, ['createdAt'])).status;
 
-  const found = await discover();
-  report.discovery = found;
+  const found = FIXTURES ? JSON.parse(readFileSync(join(FIXTURES, 'manifest.json'), 'utf8')) : await discover({ incompleteCount: 2 });
+  report.discovery = {
+    from: FIXTURES ? `live-fixtures branch (collected ${found.generatedAt})` : 'Open Pet Food Facts search (this run)',
+    items: found.items,
+    incomplete: (found.incomplete ?? []).map((p) => ({ code: p.code, name: p.name })),
+    counts: found.counts,
+  };
 
   const scans = {};
   for (const item of found.items) {
@@ -278,39 +234,45 @@ try {
     scans[item.label] = await scan(a, item.code, petId, `${item.label}: ${item.name}`);
   }
 
-  // Photo recovery: the backend asks for photos; real photos of the package are uploaded through the
-  // owner's photo path (Storage upload + photo request), exactly as the app does.
-  if (found.photoCandidate) {
-    const s = await scan(a, found.photoCandidate.code, 'catB', `photo recovery: ${found.photoCandidate.name}`);
-    const pr = { barcode: found.photoCandidate.code, before: s?.d ? { status: s.d.status, missingInfo: s.d.missingInfo } : null, uploads: [] };
-    if (s?.d?.status === 'needs_photos') {
-      for (const url of found.photoCandidate.images) {
-        const img = await fetch(url, { headers: { 'User-Agent': UA } });
-        if (!img.ok) {
-          pr.uploads.push({ image: url, fetch: img.status });
+  // Evidence fallbacks: products whose database record lacks the label. Purrbi first tries the
+  // manufacturer's published information (research); if that is not enough it asks for photos, and
+  // real photos of the package are uploaded through the owner's photo path, exactly as the app does.
+  report.fallbacks = [];
+  let photoDone = false;
+  for (const p of (found.incomplete ?? []).slice(0, 2)) {
+    const s = await scan(a, p.code, p.species === 'dog' ? 'dogA' : 'catB', `incomplete record: ${p.name}`);
+    const fb = { barcode: p.code, name: p.name, firstResult: s?.d ? { status: s.d.status, missingInfo: s.d.missingInfo, sources: (s.d.sources ?? []).map((x) => `${x.name} [${x.type}]`) } : null, uploads: [] };
+    if (s?.d?.status === 'needs_photos' && !photoDone) {
+      photoDone = true;
+      for (const photo of p.photos ?? p.images ?? []) {
+        const got = await photoBytes(photo);
+        if (!got.bytes) {
+          fb.uploads.push({ image: got.source, fetch: got.error });
           continue;
         }
-        const bytes = Buffer.from(await img.arrayBuffer());
-        const up = await uploadPhoto(a, s.id, bytes, 'image/jpeg');
-        const photoId = newId();
-        const photoDoc = `users/${a.uid}/photos/${photoId}`;
+        const up = await uploadPhoto(a, s.id, got.bytes, 'image/jpeg');
+        const photoDoc = `users/${a.uid}/photos/${newId()}`;
         const doc = up.status === 200 ? await create(a, photoDoc, { scanId: s.id, purpose: 'label', imageUrl: up.url, status: 'uploaded' }) : { status: up.status };
-        const photo = doc.status === 200 ? await waitScan(a, photoDoc, (d) => !['uploaded', 'processing'].includes(d.status), 120000) : null;
-        pr.uploads.push({ image: url.replace(/^.*\/products\//, 'opff:'), storageUpload: up.status, photoRequest: doc.status, photoStatus: photo?.d?.status, fieldsFound: photo?.d?.fieldsFound });
+        const ph = doc.status === 200 ? await waitScan(a, photoDoc, (d) => !['uploaded', 'processing'].includes(d.status), 120000) : null;
+        fb.uploads.push({ image: String(got.source).replace(/^.*\/products\//, 'opff:'), bytes: got.bytes.length, storageUpload: up.status, photoRequest: doc.status, photoStatus: ph?.d?.status, fieldsFound: ph?.d?.fieldsFound });
         const now = await waitScan(a, s.path);
         if (now.d?.status === 'complete') break;
       }
       const after = await waitScan(a, s.path);
-      pr.after = row(`photo recovery (after photos): ${found.photoCandidate.name}`, found.photoCandidate.code, s.id, after.d, after.seconds);
+      fb.afterPhotos = row(`after photos: ${p.name}`, p.code, s.id, after.d, after.seconds);
     }
-    report.photoRecovery = pr;
-  } else {
-    report.notes.push('No product needing photo recovery with contributor photos was found in this run.');
+    report.fallbacks.push(fb);
   }
+  if (!report.fallbacks.length) report.notes.push('No product with an incomplete database record was available in this run.');
+
+  // Retry path on the deployed backend: deploy-config.json's development switch RETRY_TEST_BARCODES
+  // makes this barcode's first attempt fail like a source outage; the retry check below re-runs it.
+  const retryCode = (JSON.parse(readFileSync(join(root, 'backend/deploy-config.json'), 'utf8')).functionParams?.RETRY_TEST_BARCODES ?? '').split(',')[0].trim();
+  if (retryCode) await scan(a, retryCode, 'dogA', 'retry test (first attempt fails on purpose)');
 
   // Unsupported product and unknown barcode.
-  const human = (await search('world.openfoodfacts.org', 'categories_tags_en=breakfast-cereals'))[0];
-  if (human) await scan(a, human.code, 'catA', `human food: ${human.product_name ?? ''}`);
+  const human = found.humanFood ?? (FIXTURES ? null : (await search('world.openfoodfacts.org', 'categories_tags_en=breakfast-cereals')).map((x) => ({ code: x.code, name: x.product_name ?? '' }))[0]);
+  if (human) await scan(a, human.code, 'catA', `human food: ${human.name}`);
   await scan(a, '2999999999991', 'catA', 'unknown barcode (GS1 restricted range)');
 
   const first = scans['cat food'];
