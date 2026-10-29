@@ -1,6 +1,7 @@
 // Per-job record of outbound calls: which service, host, path, HTTP status and latency. It is saved
 // on the scan document and logged under the job's trace id, so a failed or slow lookup can be traced.
-// Only sanitized values are kept: no headers, keys, query strings or response bodies.
+// Only sanitized values are kept: no headers, keys, query strings or response bodies; a failed call
+// keeps a short, redacted reason (e.g. the provider's error message).
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 export type CallOutcome = 'ok' | 'not_found' | 'http_error' | 'rate_limited' | 'timeout' | 'network' | 'parse';
@@ -13,6 +14,7 @@ export interface SourceCall {
   outcome: CallOutcome;
   ms: number;
   attempt: number;
+  detail?: string; // failed calls only
 }
 
 const storage = new AsyncLocalStorage<SourceCall[]>();
@@ -31,6 +33,24 @@ export function currentCalls(): SourceCall[] {
 export function recordCall(call: SourceCall): void {
   const log = storage.getStore();
   if (log && log.length < MAX_CALLS) log.push(call);
+}
+
+/** A short reason for a failed call: the provider's error message if the body has one, redacted. */
+export function errorDetail(body: string): string {
+  let reason = body;
+  try {
+    const j = JSON.parse(body) as { error?: { message?: string } | string; message?: string };
+    reason = (typeof j.error === 'string' ? j.error : j.error?.message) ?? j.message ?? body;
+  } catch {
+    reason = body.replace(/<[^>]+>/g, ' ');
+  }
+  return reason
+    .replace(/\bsk-[\w*-]+/g, 'sk-…')
+    .replace(/Bearer\s+\S+/gi, 'Bearer …')
+    .replace(/(https?:\/\/[^\s"'?]+)\?\S*/g, '$1?…')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 160);
 }
 
 /** Path without query or fragment; long digit runs (barcodes, ids) collapsed. */

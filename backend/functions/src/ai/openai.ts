@@ -83,17 +83,29 @@ export async function researchJson<T>(opts: {
     ],
     text: { format: { type: 'json_schema', name: opts.format.name, strict: true, schema: opts.format.schema } },
   };
-  const { json } = await httpJson<{
+  type ResearchResponse = {
     model?: string;
     output?: { type?: string; content?: { type?: string; text?: string; annotations?: { type?: string; url?: string; title?: string }[] }[] }[];
-  }>('https://api.openai.com/v1/responses', {
-    source: 'OpenAI',
-    method: 'POST',
-    headers: { Authorization: `Bearer ${requireKey(opts.apiKey)}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-    timeoutMs: opts.timeoutMs,
-    retries: 0,
-  });
+  };
+  const send = (b: typeof body) =>
+    httpJson<ResearchResponse>('https://api.openai.com/v1/responses', {
+      source: 'OpenAI',
+      method: 'POST',
+      headers: { Authorization: `Bearer ${requireKey(opts.apiKey)}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(b),
+      timeoutMs: opts.timeoutMs,
+      retries: 0,
+    });
+  let json: ResearchResponse | null;
+  try {
+    ({ json } = await send(body));
+  } catch (err) {
+    // A model that refuses the search tool's domain filter (HTTP 400) is asked once more without it.
+    // The result stays restricted: callers keep only citations on the allowed sites whose quote is
+    // found again on the fetched page.
+    if (!(opts.allowedDomains?.length && err instanceof SourceError && err.status === 400)) throw err;
+    ({ json } = await send({ ...body, tools: [{ type: 'web_search' }] }));
+  }
   const message = json?.output?.find((o) => o.type === 'message');
   const part = message?.content?.find((c) => c.type === 'output_text');
   if (!part?.text) throw new SourceError('OpenAI', 'parse', 'no output text');

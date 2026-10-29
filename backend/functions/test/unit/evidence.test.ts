@@ -10,6 +10,7 @@ import { explainTerms, explanationKey, needsExplanation } from '../../src/knowle
 import { candidateImages, fullResolution } from '../../src/sources/labelImages';
 import { currentCalls, runWithCallLog, sanitizeUrl } from '../../src/util/diagnostics';
 import { httpRequest } from '../../src/util/http';
+import { researchJson } from '../../src/ai/openai';
 import { facts, SRC } from '../helpers/fixtures';
 
 const GA: GuaranteedAnalysisEntry[] = [
@@ -163,6 +164,38 @@ describe('call diagnostics', () => {
     expect(JSON.stringify(calls)).not.toMatch(/secret|SECRET|api_key|search=/);
     expect(currentCalls()).toEqual([]); // nothing recorded outside a job
     expect(sanitizeUrl('not a url')).toEqual({ host: 'invalid-url', path: '' });
+  });
+});
+
+describe('failed-call reasons and the research domain filter', () => {
+  it('keeps a short, redacted reason for a failed call, never for a successful one', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: { message: "Invalid value for 'tools[0].filters'. Key sk-proj-abc123SECRET, see https://example.org/doc?token=SECRET" } }), { status: 400 })));
+    const calls = await runWithCallLog(async () => {
+      await httpRequest('https://api.openai.com/v1/responses', { source: 'OpenAI', method: 'POST', retries: 0 }).catch(() => undefined);
+      return currentCalls();
+    });
+    expect(calls[0]).toMatchObject({ status: 400, outcome: 'http_error' });
+    expect(calls[0].detail).toContain("Invalid value for 'tools[0].filters'");
+    expect(calls[0].detail).not.toMatch(/SECRET|abc123/);
+  });
+  it('asks once more without the domain filter when a model rejects it', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      bodies.push(JSON.parse(String(init.body)));
+      if (bodies.length === 1) return new Response(JSON.stringify({ error: { message: 'filters are not supported' } }), { status: 400 });
+      return new Response(JSON.stringify({ model: 'mock', output: [{ type: 'message', content: [{ type: 'output_text', text: '{"items":[]}', annotations: [] }] }] }), { status: 200 });
+    }));
+    const r = await researchJson<{ items: unknown[] }>({ apiKey: 'test', model: 'mock', system: 's', user: 'u', format: { name: 'x', schema: { type: 'object' } }, timeoutMs: 1000, allowedDomains: ['fda.gov'] });
+    expect(r.data).toEqual({ items: [] });
+    expect(bodies).toHaveLength(2);
+    expect((bodies[0].tools as { filters?: unknown }[])[0].filters).toEqual({ allowed_domains: ['fda.gov'] });
+    expect((bodies[1].tools as { filters?: unknown }[])[0].filters).toBeUndefined();
+  });
+  it('does not retry other failures', async () => {
+    const fetchMock = vi.fn(async () => new Response('{"error":{"message":"bad key"}}', { status: 401 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(researchJson({ apiKey: 'test', model: 'mock', system: 's', user: 'u', format: { name: 'x', schema: { type: 'object' } }, timeoutMs: 1000, allowedDomains: ['fda.gov'] })).rejects.toThrow(/401/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 

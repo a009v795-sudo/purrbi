@@ -1,7 +1,7 @@
 // Outbound HTTP with timeouts, bounded retries and typed failures, so callers can tell
 // "the source is down" apart from "the source has no record". Every attempt is recorded (sanitized)
 // in the current job's call log.
-import { recordCall, sanitizeUrl, type CallOutcome } from './diagnostics';
+import { errorDetail, recordCall, sanitizeUrl, type CallOutcome } from './diagnostics';
 
 export type SourceErrorKind = 'timeout' | 'network' | 'http' | 'parse' | 'rate_limited' | 'config';
 
@@ -46,6 +46,7 @@ export async function httpRequest(url: string, opts: HttpOptions): Promise<HttpR
     const started = Date.now();
     let status: number | null = null;
     let outcome: CallOutcome = 'network';
+    let detail: string | undefined;
     try {
       const res = await fetch(url, {
         method: opts.method ?? 'GET',
@@ -58,6 +59,7 @@ export async function httpRequest(url: string, opts: HttpOptions): Promise<HttpR
       const text = await res.text();
       outcome = res.ok ? 'ok' : res.status === 404 ? 'not_found' : res.status === 429 ? 'rate_limited' : 'http_error';
       if (res.ok || opts.acceptStatuses?.includes(res.status)) return { status: res.status, text, headers: res.headers };
+      detail = errorDetail(text);
       if (res.status === 429) lastError = new SourceError(opts.source, 'rate_limited', 'rate limited', 429);
       else if (res.status >= 500) lastError = new SourceError(opts.source, 'http', `HTTP ${res.status}`, res.status);
       else throw new SourceError(opts.source, 'http', `HTTP ${res.status}: ${text.slice(0, 200)}`, res.status);
@@ -74,7 +76,7 @@ export async function httpRequest(url: string, opts: HttpOptions): Promise<HttpR
       }
     } finally {
       clearTimeout(timer);
-      recordCall({ source: opts.source, host, path, status, outcome, ms: Date.now() - started, attempt: attempt + 1 });
+      recordCall({ source: opts.source, host, path, status, outcome, ms: Date.now() - started, attempt: attempt + 1, ...(detail ? { detail } : {}) });
     }
   }
   throw lastError ?? new SourceError(opts.source, 'network', 'request failed');

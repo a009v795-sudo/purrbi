@@ -36,7 +36,7 @@ export function jobFields(job: JobInfo, calls: SourceCall[], finishedAt: Date): 
       ...counts,
     },
     evidenceNotes: job.evidenceNotes,
-    sourceChecks: calls.map((c) => ({ source: c.source, host: c.host, path: c.path, httpStatus: c.status ?? 0, outcome: c.outcome, ms: c.ms, attempt: c.attempt })),
+    sourceChecks: calls.map((c) => ({ source: c.source, host: c.host, path: c.path, httpStatus: c.status ?? 0, outcome: c.outcome, ms: c.ms, attempt: c.attempt, detail: c.detail ?? '' })),
   };
 }
 
