@@ -51,6 +51,7 @@ jobs:
           # No secrets here; OPENAI_API_KEY comes from Secret Manager.
           {
             printf 'STORAGE_BUCKET="%s"\n' "$STORAGE_BUCKET"
+            printf 'RUNTIME_SERVICE_ACCOUNT="%s"\n' "$(jq -r .runtimeServiceAccount deploy-config.json)"
             jq -r '.functionParams // {} | to_entries[] | "\(.key)=\"\(.value)\""' deploy-config.json
           } > "functions/.env.$PROJECT_ID"
           echo "Functions parameters (functions/.env.$PROJECT_ID):"; cat "functions/.env.$PROJECT_ID"

@@ -17,8 +17,10 @@ db.settings({ ignoreUndefinedProperties: true });
 
 const REGION = 'us-central1';
 // Every function runs as this dedicated identity (Firestore, the Storage bucket, Eventarc delivery and
-// the OpenAI secret only); see backend/tools/gcp/setup-dev-access.sh. "name@" expands to the project.
-const RUNTIME_SERVICE_ACCOUNT = 'purrbi-functions@';
+// the OpenAI secret only); see backend/tools/gcp/setup-dev-access.sh. The full address comes from
+// deploy-config.json runtimeServiceAccount (the deploy workflow writes it to .env.<projectId>): the
+// Firebase CLI's secret-access check does not expand the "name@" short form.
+const RUNTIME_SERVICE_ACCOUNT = defineString('RUNTIME_SERVICE_ACCOUNT', { default: 'purrbi-functions@' });
 setGlobalOptions({ region: REGION, serviceAccount: RUNTIME_SERVICE_ACCOUNT });
 
 const OPENAI_API_KEY = defineSecret('OPENAI_API_KEY');
