@@ -1,6 +1,13 @@
 name: android-apk
 # Builds an installable Android APK from the FlutterFlow code export committed under app/.
 # The release build is signed with the debug key (fine for testing, not for Play Store upload).
+#
+# The Firebase client config is not committed (this repository is public). The Android build needs
+# only google-services.json, from the repository secret FIREBASE_GOOGLE_SERVICES_JSON (Firebase
+# console → Project settings → Your apps → the Android app → google-services.json). It is written
+# for the build only; the APK necessarily contains it, as every Firebase app does. The web settings
+# in lib/backend/firebase/firebase_config.dart are not used on Android, so the build writes an
+# Android-only version of that file.
 on:
   workflow_dispatch:
     inputs:
@@ -8,6 +15,10 @@ on:
         description: Build number (versionCode)
         required: true
         default: '1'
+      compile_check:
+        description: Only check that the app builds, with a placeholder Firebase config (no APK is kept)
+        type: boolean
+        default: false
 
 jobs:
   apk:
@@ -17,6 +28,42 @@ jobs:
         working-directory: app
     steps:
       - uses: actions/checkout@v4
+      - name: Firebase client config for Android
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.FIREBASE_GOOGLE_SERVICES_JSON }}
+          COMPILE_CHECK: ${{ inputs.compile_check }}
+        run: |
+          APP_ID=$(grep -oE 'applicationId "[^"]+"' android/app/build.gradle | cut -d'"' -f2)
+          PROJECT=$(jq -r .projectId ../backend/deploy-config.json)
+          if [ "$COMPILE_CHECK" = "true" ]; then
+            # Placeholder values: the build compiles, but this app could not reach Firebase.
+            jq -n --arg p "$PROJECT" --arg a "$APP_ID" '{project_info: {project_number: "000000000000", project_id: $p, storage_bucket: ($p + ".firebasestorage.app")}, client: [{client_info: {mobilesdk_app_id: "1:000000000000:android:0000000000000000", android_client_info: {package_name: $a}}, oauth_client: [], api_key: [{current_key: "placeholder"}], services: {appinvite_service: {other_platform_oauth_client: []}}}], configuration_version: "1"}' > android/app/google-services.json
+            GOOGLE_SERVICES_JSON=$(cat android/app/google-services.json)
+            echo "::notice title=Compile check::placeholder Firebase config; no APK is kept"
+          fi
+          if [ -z "$GOOGLE_SERVICES_JSON" ]; then
+            echo "::error title=Missing Firebase config::Add the repository secret FIREBASE_GOOGLE_SERVICES_JSON (the google-services.json of the Android app in Firebase project purrbi-49c21)."
+            exit 1
+          fi
+          printf '%s' "$GOOGLE_SERVICES_JSON" > android/app/google-services.json
+          jq -e --arg p "$PROJECT" --arg a "$APP_ID" \
+            '.project_info.project_id == $p and any(.client[]; .client_info.android_client_info.package_name == $a)' \
+            android/app/google-services.json > /dev/null \
+            || { echo "::error title=Wrong Firebase config::google-services.json must be for project $PROJECT and app $APP_ID."; exit 1; }
+          echo "google-services.json: project $PROJECT, app $APP_ID"
+          if [ ! -f lib/backend/firebase/firebase_config.dart ]; then
+            mkdir -p lib/backend/firebase
+            {
+              echo "import 'package:firebase_core/firebase_core.dart';"
+              echo "import 'package:flutter/foundation.dart';"
+              echo ""
+              echo "// Android build: Firebase reads android/app/google-services.json. Web settings are not part of this build."
+              echo "Future initFirebase() async {"
+              echo "  if (kIsWeb) throw UnsupportedError('This build is for Android.');"
+              echo "  await Firebase.initializeApp();"
+              echo "}"
+            } > lib/backend/firebase/firebase_config.dart
+          fi
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -36,7 +83,9 @@ jobs:
           grep -E 'applicationId' android/app/build.gradle | tee -a build-info.txt
           echo "commit: $GITHUB_SHA" | tee -a build-info.txt
           flutter --version --machine > flutter-version.json
+          echo "::notice title=APK built::$(cut -d' ' -f1 "$APK.sha256") app-release.apk ($(stat -c %s "$APK") bytes), commit $GITHUB_SHA"
       - uses: actions/upload-artifact@v4
+        if: ${{ !inputs.compile_check }}
         with:
           name: purrbi-android-apk-${{ inputs.build_number }}
           path: |
