@@ -208,6 +208,16 @@ describe('EU labels (found by the live scan of a French label)', () => {
   });
 });
 
+describe('calorie statements', () => {
+  it('does not take an upper bound ("<2 kcal", "menos de 2 kcal") for the calorie content', async () => {
+    const { parseCalorieText } = await import('../../src/domain/nutrition');
+    expect(parseCalorieText('<2 kcal/unidad')).toEqual([]);
+    expect(parseCalorieText('menos de 2 kcal/unidade')).toEqual([]);
+    expect(parseCalorieText('Less than 3 kcal per treat')).toEqual([]);
+    expect(parseCalorieText('Calorie content (calculated): 3,640 kcal ME/kg; 364 kcal ME/cup').map((c) => `${c.kcal}/${c.per}`)).toEqual(['3640/kg', '364/cup']);
+  });
+});
+
 describe('treat statements (found by the live photo of a UK treat pack)', () => {
   it('reads "not a substitute for complete pet food" as intermittent feeding, and a statement naming treats as a treat', async () => {
     const { parseAdequacyStatement } = await import('../../src/domain/adequacy');

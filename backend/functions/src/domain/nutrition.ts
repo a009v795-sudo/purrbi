@@ -158,12 +158,16 @@ const KCAL_LIMITS: Partial<Record<CaloriePer, [number, number]>> = {
   piece: [0.2, 1500],
 };
 
+const UPPER_BOUND = /(<|≤|less than|fewer than|under|up to|moins de|menos de|weniger als|meno di|minder dan)\s*$/i;
+
 /** Parses statements like "3,640 kcal ME/kg; 364 kcal ME/cup" or "6 kcal per treat". */
 export function parseCalorieText(text: string | null | undefined): CalorieStatement[] {
   if (!text) return [];
   const out: CalorieStatement[] = [];
   const re = /(\d{1,3}(?:[,\s]\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)\s*(?:kcal|kilocalories|calories)\s*(?:me\s*)?(?:\/|per)\s*([a-z0-9 ]{1,20})/gi;
   for (const m of text.matchAll(re)) {
+    // "<2 kcal", "less than 2 kcal", "menos de 2 kcal": an upper bound, not the calorie content.
+    if (UPPER_BOUND.test(text.slice(Math.max(0, (m.index ?? 0) - 14), m.index))) continue;
     const kcal = Number(m[1].replace(/[,\s]/g, ''));
     const perText = m[2].toLowerCase();
     const per = PER_PATTERNS.find(([p]) => p.test(perText))?.[1] ?? 'other';

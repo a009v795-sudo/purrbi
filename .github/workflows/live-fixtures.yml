@@ -4,6 +4,11 @@ name: live-fixtures
 # (never main). Photos: Open Pet Food Facts contributors, CC BY-SA 3.0; sources in manifest.json.
 on:
   workflow_dispatch:
+    inputs:
+      incomplete:
+        description: How many products with an incomplete database record to collect (with package photos)
+        required: false
+        default: '3'
 
 permissions:
   contents: write # push the live-fixtures branch
@@ -17,7 +22,7 @@ jobs:
         with:
           node-version: '22'
       - name: Collect products and photos
-        run: node backend/tools/live-fixtures.mjs "$RUNNER_TEMP/fixtures"
+        run: node backend/tools/live-fixtures.mjs "$RUNNER_TEMP/fixtures" "${{ inputs.incomplete }}"
       - name: Shrink photos to at most 2000 px
         run: |
           if command -v mogrify >/dev/null && ls "$RUNNER_TEMP"/fixtures/photos/*.jpg >/dev/null 2>&1; then

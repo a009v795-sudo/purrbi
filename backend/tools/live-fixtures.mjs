@@ -2,7 +2,7 @@
 // reachable (the Claude sandbox). Runs on GitHub Actions; writes <outDir>/manifest.json and photos/,
 // which the live-fixtures workflow publishes on the live-fixtures branch (never main). The photos are
 // Open Pet Food Facts contributor images (CC BY-SA 3.0); each keeps its source URL in the manifest.
-//   node live-fixtures.mjs <outDir>
+//   node live-fixtures.mjs <outDir> [how many incomplete products, default 3]
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { discover, UA } from './opff-discovery.mjs';
@@ -15,7 +15,7 @@ if (!outDir) {
 }
 mkdirSync(join(outDir, 'photos'), { recursive: true });
 
-const found = await discover({ incompleteCount: 3 });
+const found = await discover({ incompleteCount: Math.min(12, Number(process.argv[3]) || 3) });
 for (const p of found.incomplete) {
   p.photos = [];
   for (const [i, url] of p.images.entries()) {

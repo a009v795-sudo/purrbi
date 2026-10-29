@@ -76,10 +76,12 @@ export async function discover({ incompleteCount = 1 } = {}) {
     if (supplements.length) break;
     supplements = (await textSearch('world.openpetfoodfacts.org', terms)).filter(isSupplement);
   }
-  const incomplete = [...catFoods, ...dogFoods]
+  // Products with more package photos first: they more often include the back label.
+  const incomplete = [...new Map([...catFoods, ...dogFoods, ...treats].map((p) => [p.code, p])).values()]
     .filter((p) => !p.ingredients_text && !p.image_ingredients_url && !p.image_nutrition_url && rawImageUrls(p).length >= 2)
+    .sort((x, y) => rawImageUrls(y).length - rawImageUrls(x).length)
     .slice(0, incompleteCount)
-    .map((p) => ({ code: p.code, name: p.product_name ?? '', species: catFoods.includes(p) ? 'cat' : 'dog', images: rawImageUrls(p).slice(0, 3) }));
+    .map((p) => ({ code: p.code, name: p.product_name ?? '', species: catFoods.includes(p) ? 'cat' : dogFoods.includes(p) ? 'dog' : /cat/.test(tags(p)) && !/dog/.test(tags(p)) ? 'cat' : 'dog', images: rawImageUrls(p).slice(0, 4) }));
   const usedCodes = new Set(incomplete.map((p) => p.code));
   const take = (p, label) => (p && !usedCodes.has(p.code) ? (usedCodes.add(p.code), { code: p.code, name: p.product_name ?? '', label }) : null);
   const human = (await search('world.openfoodfacts.org', 'categories_tags_en=breakfast-cereals'))[0];
