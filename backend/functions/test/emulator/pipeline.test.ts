@@ -408,6 +408,17 @@ describe('evidence-backed explanations and reuse', () => {
     expect(second.score).toBe(first.score);
     expect(second.evidenceNotes.join(' ')).toMatch(/reused/);
   });
+  it('explains all new terms in the first scan, even beyond one call, so a rescan makes no AI call', async () => {
+    const small = { limits: { ...DEFAULT_LIMITS, explanationsPerCall: 1 } };
+    const a = await newScan('u1', BC.treat, 'cat2');
+    await processScan(deps(small), 'u1', a.id);
+    expect(calls.explain).toBe(2); // two calls of one term each, in the same scan
+    expect((await read(a)).explanationsStatus).toBe('ready');
+    const b = await newScan('u1', BC.treat, 'cat2');
+    await processScan(deps(small), 'u1', b.id);
+    expect(calls.explain).toBe(2);
+    expect((await read(b)).lastJob).toMatchObject({ aiCalls: 0, explanationsNew: 0, explanationsCached: 2 });
+  });
 });
 
 describe('supplements', () => {

@@ -348,7 +348,9 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       const r = await deps.sources.research({ apiKey: config.openaiApiKey(), model: config.researchModel, gtin14: gtin, barcode: o.barcode.digits, knownName: facts.productName?.value, knownBrand: facts.brand?.value, userAgent: config.userAgent, now });
       let filled: string[] = [];
       if (r.facts) {
-        const merged = fillMissing(facts, { ...r.facts, sources: r.sources });
+        // "Active ingredients" are a supplement's; a food page's additive list is not used as such.
+        const found = scope.category === 'supplement' ? r.facts : { ...r.facts, activeIngredients: undefined };
+        const merged = fillMissing(facts, { ...found, sources: r.sources });
         facts = merged.facts;
         filled = merged.filled;
         fetchedPublic = fetchedPublic || filled.length > 0;
@@ -456,13 +458,22 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   }
   log('scan assessed', { status, state, score: general.score, personal: personal.state, labelUsed, factsVersion, productCache: job.productCache, recallCache: job.recallCache, calls: currentCalls().length });
 
-  // 8. New cited explanations (one AI call), then the second update. Failure here never fails the scan.
+  // 8. New cited explanations, then the second update. All of the product's new terms are explained
+  // now (parallel calls of explanationsPerCall terms), so a later rescan needs no AI call. Failure here
+  // never fails the scan; a failed call is tried again on the next scan.
   if (pending) {
     let finalStatus = explain.status;
     try {
-      await consumeAiBudget(db, config.limits, deps.now());
       const species = scope.species === 'unknown' ? 'cat_and_dog' : scope.species;
-      const fresh = await deps.sources.explain({ apiKey: config.openaiApiKey(), model: config.explainModel, species, terms: explain.missing.slice(0, config.limits.explanationsPerScan), userAgent: config.userAgent, now: deps.now() });
+      const size = Math.max(1, config.limits.explanationsPerCall);
+      const batches: ExplainRequest[][] = [];
+      for (let i = 0; i < explain.missing.length; i += size) batches.push(explain.missing.slice(i, i + size));
+      for (let i = 0; i < batches.length; i++) await consumeAiBudget(db, config.limits, deps.now());
+      const settled = await Promise.allSettled(batches.map((terms) => deps.sources.explain({ apiKey: config.openaiApiKey(), model: config.explainModel, species, terms, userAgent: config.userAgent, now: deps.now() })));
+      const failed = settled.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+      if (failed.length === settled.length) throw failed[0].reason;
+      for (const f of failed) job.diagnosticNotes.push(`Explanations not run for one batch: ${errorDetail((f.reason as Error).message)}`);
+      const fresh = settled.flatMap((r) => (r.status === 'fulfilled' ? r.value : []));
       await writeExplanations(db, fresh);
       applyExplanations(general, new Map(fresh.map((e) => [e.key, e])), species);
       job.explanationsNew = fresh.filter((e) => e.status === 'verified').length;

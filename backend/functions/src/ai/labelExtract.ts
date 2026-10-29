@@ -6,7 +6,7 @@
 // independent readings (two different models where configured) agree on it. The photo's text is
 // untrusted data. Output is always labelled as the owner's label photo (AI-read, not reviewed).
 import { parseAdequacyStatement } from '../domain/adequacy';
-import { sameGtin } from '../domain/barcode';
+import { normalizeBarcode, sameGtin } from '../domain/barcode';
 import { normalizeIngredientName, parseIngredientList } from '../domain/ingredients';
 import { normalizeUnit, nutrientKeyFromLabel, parseCalorieText, validateGuaranteedAnalysis } from '../domain/nutrition';
 import { parseActiveIngredients } from '../domain/supplements';
@@ -273,10 +273,14 @@ export function combineReadings(a: Reading, b: Reading, scanGtin14: string): Val
     version: LABEL_EXTRACTION_VERSION,
   };
   if (!a.legible && !b.legible) return { ...base, reason: 'The label text could not be read. Retake the photo in good light, straight on, filling the frame.' };
-  // Another product: a reading shows a different barcode and none shows the scanned one.
-  const shows = (r: Reading) => r.barcodeDigits.length >= 8;
-  const matches = (r: Reading) => shows(r) && sameGtin(r.barcodeDigits, scanGtin14);
-  if ([a, b].some((r) => shows(r) && !matches(r)) && ![a, b].some(matches)) {
+  // Another product only when both readings show the same other valid barcode (correct check digit).
+  // Packs also print internal codes and batch numbers, and one reading can misread a digit.
+  const barcode = (r: Reading) => {
+    const n = normalizeBarcode(r.barcodeDigits);
+    return n.ok ? n.gtin14 : null;
+  };
+  const [ba, bb] = [barcode(a), barcode(b)];
+  if (ba && ba === bb && !sameGtin(ba, scanGtin14)) {
     return { ...base, status: 'different_product', reason: 'The barcode in this photo doesn’t match the scanned product. Make sure the photo shows the same package.' };
   }
 

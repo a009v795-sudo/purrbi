@@ -3,6 +3,7 @@
 // modelled on a real French bag (Ultima Nature) whose front photo a single reading once "read" as a
 // full analysis, adequacy statement and calorie content that the photo does not show.
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { gs1CheckDigit } from '../../src/domain/barcode';
 import { analysisRows, combineReadings, extractLabel, LABEL_EXTRACTION_VERSION, parseReading, type RawLabelExtraction, type RawPanel } from '../../src/ai/labelExtract';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -70,12 +71,17 @@ describe('grounded label reading', () => {
     expect(label).toMatchObject({ status: 'unreadable', reason: 'No label details were readable in this photo. Retake it closer to the panel you need.' });
     expect(label.uncertainFields).toEqual(['ingredients']);
   });
-  it('treats another barcode as another product unless a reading shows the scanned one', () => {
-    const other = read([FRONT], { barcode_digits: '4006040221035' });
+  it('calls it another product only when both readings show the same other valid barcode', () => {
+    const otherCode = `400604022103${gs1CheckDigit('400604022103')}`;
+    const other = (model: string) => read([FRONT], { barcode_digits: otherCode }, model);
     const none = read([FRONT], {}, 'model-b');
     const same = read([FRONT], { barcode_digits: '8410650233925' }, 'model-b');
-    expect(combineReadings(other, none, GTIN).status).toBe('different_product');
-    expect(combineReadings(other, same, GTIN).status).toBe('processed');
+    // A real Purina pack prints the barcode next to internal codes: 43695803 (not a valid EAN-8) and 100101943.
+    const internal = (model: string) => read([FRONT], { barcode_digits: '43695803' }, model);
+    expect(combineReadings(other('model-a'), other('model-b'), GTIN).status).toBe('different_product');
+    expect(combineReadings(other('model-a'), none, GTIN).status).toBe('processed'); // one reading is not enough
+    expect(combineReadings(other('model-a'), same, GTIN).status).toBe('processed');
+    expect(combineReadings(internal('model-a'), internal('model-b'), GTIN).status).toBe('processed');
   });
 });
 

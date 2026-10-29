@@ -8,7 +8,7 @@ export interface Limits {
   aiCallsPerDayGlobal: number; // budget breaker across all users
   maxPhotoBytes: number;
   maxPhotosPerScan: number;
-  explanationsPerScan: number; // new terms explained per scan (one AI call)
+  explanationsPerCall: number; // terms per explanation call; a scan explains all its new terms at once (parallel calls)
 }
 
 export interface RuntimeConfig {
@@ -36,7 +36,7 @@ export const DEFAULT_LIMITS: Limits = {
   aiCallsPerDayGlobal: 500,
   maxPhotoBytes: 10 * 1024 * 1024,
   maxPhotosPerScan: 6,
-  explanationsPerScan: 8,
+  explanationsPerCall: 8,
 };
 
 export const SCAN_STATUS = {
