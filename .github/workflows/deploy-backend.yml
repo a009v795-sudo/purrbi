@@ -49,6 +49,11 @@ jobs:
           # Functions parameters for this project (read by firebase deploy); no secrets here.
           printf 'STORAGE_BUCKET=%s\n' "$STORAGE_BUCKET" > "functions/.env.$PROJECT_ID"
           echo "Functions parameters (functions/.env.$PROJECT_ID):"; cat "functions/.env.$PROJECT_ID"
+          # Deploy-only Firebase config that names the Storage bucket. Firebase has no "default bucket"
+          # record for this project (its lookup answers 404 although the bucket is linked), so the CLI
+          # must not look one up. firebase.json itself stays as the emulators need it.
+          jq --arg b "$STORAGE_BUCKET" '.storage = [{bucket: $b, rules: .storage.rules}] | del(.emulators)' firebase.json > firebase.deploy.json
+          echo "Storage rules target:"; jq -c .storage firebase.deploy.json
           echo "project_id=$PROJECT_ID" >> "$GITHUB_OUTPUT"
           echo "provider=$(jq -r .workloadIdentityProvider deploy-config.json | sed "s/{projectNumber}/$PROJECT_NUMBER/")" >> "$GITHUB_OUTPUT"
           echo "deployer=$(jq -r .deployerServiceAccount deploy-config.json)" >> "$GITHUB_OUTPUT"
@@ -79,7 +84,14 @@ jobs:
         working-directory: backend
         # No --force: anything not in this repository (functions, indexes) is never deleted; the CLI
         # stops or lists it instead, so a deletion is always a reviewed, separate step.
-        run: firebase deploy --only functions:purrbi,firestore:rules,firestore:indexes,storage --project "${{ steps.cfg.outputs.project_id }}" --non-interactive
+        run: |
+          set -o pipefail
+          firebase deploy --config firebase.deploy.json --only functions:purrbi,firestore:rules,firestore:indexes,storage --project "${{ steps.cfg.outputs.project_id }}" --non-interactive 2>&1 | tee "$RUNNER_TEMP/deploy-output.txt"
+
+      - name: Publish deploy errors (redacted)
+        if: failure()
+        working-directory: backend/tools
+        run: node publish-log.mjs "Deploy output" "$RUNNER_TEMP/deploy-output.txt" ../firebase-debug.log
 
       - name: Verify the deployed backend matches the repository
         if: always()

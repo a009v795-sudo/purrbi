@@ -40,21 +40,25 @@ async function testPermissions(url, permissions) {
   return { httpStatus: r.status, error: r.error, granted: permissions.filter((p) => granted.has(p)), missing: permissions.filter((p) => !granted.has(p)) };
 }
 
-/** The project's default Storage bucket (name and location), compared with deploy-config.json. */
+/**
+ * The app's Storage bucket (deploy-config.json storageBucket): linked to Firebase, whether Firebase also
+ * keeps a "default bucket" record for it (this project has none; deploys name the bucket), and its
+ * location when the deploy identity may read it (it may not by design; the owner's setup run reports it).
+ */
 async function storageInfo() {
-  const r = await api('GET', `https://firebasestorage.googleapis.com/v1alpha/projects/${project}/defaultBucket`);
-  const bucket = r.json?.bucket?.name?.split('/buckets/')[1] ?? null;
-  const location = r.json?.location ?? null;
+  const bucket = config.storageBucket;
+  const linked = await api('GET', `https://firebasestorage.googleapis.com/v1beta/projects/${project}/buckets/${encodeURIComponent(bucket)}`);
+  const dflt = await api('GET', `https://firebasestorage.googleapis.com/v1alpha/projects/${project}/defaultBucket`);
+  const meta = await api('GET', `https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(bucket)}?fields=location,storageClass`);
+  const location = meta.json?.location ?? null;
   return {
-    defaultBucket: bucket,
-    location,
-    storageClass: r.json?.storageClass ?? null,
-    httpStatus: r.status,
-    error: r.error,
-    expectedBucket: config.storageBucket,
-    expectedLocation: config.storageLocation,
-    bucketMatches: bucket === config.storageBucket,
-    locationMatches: (location ?? '').toUpperCase() === (config.storageLocation ?? '').toUpperCase(),
+    bucket,
+    linkedToFirebase: linked.status === 200,
+    linkHttpStatus: linked.status,
+    linkError: linked.error,
+    defaultBucketRecord: dflt.status === 200 ? dflt.json?.bucket?.name?.split('/buckets/')[1] ?? null : `none (HTTP ${dflt.status})`,
+    location: location ?? `${config.storageLocation} (from deploy-config / the owner's setup run; bucket metadata HTTP ${meta.status} for the deploy identity)`,
+    locationMatches: location === null || location.toUpperCase() === (config.storageLocation ?? '').toUpperCase(),
   };
 }
 
@@ -91,8 +95,8 @@ async function preflight() {
     for (const p of c.missing) if (!expectMissing.has(p)) needed.push(`${name}: ${p}`);
   }
   const storageIssues = [];
-  if (!report.storage.bucketMatches) storageIssues.push(`default bucket ${report.storage.defaultBucket ?? 'not found'}, expected ${config.storageBucket}`);
-  if (report.storage.bucketMatches && !report.storage.locationMatches) storageIssues.push(`bucket location ${report.storage.location}, expected ${config.storageLocation}`);
+  if (!report.storage.linkedToFirebase) storageIssues.push(`bucket ${config.storageBucket} is not linked to Firebase (HTTP ${report.storage.linkHttpStatus})`);
+  if (!report.storage.locationMatches) storageIssues.push(`bucket location ${report.storage.location}, expected ${config.storageLocation}`);
   report.summary = { missingForDeploy: needed, broaderThanIntended: unexpected, storage: storageIssues };
   return report;
 }
@@ -174,8 +178,8 @@ async function verify() {
   }
 
   report.storage = await storageInfo();
-  if (!report.storage.bucketMatches) problem(`default Storage bucket is ${report.storage.defaultBucket ?? 'not found'}, expected ${config.storageBucket}`);
-  else if (!report.storage.locationMatches) problem(`Storage bucket location is ${report.storage.location}, expected ${config.storageLocation}`);
+  if (!report.storage.linkedToFirebase) problem(`Storage bucket ${config.storageBucket} is not linked to Firebase (HTTP ${report.storage.linkHttpStatus})`);
+  if (!report.storage.locationMatches) problem(`Storage bucket location is ${report.storage.location}, expected ${config.storageLocation}`);
 
   const bucketRel = await api('GET', `https://firebaserules.googleapis.com/v1/projects/${project}/releases?pageSize=50`);
   const storageReleases = (bucketRel.json?.releases ?? []).map((r) => r.name.split('/releases/')[1]).filter((n) => n?.startsWith('firebase.storage/'));
