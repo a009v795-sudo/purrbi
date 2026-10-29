@@ -14,7 +14,7 @@ import type { ActiveIngredient, AdequacyStatement, CalorieStatement, GuaranteedA
 import { SourceError } from '../util/http';
 import { chatJson } from './openai';
 
-export const LABEL_EXTRACTION_VERSION = 'label-extract-2.0.0';
+export const LABEL_EXTRACTION_VERSION = 'label-extract-2.1.0'; // 2.1.0: calorie upper bounds ("<2 kcal") are not calorie content
 
 const nullableString = { type: ['string', 'null'] };
 const PANEL_KINDS = ['front', 'ingredients', 'active_ingredients', 'guaranteed_analysis', 'adequacy_statement', 'calorie_statement', 'feeding_directions', 'barcode', 'other'] as const;
