@@ -139,6 +139,8 @@ function row(label, barcode, scanId, d, seconds) {
     seconds,
     status: d?.status,
     errorCode: d?.errorCode || undefined,
+    errorRetryable: d?.errorRetryable || undefined,
+    errorMessage: d?.errorMessage || undefined,
     traceId: d?.traceId,
     claimCount: d?.claimCount,
     duplicateDeliveries: d?.duplicateDeliveries ?? 0,
@@ -268,7 +270,7 @@ try {
   // Retry path on the deployed backend: deploy-config.json's development switch RETRY_TEST_BARCODES
   // makes this barcode's first attempt fail like a source outage; the retry check below re-runs it.
   const retryCode = (JSON.parse(readFileSync(join(root, 'backend/deploy-config.json'), 'utf8')).functionParams?.RETRY_TEST_BARCODES ?? '').split(',')[0].trim();
-  if (retryCode) await scan(a, retryCode, 'dogA', 'retry test (first attempt fails on purpose)');
+  if (retryCode && !report.scans.some((x) => x.barcode === retryCode)) await scan(a, retryCode, 'dogA', 'retry test (first attempt fails on purpose)');
 
   // Unsupported product and unknown barcode.
   const human = found.humanFood ?? (FIXTURES ? null : (await search('world.openfoodfacts.org', 'categories_tags_en=breakfast-cereals')).map((x) => ({ code: x.code, name: x.product_name ?? '' }))[0]);
@@ -343,14 +345,15 @@ try {
   // Duplicate protection: every scan was claimed exactly once.
   report.checks.duplicates = report.scans.filter((s) => s.scanId).map((s) => ({ scan: s.label.slice(0, 40), claimCount: s.claimCount, duplicateDeliveries: s.duplicateDeliveries }));
 
-  // Retry path: a failed, retryable scan in this run is retried through the rules.
-  const failed = report.scans.find((s) => s.status === 'failed' && s.scanId);
-  if (failed) {
-    const path = `users/${a.uid}/scans/${failed.scanId}`;
+  // Retry path: every failed, retryable scan in this run is retried by its owner through the rules.
+  const failed = report.scans.filter((s) => s.status === 'failed' && s.scanId && s.errorRetryable);
+  report.checks.retry = failed.length ? [] : 'no failed scan occurred in this run (retry path verified on the emulator)';
+  for (const f of failed.slice(0, 3)) {
+    const path = `users/${a.uid}/scans/${f.scanId}`;
     const r = await patch(a, path, { retryRequested: true });
-    const { d } = await waitScan(a, path, (x) => x.retryRequested === false && TERMINAL.has(x.status));
-    report.checks.retry = { request: r.status, after: d?.status, errorCode: d?.errorCode, claimCount: d?.claimCount };
-  } else report.checks.retry = 'no failed scan occurred in this run (retry path verified on the emulator)';
+    const { d, seconds } = await waitScan(a, path, (x) => (x.claimCount ?? 0) > (f.claimCount ?? 1) && TERMINAL.has(x.status));
+    report.checks.retry.push({ scan: f.label, firstAttempt: { errorCode: f.errorCode, message: f.errorMessage }, retryRequest: r.status, after: row(`after retry: ${f.label}`, f.barcode, f.scanId, d, seconds) });
+  }
 } catch (e) {
   report.error = String(e?.message ?? e);
   console.error(e);
