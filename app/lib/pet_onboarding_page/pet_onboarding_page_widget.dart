@@ -445,10 +445,7 @@ class _PetOnboardingPageWidgetState extends State<PetOnboardingPageWidget> {
                                     ),
                               ),
                               FlutterFlowChoiceChips(
-                                options: [
-                                  ChipData('Cat', Icons.pets),
-                                  ChipData('Dog', Icons.pets)
-                                ],
+                                options: [ChipData('Cat'), ChipData('Dog')],
                                 onChanged: (val) async {
                                   safeSetState(() => _model.choiceChipsValue1 =
                                       val?.firstOrNull);
