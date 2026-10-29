@@ -19,10 +19,12 @@
 #      "deploy-backend" workflow on the main branch of the Purrbi repository can act as
 #      purrbi-deployer. No key file exists anywhere.
 #   6. Bindings that Firebase's deploy tool expects for event-driven functions on Google-managed
-#      identities (default compute account, Pub/Sub agent, Cloud Build's identity if it lacks one).
+#      identities (default compute account, Pub/Sub agent).
+#   6b. The build identity (the default compute account here): Cloud Build builder role; Editor or
+#      Owner REMOVED from it if present; the deployer may act as it for builds only.
 #   7. A cleanup policy so function container images older than 1 day are deleted automatically.
-# It only adds: no IAM binding, resource or file in the project is removed or replaced, and it
-# does not change billing. It does not touch any other project (every command names this one).
+# Apart from 6b (Editor/Owner removed from the build identity, if it has them), it only adds: no other
+# IAM binding, resource or file is removed or replaced, and it does not change billing. It does not touch any other project (every command names this one).
 set -euo pipefail
 
 PROJECT_ID="${PROJECT_ID:-purrbi-49c21}"
@@ -180,15 +182,28 @@ else
 fi
 grant_project "serviceAccount:service-${PROJECT_NUMBER}@gcp-sa-pubsub.iam.gserviceaccount.com" roles/iam.serviceAccountTokenCreator
 
+step "Build identity: the account Google builds the functions as"
+# Google builds every function as the project's default Cloud Build account (here the default compute
+# account) and requires the deployer to be able to act as it; Firebase's deploy tool cannot name a
+# different build account. So that account is limited to building before the deployer may use it:
+# it gets the Cloud Build builder role and loses Editor/Owner if it has them (nothing in this project
+# runs as it; the functions run as purrbi-functions).
 BUILD_SA="$(gcloud builds get-default-service-account --project "$PROJECT_ID" --format='value(serviceAccountEmail)' 2>/dev/null | sed 's#.*/##' || true)"
 if [ -n "$BUILD_SA" ] && quiet gcloud iam service-accounts describe "$BUILD_SA" --project "$PROJECT_ID"; then
   BUILD_ROLES="$(gcloud projects get-iam-policy "$PROJECT_ID" --flatten=bindings --filter="bindings.members:serviceAccount:$BUILD_SA" --format='value(bindings.role)' 2>/dev/null | tr '\n' ' ')"
-  # Function builds need the builder role (or Editor/Owner, which new projects often no longer grant).
-  if grep -qE 'roles/(cloudbuild\.builds\.builder|editor|owner)( |$)' <<<"$BUILD_ROLES"; then
-    ok "build identity $BUILD_SA can already build ($BUILD_ROLES)"
-  else
+  ok "build identity $BUILD_SA has: ${BUILD_ROLES:-no project roles}"
+  if ! grep -qE 'roles/cloudbuild\.builds\.builder( |$)' <<<"$BUILD_ROLES"; then
     grant_project "serviceAccount:$BUILD_SA" roles/cloudbuild.builds.builder
   fi
+  for broad in roles/editor roles/owner; do
+    if grep -qE "${broad//./\\.}( |\$)" <<<"$BUILD_ROLES"; then
+      gcloud projects remove-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$BUILD_SA" --role="$broad" --condition=None --quiet >/dev/null
+      ok "REMOVED $broad from $BUILD_SA (it now only builds functions)"
+    fi
+  done
+  with_retry gcloud iam service-accounts add-iam-policy-binding "$BUILD_SA" --project "$PROJECT_ID" \
+    --member="serviceAccount:$DEPLOYER_SA" --role=roles/iam.serviceAccountUser --quiet
+  ok "roles/iam.serviceAccountUser on $BUILD_SA only (functions are built as it)"
 else
   note "Could not read Cloud Build's default identity; the first deploy will report any build permission problem."
 fi

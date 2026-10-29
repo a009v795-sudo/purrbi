@@ -79,6 +79,8 @@ async function preflight() {
   ]);
   const sa = (email) => `https://iam.googleapis.com/v1/projects/${project}/serviceAccounts/${email}:testIamPermissions`;
   report.checks.actAsRuntime = await testPermissions(sa(config.runtimeServiceAccount), ['iam.serviceAccounts.actAs']);
+  // Google builds the functions as the default Cloud Build account (the default compute account here).
+  report.checks.actAsBuild = await testPermissions(sa(`${config.projectNumber}-compute@developer.gserviceaccount.com`), ['iam.serviceAccounts.actAs']);
   for (const secret of config.secrets) {
     report.checks[`secret:${secret}`] = await testPermissions(`https://secretmanager.googleapis.com/v1/projects/${project}/secrets/${secret}:testIamPermissions`, [
       'secretmanager.secrets.get', 'secretmanager.secrets.getIamPolicy', 'secretmanager.versions.get', 'secretmanager.versions.access',
