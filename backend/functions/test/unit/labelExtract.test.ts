@@ -65,6 +65,15 @@ describe('grounded label reading', () => {
     expect(label.adequacy).toMatchObject({ type: 'intermittent', text: alone.text });
     expect(label.rejected).toEqual([]);
   });
+  it('reads the legible rows of a panel that glare makes partly legible, and traces what each reading saw', () => {
+    // As printed on a real French dog biscuit pack (U "Biscuits fourrés"); one reading calls the panel partial.
+    const rows = 'Protéine brute 10%\nCellulose brute 1%\nMatières grasses brutes 8%\nCendres brutes 5,5%\nHumidité 10%';
+    const clearPanel: RawPanel = { kind: 'guaranteed_analysis', legibility: 'clear', heading: 'Constituants analytiques', text: rows };
+    const glare: RawPanel = { ...clearPanel, legibility: 'partial', heading: '[?] analytiques', text: rows.replace('Humidité 10%', 'Humidité [?]') };
+    const label = combineReadings(read([clearPanel]), read([glare], {}, 'model-b'), GTIN);
+    expect(label.guaranteedAnalysis.map((g) => `${g.nutrient}:${g.value}`)).toEqual(['crude_protein:10', 'crude_fiber:1', 'crude_fat:8', 'ash:5.5']);
+    expect(label.rejected.at(-1)).toBe('readings: model-a: guaranteed_analysis; 5 rows [crude_protein 10%, crude_fiber 1%, crude_fat 8%, ash 5.5%, moisture 10%] / model-b: guaranteed_analysis (not clear: guaranteed_analysis); 4 rows [crude_protein 10%, crude_fiber 1%, crude_fat 8%, ash 5.5%]');
+  });
   it('says the photo is unreadable when the readings share nothing', () => {
     const blurry: RawPanel = { kind: 'ingredients', legibility: 'partial', heading: null, text: 'COMPOSITION: Dinde [?] (22%), [?]' };
     const label = combineReadings(read([blurry], { product_name: null }), read([blurry], { product_name: null }, 'model-b'), GTIN);

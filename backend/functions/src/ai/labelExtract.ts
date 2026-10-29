@@ -130,6 +130,9 @@ const MAX_PRINTED = /\(\s*max\.?\s*\)|(?<!\p{L})(?:max(?:imum)?|maxi)(?!\p{L})|n
 
 const textOf = (p: RawPanel) => (p.text ?? '').trim();
 const clear = (p: RawPanel) => p.legibility === 'clear' && !!textOf(p);
+// Analysis rows and calorie lines stand alone: a partly legible panel (glare, a cut edge) still gives
+// the rows it shows in full; rows with [?] are dropped and every kept row must match the other reading.
+const readable = (p: RawPanel) => p.legibility !== 'illegible' && !!textOf(p);
 const words = (s: string) => normalizeIngredientName(s).replace(/[^a-z0-9]+/g, ' ').trim().split(' ').filter(Boolean).slice(0, 400);
 
 /**
@@ -189,7 +192,7 @@ export function analysisRows(text: string, percentHeader: boolean): GuaranteedAn
 
 function caloriesIn(panels: RawPanel[]): CalorieStatement[] {
   const out: CalorieStatement[] = [];
-  const lines = panels.filter(clear).flatMap((p) => textOf(p).split(/\n+/)).filter((l) => /kcal|kilocal/i.test(l) && !UNSURE.test(l));
+  const lines = panels.filter(readable).flatMap((p) => textOf(p).split(/\n+/)).filter((l) => /kcal|kilocal/i.test(l) && !UNSURE.test(l));
   for (const c of lines.flatMap((l) => parseCalorieText(l))) if (!out.some((x) => x.kcal === c.kcal && x.per === c.per)) out.push(c);
   return out;
 }
@@ -225,7 +228,7 @@ export function parseReading(raw: RawLabelExtraction, model: string): Reading {
   }
   const ingredients = found ? parseIngredientList(found.list).map((i) => i.name) : [];
   const analysis = panels
-    .filter((p) => p.kind === 'guaranteed_analysis' && clear(p))
+    .filter((p) => p.kind === 'guaranteed_analysis' && readable(p))
     .flatMap((p) => analysisRows(textOf(p), /%/.test(p.heading ?? '')));
   const feeding = panels.find((p) => p.kind === 'feeding_directions' && clear(p) && !UNSURE.test(textOf(p)));
   return {
@@ -249,6 +252,12 @@ export function parseReading(raw: RawLabelExtraction, model: string): Reading {
 }
 
 const agreeText = (a: string | null, b: string | null, min: number) => !!a && !!b && wordAgreement(a, b) >= min;
+
+/** What one reading saw, for tracing a disagreement: panels, the ones not fully legible, analysis rows. */
+function describeReading(r: Reading): string {
+  const rows = r.analysis.map((e) => `${e.nutrient === 'other' ? e.label.slice(0, 12) : e.nutrient} ${e.value}${e.unit}`).join(', ');
+  return `${r.model.replace(/-\d{4}-\d{2}-\d{2}$/, '')}: ${r.panels.join('+') || 'no panels'}${r.unclear.length ? ` (not clear: ${r.unclear.join('+')})` : ''}; ${r.analysis.length} rows${rows ? ` [${rows.slice(0, 120)}]` : ''}`;
+}
 
 /** Keeps only what both readings say; everything else is listed in `rejected`. */
 export function combineReadings(a: Reading, b: Reading, scanGtin14: string): ValidatedLabel {
@@ -300,6 +309,7 @@ export function combineReadings(a: Reading, b: Reading, scanGtin14: string): Val
   }
   const unmatched = b.analysis.filter((f) => !twin(f, a.analysis)).length;
   if (unmatched) rejected.push(`analysis: ${unmatched} row${unmatched === 1 ? '' : 's'} of the second reading not confirmed by the first`);
+  if (a.analysis.length !== b.analysis.length || unmatched) rejected.push(`readings: ${describeReading(a)} / ${describeReading(b)}`);
 
   out.calories = a.calories.filter((c) => b.calories.some((d) => d.per === c.per && Math.abs(d.kcal - c.kcal) <= 1));
   if (a.calories.length + b.calories.length > 0 && !out.calories.length) rejected.push('calorie statement: the two readings differ');
