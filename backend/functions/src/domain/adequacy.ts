@@ -10,9 +10,17 @@ const norm = (s: string) =>
     .replace(/\s+/g, ' ')
     .trim();
 
+// EU labels declare a "complete" or "complementary" feed in the label language (fr, de, es, it, nl, pt).
+const EU_COMPLETE = /\b(aliment complet|alleinfutter(mittel)?|(alimento|pienso|mangime) completo|volledig(e)? (dier)?voe(der|ding))\b/;
+const EU_COMPLEMENTARY = /\b(aliment complementaire|erganzungsfutter(mittel)?|(alimento|pienso) complementario|(alimento|mangime) complementare|alimento complementar|aanvullend(e)? (dier)?voe(der|ding))\b/;
 const INTERMITTENT = /\b(intermittent|supplemental feeding|for supplemental|complementary (pet )?(food|feed)|complementary feedingstuff|not (a )?complete (and balanced )?(diet|food|meal))\b/;
 const COMPLETE =
   /\b(complete and balanced|formulated to meet the nutritional levels|nutrient profiles|nutritional levels established|animal feeding tests|feeding (trials?|protocols)|complete (pet |dry |wet )?(food|feed)|complete feedingstuff)\b/;
+// Life-stage words in the same languages.
+const ALL_STAGES = /\b(all life stages|tous les stades de (la )?vie|toutes les etapes de (la )?vie|alle lebens(phasen|abschnitte|stadien)|todas las etapas de (la )?vida|tutte le fasi (della )?vita|alle levensfasen|todas as fases da vida)\b/;
+const GROWTH = /\b(growth|growing|pupp(y|ies)|kittens?|junior|croissance|chatons?|chiots?|wachstum|welpen?|katzchen|crecimiento|cachorros?|gatitos?|crescita|cuccioli|gattini|groei|crescimento)\b/;
+const REPRODUCTION = /\b(gestation|lactation|reproduction|pregnant|nursing|gestantes?|allaitantes?|trachtig(e|en)?|saugend(e|en)?|gestacion|lactancia|gestazione|allattamento|dracht(ig)?|zogend(e)?|gestacao|lactacao)\b/;
+const ADULT = /\b(adult maintenance|maintenance of adult|maintenance|adults?|senior|mature|adultes?|adultos?|adulti|ausgewachsene?n?|erwachsene?n?|volwassen(en)?)\b/;
 const FEEDING_TRIAL = /\b(animal feeding tests|feeding (trials?|tests|protocols))\b/;
 const FORMULATION = /\b(formulated to meet|nutrient profiles|nutritional levels established)\b/;
 
@@ -35,8 +43,8 @@ export function parseAdequacyStatement(raw: string | null | undefined): Adequacy
   const t = norm(text);
 
   let type: AdequacyStatement['type'] = 'unclear';
-  if (INTERMITTENT.test(t)) type = 'intermittent';
-  else if (COMPLETE.test(t)) type = 'complete';
+  if (INTERMITTENT.test(t) || EU_COMPLEMENTARY.test(t)) type = 'intermittent';
+  else if (COMPLETE.test(t) || EU_COMPLETE.test(t)) type = 'complete';
 
   let method: AdequacyStatement['method'] = 'unknown';
   if (type === 'complete') {
@@ -45,15 +53,15 @@ export function parseAdequacyStatement(raw: string | null | undefined): Adequacy
   }
 
   const lifeStages = new Set<LifeStageClaim>();
-  if (/\ball life stages\b/.test(t)) lifeStages.add('all_life_stages');
+  if (ALL_STAGES.test(t)) lifeStages.add('all_life_stages');
   const withoutAls = t.replace(/all life stages( including| except( for)?)? growth of large size dogs[^.;]*/g, ' ');
-  if (/\b(growth|growing|pupp(y|ies)|kittens?|junior)\b/.test(withoutAls) && !lifeStages.has('all_life_stages')) {
+  if (GROWTH.test(withoutAls) && !lifeStages.has('all_life_stages')) {
     lifeStages.add('growth');
   }
-  if (/\b(gestation|lactation|reproduction|pregnant|nursing)\b/.test(t) && !lifeStages.has('all_life_stages')) {
+  if (REPRODUCTION.test(t) && !lifeStages.has('all_life_stages')) {
     lifeStages.add('gestation_lactation');
   }
-  if (/\b(adult maintenance|maintenance of adult|maintenance|adults?|senior|mature)\b/.test(withoutAls) && !lifeStages.has('all_life_stages')) {
+  if (ADULT.test(withoutAls) && !lifeStages.has('all_life_stages')) {
     lifeStages.add('adult_maintenance');
   }
 
@@ -63,7 +71,7 @@ export function parseAdequacyStatement(raw: string | null | undefined): Adequacy
 
   const style: AdequacyStatement['style'] = /\baafco\b/.test(t)
     ? 'aafco'
-    : /\b(complete|complementary) (pet )?(food|feed)|feedingstuff\b/.test(t)
+    : /\b(complete|complementary) (pet )?(food|feed)|feedingstuff\b/.test(t) || EU_COMPLETE.test(t) || EU_COMPLEMENTARY.test(t)
       ? 'eu'
       : 'other';
 

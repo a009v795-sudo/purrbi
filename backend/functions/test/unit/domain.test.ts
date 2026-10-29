@@ -202,3 +202,24 @@ describe('EU labels (found by the live scan of a French label)', () => {
     expect(rematchAnalysis(us as never)).toEqual(us);
   });
 });
+
+describe('EU adequacy statements (found by the live scan of a French label)', () => {
+  it('reads complete and complementary feeds, species and life stages in the label languages', async () => {
+    const { parseAdequacyStatement } = await import('../../src/domain/adequacy');
+    const cases: [string, Record<string, unknown>][] = [
+      ['ALIMENT COMPLET POUR CATS ADULTES', { type: 'complete', species: 'cat', lifeStages: ['adult_maintenance'], style: 'eu' }],
+      ['Aliment complet pour chat adulte', { type: 'complete', species: 'cat', lifeStages: ['adult_maintenance'], style: 'eu' }],
+      ['Aliment complet pour chatons', { type: 'complete', species: 'cat', lifeStages: ['growth'] }],
+      ['Aliment complémentaire pour chats', { type: 'intermittent', species: 'cat', style: 'eu' }],
+      ['Alleinfuttermittel für ausgewachsene Katzen', { type: 'complete', species: 'cat', lifeStages: ['adult_maintenance'] }],
+      ['Ergänzungsfuttermittel für Hunde', { type: 'intermittent', species: 'dog' }],
+      ['Alimento completo para perros adultos', { type: 'complete', species: 'dog', lifeStages: ['adult_maintenance'] }],
+      ['Alimento completo para gatos en todas las etapas de la vida', { type: 'complete', species: 'cat', lifeStages: ['all_life_stages'] }],
+      ['Alimento completo per gatti adulti', { type: 'complete', species: 'cat', lifeStages: ['adult_maintenance'] }],
+      ['Mangime complementare per cani', { type: 'intermittent', species: 'dog' }],
+      ['Volledig diervoeder voor volwassen katten', { type: 'complete', species: 'cat', lifeStages: ['adult_maintenance'] }],
+      ['Aanvullend diervoeder voor honden', { type: 'intermittent', species: 'dog' }],
+    ];
+    for (const [text, want] of cases) expect([text, parseAdequacyStatement(text)]).toEqual([text, expect.objectContaining(want)]);
+  });
+});
