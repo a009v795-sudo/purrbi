@@ -24,7 +24,7 @@ const input = (r: ReturnType<typeof result>, p = pet()) =>
   verdictInput({
     productName: 'TEST FIXTURE Chicken Recipe', brand: 'TESTBRAND', species: r.scope.species, category: r.general.category,
     score: r.general.score, provisional: r.general.scoreProvisional, scoreLabel: r.general.scoreLabel, scoreBasis: r.general.scoreBasis,
-    withheldReason: r.general.scoreWithheldReason ?? '', pet: { name: p.name, species: p.species, fit: r.personal.state, headline: r.personal.headline },
+    withheldReason: r.general.scoreWithheldReason ?? '', coverage: r.general.scoreCoverage, low: r.general.scoreMinPossible ?? null, high: r.general.scoreMaxPossible, pet: { name: p.name, species: p.species, fit: r.personal.state, headline: r.personal.headline },
     positives: r.highlights.positives, cautions: r.highlights.cautions, unresolved: r.personal.unresolved,
   });
 
@@ -100,6 +100,10 @@ describe('verdict', () => {
     }
     const allergic = pet({ allergiesStatus: 'reported', allergies: ['chicken'] });
     expect(ruleVerdict(input(result(facts(), allergic), allergic))).toMatch(/^In the allergy profile: Contains Chicken/);
+    // A partial assessment is told by its coverage and range, never by its score alone.
+    const partial = input(result(facts({ adequacyText: '' })), pet());
+    expect(ruleVerdict(partial)).toMatch(/could assess 50 of 100 points’ worth .* between 50 and 100/);
+    expect(checkVerdict('Purrbi’s label score for this chicken recipe is 74 so far, a partial assessment based on some of its label, and it fits your cat’s profile; the details below say what is still missing from the label.', partial)).toMatch(/partial score as if it were final/);
   });
   it('the cache key changes with the evidence or the pet, not with the pet’s name', () => {
     const named = (over: Parameters<typeof pet>[0]) => {

@@ -11,11 +11,11 @@ import type { Highlight } from '../domain/highlights';
 import { SourceError } from '../util/http';
 import { chatJson } from './openai';
 
-export const VERDICT_VERSION = 'verdict-1.2.0';
+export const VERDICT_VERSION = 'verdict-1.3.0';
 
 export interface VerdictInput {
   product: { name: string; brand: string; species: string; category: string };
-  assessment: { score: number | null; provisional: boolean; label: string; basis: string; withheldReason: string };
+  assessment: { score: number | null; provisional: boolean; label: string; basis: string; withheldReason: string; coverage?: number | null; low?: number | null; high?: number | null };
   pet: { name: string; species: string; fit: string; headline: string } | null;
   positives: { title: string; detail: string; value: string }[];
   cautions: { title: string; detail: string; value: string; severity: string; rule: string }[];
@@ -32,6 +32,9 @@ export function verdictInput(args: {
   scoreLabel: string;
   scoreBasis: string;
   withheldReason: string;
+  coverage?: number | null;
+  low?: number | null;
+  high?: number | null;
   pet: { name: string; species: string; fit: string; headline: string } | null;
   positives: Highlight[];
   cautions: Highlight[];
@@ -39,7 +42,7 @@ export function verdictInput(args: {
 }): VerdictInput {
   const input: VerdictInput = {
     product: { name: args.productName || 'This product', brand: args.brand, species: args.species, category: args.category },
-    assessment: { score: args.score, provisional: args.provisional, label: args.scoreLabel, basis: args.scoreBasis, withheldReason: args.withheldReason },
+    assessment: { score: args.score, provisional: args.provisional, label: args.scoreLabel, basis: args.scoreBasis, withheldReason: args.withheldReason, coverage: args.coverage ?? null, low: args.low ?? null, high: args.high ?? null },
     pet: args.pet ? { name: petPlaceholder(args.pet.species), species: args.pet.species, fit: args.pet.fit, headline: args.pet.headline } : null,
     positives: args.positives.map((h) => ({ title: h.title, detail: (h.full ?? h.detail).slice(0, 160), value: h.value })),
     cautions: args.cautions.map((h) => ({ title: h.title, detail: (h.full ?? h.detail).slice(0, 160), value: h.value, severity: h.severity, rule: h.rule })),
@@ -83,15 +86,28 @@ export function ruleVerdict(input: VerdictInput): string {
   const first = input.cautions[0];
   const name = input.product.name;
   const a = input.assessment;
-  const score =
+  const partial = a.label === 'Partial assessment';
+  const score = (short: boolean) =>
     a.score === null
       ? a.withheldReason || `Purrbi hasn’t scored ${name} yet.`
-      : a.label === 'Partial assessment'
-        ? `Purrbi’s label score for ${name} is ${a.score}/100 so far, a partial assessment.`
+      : partial
+        ? short
+          ? `It is a partial assessment: the complete label could put its score between ${a.low ?? 0} and ${a.high ?? 100}.`
+          : `Purrbi could assess ${a.coverage ?? 'part'} of 100 points’ worth of ${name}’s label, a partial assessment: the complete label could put its score between ${a.low ?? 0} and ${a.high ?? 100}.`
         : a.label === 'Documented ingredient concern'
-          ? `Purrbi’s label score for ${name} is capped at ${a.score}/100 because of a documented ingredient concern.`
-          : `Purrbi’s label score for ${name} is ${a.score}/100 (${a.label.toLowerCase()}).`;
-  const required = [first?.severity === 'alert' ? `${first.title}: ${first.detail}` : input.pet?.headline && input.pet.fit !== 'fits' ? input.pet.headline : '', score].filter(Boolean).map(sentence);
+          ? short
+            ? `Its label score is capped at ${a.score}/100 for that reason.`
+            : `Purrbi’s label score for ${name} is capped at ${a.score}/100 because of a documented ingredient concern.`
+          : short
+            ? `Purrbi’s label score is ${a.score}/100 (${a.label.toLowerCase()}).`
+            : `Purrbi’s label score for ${name} is ${a.score}/100 (${a.label.toLowerCase()}).`;
+  // The most serious caution first, without repeating the ingredient's name ("propylene glycol: …").
+  const lead = first?.title.split(':')[0] ?? '';
+  const alert = first?.severity === 'alert' ? (first.detail.toLowerCase().startsWith(lead.toLowerCase()) ? first.detail : `${first.title}: ${first.detail}`) : '';
+  const opening = alert || (input.pet?.headline && input.pet.fit !== 'fits' ? input.pet.headline : '');
+  const fits = (parts: string[]) => words(parts.join(' ')).length <= 45;
+  let required = [opening, score(false)].filter(Boolean).map(sentence);
+  if (!fits(required)) required = [opening, score(true)].filter(Boolean).map(sentence);
   const optional = [
     first && first.severity !== 'alert' ? `To check: ${first.detail}` : '',
     input.cautions[1] ? `Also check: ${input.cautions[1].detail}` : '',
@@ -100,8 +116,9 @@ export function ruleVerdict(input: VerdictInput): string {
     'The details and their sources are listed below.',
   ].filter(Boolean).map(sentence);
   const out = [...required];
-  for (const s of optional) if (words([...out, s].join(' ')).length <= 45) out.push(s);
-  if (words(out.join(' ')).length < 25) out.push('Purrbi’s findings come from the label information it found and are not a veterinary review.');
+  for (const x of optional) if (fits([...out, x])) out.push(x);
+  const closing = 'Purrbi’s findings come from the label information it found and are not a veterinary review.';
+  if (words(out.join(' ')).length < 25 && fits([...out, closing])) out.push(closing);
   let text = out.join(' ');
   // A single very long statement: end it at the last full stop before word 45, else at word 45.
   if (words(text).length > 45) {
@@ -138,6 +155,12 @@ export function checkVerdict(text: string, input: VerdictInput): string | null {
   const partial = input.assessment.label === 'Partial assessment';
   if (!partial && /\bpartial\b/i.test(text)) return 'calls a full assessment partial';
   if (partial && !/\bpartial\b/i.test(text)) return 'does not say it is a partial assessment';
+  // A partial assessment is described by how much could be assessed or its range, never by its score alone.
+  if (partial && input.assessment.score !== null) {
+    const nums = new Set(text.match(/\d+/g) ?? []);
+    const range = input.assessment.low != null && input.assessment.high != null && nums.has(String(input.assessment.low)) && nums.has(String(input.assessment.high));
+    if (nums.has(String(input.assessment.score)) && !range && String(input.assessment.score) !== String(input.assessment.coverage)) return 'gives a partial score as if it were final';
+  }
   const first = input.cautions[0];
   if (first?.severity === 'alert') {
     const named = [first.value, ...(first.rule === 'G-RECALL' ? ['recall'] : []), ...(first.rule === 'P-SPECIES' ? ['dog', 'cat'] : [])].filter(Boolean);
@@ -150,7 +173,7 @@ const SYSTEM = [
   'You write the verdict a cat or dog owner sees first: one or two plain sentences, between 25 and 45 words (count them), saying what Purrbi’s assessment of this product means for their pet.',
   'Use only the facts in the JSON input. Never add facts, numbers, ingredients, health claims or advice that are not in it.',
   'If there is a caution with severity "alert" (a recall match, a product made for another species, an ingredient in the pet’s allergy profile), start with it.',
-  'Call the score “Purrbi’s label score” and use the assessment label exactly as given. Only if the label is “Partial assessment”, say it is a partial assessment and say how much of the label could be assessed or the range the complete label could give (both are in basis), never the score alone as if it were final; if provisional is true with any other label, you may say some optional label details are not confirmed yet. If there is no score, say what is missing.',
+  'Call the score “Purrbi’s label score” and use the assessment label exactly as given. If the label is “Partial assessment”, do not state the score number: say it is a partial assessment and give how much of the label could be assessed (coverage) or the range the complete label could give (low to high). If provisional is true with any other label, you may say some optional label details are not confirmed yet. If there is no score, say what is missing.',
   'If there is no pet, speak about the product in general.',
   'Never praise or judge the product beyond the findings: never say safe, ideal, perfect, healthy, nutritious, great, excellent, premium, high-quality, best, recommended, guaranteed or “no concerns”, and never make health or treatment claims. Do not give veterinary advice. Write numbers only as they appear in the input, and the score only as given.',
 ].join(' ');

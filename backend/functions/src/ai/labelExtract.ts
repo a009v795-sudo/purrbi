@@ -364,17 +364,23 @@ export async function extractLabel(opts: {
         { type: 'image_url', image_url: { url: `data:${opts.mimeType};base64,${opts.imageBase64}`, detail: 'high' } },
       ],
       format: { name: 'pet_label_transcription', schema: LABEL_SCHEMA as unknown as Record<string, unknown> },
-      timeoutMs: 60000,
-      maxTokens: 4000,
+      timeoutMs: 90000,
+      maxTokens: 12000, // a dense panel (ingredients, analysis, additives, feeding table) is long to transcribe
     });
   const [ra, rb] = await Promise.allSettled([read(first), read(second)]);
-  if (ra.status === 'rejected') throw ra.reason;
+  // A reading that fails for its model (cut off, malformed, model not available) is replaced by another
+  // independent reading with the other model; a network or quota failure is not.
+  const recoverable = (err: unknown) => err instanceof SourceError && (err.kind === 'parse' || err.status === 400 || err.status === 404);
+  let a = ra.status === 'fulfilled' ? ra.value : null;
   let b = rb.status === 'fulfilled' ? rb.value : null;
-  if (!b) {
-    const err = (rb as PromiseRejectedResult).reason;
-    // A second model this account cannot use: the first model reads the photo again instead.
-    if (second !== first && err instanceof SourceError && (err.status === 400 || err.status === 404)) b = await read(first);
-    else throw err;
+  if (!a && !b) throw (ra as PromiseRejectedResult).reason;
+  if (!a) {
+    if (!recoverable((ra as PromiseRejectedResult).reason)) throw (ra as PromiseRejectedResult).reason;
+    a = await read(second);
   }
-  return combineReadings(parseReading(ra.value.data, ra.value.model), parseReading(b.data, b.model), opts.scanGtin14);
+  if (!b) {
+    if (!recoverable((rb as PromiseRejectedResult).reason)) throw (rb as PromiseRejectedResult).reason;
+    b = await read(first);
+  }
+  return combineReadings(parseReading(a.data, a.model), parseReading(b.data, b.model), opts.scanGtin14);
 }

@@ -570,6 +570,9 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
     scoreLabel: general.scoreLabel,
     scoreBasis: general.scoreBasis,
     withheldReason: general.scoreWithheldReason ?? '',
+    coverage: general.scoreCoverage,
+    low: general.scoreMinPossible ?? null,
+    high: general.scoreMaxPossible,
     pet: pet ? { name: pet.name, species: pet.species, fit: personal.state, headline: personal.headline } : null,
     positives: highlights.positives,
     cautions: highlights.cautions,
@@ -877,8 +880,15 @@ async function photoJob(deps: Deps, uid: string, photoId: string): Promise<void>
       }
     }
   } catch (err) {
-    const message = err instanceof QuotaError ? 'Today’s photo limit has been reached.' : 'The photo couldn’t be processed. Try again or retake it.';
+    const parse = err instanceof SourceError && err.kind === 'parse';
+    const message =
+      err instanceof QuotaError
+        ? 'Today’s photo limit has been reached.'
+        : parse
+          ? 'The label couldn’t be read in one go. Try a closer photo of just the panel that is asked for.'
+          : 'The photo couldn’t be processed. Try again or retake it.';
     deps.log.error('photo failed', { traceId, uid, scanId, photoId, error: (err as Error).message });
+    job.diagnosticNotes.push(`Label photo not processed: ${err instanceof QuotaError ? err.kind : errorDetail((err as Error).message)}`);
     await photoFail('failed', message);
   }
 
