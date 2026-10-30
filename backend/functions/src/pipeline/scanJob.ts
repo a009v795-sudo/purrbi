@@ -623,7 +623,9 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   const personal = personalize(pet, facts, scope, general, recall, now);
   const summary = buildSummary(facts, scope, general, personal, recall);
   const state = overallState(general, recall, scope);
-  const requests: PhotoRequest[] = o.skipPhotos ? [] : missingInfo(facts, scope, general.category);
+  // What a photo would still add. After "Continue without photos" the result is complete, but the requests
+  // stay listed (optional), so the owner can add a photo later and the findings so far are kept.
+  const requests: PhotoRequest[] = missingInfo(facts, scope, general.category);
 
   // The concise result: up to two positives and two cautions, and the verdict for the selected pet.
   // Supported products get a model-written verdict, checked against this assessment and cached; until it
@@ -667,7 +669,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   job.explanationsCached = explain.cachedCount;
   const pending = o.allowExplain && config.aiEnabled && config.explanationsEnabled && explain.missing.length > 0;
 
-  const status = scope.status === 'out_of_scope' ? SCAN_STATUS.outOfScope : requests.length ? SCAN_STATUS.needsPhotos : SCAN_STATUS.complete;
+  const status = scope.status === 'out_of_scope' ? SCAN_STATUS.outOfScope : requests.length && !o.skipPhotos ? SCAN_STATUS.needsPhotos : SCAN_STATUS.complete;
   const statusMessage =
     status === SCAN_STATUS.outOfScope ? 'Outside Purrbi’s scope' : status === SCAN_STATUS.needsPhotos ? `Add ${requests.length === 1 ? 'a photo' : 'photos'} to finish the assessment` : 'Assessment ready';
 
@@ -996,7 +998,8 @@ export async function handleScanUpdate(deps: Deps, uid: string, scanId: string, 
   const barcode = normalizeBarcode(after.barcode);
   if (!barcode.ok) return;
   if (rising('skipPhotos') && after.status === SCAN_STATUS.needsPhotos) {
-    await ref.update({ status: SCAN_STATUS.complete, statusMessage: 'Assessment ready (some information is missing)', photoRequests: [], missingInfo: [], completedAt: Timestamp.fromDate(deps.now()), updatedAt: Timestamp.fromDate(deps.now()) });
+    // The findings stay; the photo requests stay listed as optional, so a photo can still be added later.
+    await ref.update({ status: SCAN_STATUS.complete, statusMessage: 'Assessment ready (some information is missing)', completedAt: Timestamp.fromDate(deps.now()), updatedAt: Timestamp.fromDate(deps.now()) });
     return;
   }
   if (rising('refreshPersonalRequested') && [SCAN_STATUS.complete, SCAN_STATUS.needsPhotos].includes(after.status as never)) {

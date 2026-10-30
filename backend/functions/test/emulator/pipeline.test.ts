@@ -418,8 +418,12 @@ describe('path B: missing label information', () => {
     await handleScanUpdate(deps(), 'u1', ref.id, before, await read(ref));
     const s = await read(ref);
     expect(s.status).toBe('complete');
-    expect(s.missingInfo).toEqual([]); // no photo is asked for any more…
-    expect(s.photoRequests).toEqual([]);
+    // The findings are kept and the photo stays available as optional (no loop back to "needs photos")…
+    expect(s.photoRequests.map((r: { purpose: string }) => r.purpose)).toEqual(['nutrition']);
+    expect(before.ingredientsText).toBe(s.ingredientsText);
+    const again = await newScan('u1', BC.food);
+    await processScan(deps(), 'u1', again.id);
+    expect((await read(again)).status).toBe('needs_photos'); // a new scan asks again; the skipped one stays complete
     expect(s.missingForScore).toEqual(['nutritional adequacy ("complete and balanced") statement', 'guaranteed analysis (protein and fat)']); // …and what the score still needs is its own field
     expect(s.scoreAvailable).toBe(false);
   });
