@@ -61,7 +61,7 @@ References (read-only): Moxis FlutterFlow `moxis-one-x51584` (pulled and export,
 | 7 | Photo recovery UI | ✅ live |
 | 8 | Deploy backend (OIDC); deployed-rules check; live E2E with client requests | ✅ live (two E2E runs) |
 | 9 | Visual refinement; legal/privacy/methodology copy; spoken labels for icon-only buttons | pending |
-| 10 | Android APK via GitHub Actions; checksum; test report | ✅ APK built (build 1: run 40920027599; current: build 4, see TEST_RESULTS.md); device test pending |
+| 10 | Android APK via GitHub Actions; checksum; test report | ✅ APK built (build 1: run 40920027599; current: build 5, run 40997858193, see TEST_RESULTS.md); device test pending |
 | 11 | Targeted repair (2026-10-29): classification by evidence (099482480882), research identity, no permanent negative caching, score 2.0.0 (coverage apart from quality, concern cap, roles), checked AI verdict, photo stages with backend-only promotion, compact result page, guarded scan chains, FlutterFlow issues | ✅ deployed, live-tested in the browser build; device test pending (`docs/SCAN_FLOW_AUDIT.md`, `METHODOLOGY.md`) |
 
 ## Owner actions, in order (one at a time)
@@ -72,7 +72,7 @@ References (read-only): Moxis FlutterFlow `moxis-one-x51584` (pulled and export,
 5. ~~Deploy and live tests~~ — **done 2026-10-29**: `deploy-backend` runs (all verified), two `live-e2e` runs, live app demos (`TEST_RESULTS.md`).
 6. ~~Repository secret `FIREBASE_GOOGLE_SERVICES_JSON`~~ — **done 2026-10-29**; `android-apk` run 40920027599 built the installable APK.
 7. ~~New OpenAI key~~ — **done 2026-10-30**: the owner saved a new version of `OPENAI_API_KEY`; deploy 40979447691 picked it up; live calls answered **200** (trace `f8f55c79-54a`).
-8. **Then — device test:** on the Android phone, **uninstall the earlier Purrbi build first** (its signing key differs, so the new APK cannot install over it), then install `app-release.apk` from the latest `android-apk` run's artifact and try a camera scan (also cancel one), repeated taps on the camera button, a label photo, and 099482480882.
+8. **Next — device test:** on the Android phone, install `app-release.apk` from the `purrbi-android-apk-5` artifact of `android-apk` run 40997858193 (SHA-256 `0fe6a395…a2421f`, versionCode 5). It should install over build 4; if Android refuses ("app not installed" / signature conflict), uninstall Purrbi first (build 1 was signed with another key and must always be uninstalled first). Then try a camera scan (also cancel one), repeated taps on the camera button, a label photo, and 099482480882.
 
 ## FlutterFlow changes so far (main)
 - Theme from the prototype (cream/teal/coral/sun/alert/slate, Nunito; 318 hard-coded Inter overrides reset to the theme font).
