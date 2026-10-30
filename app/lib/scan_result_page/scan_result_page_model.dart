@@ -1,6 +1,5 @@
 import '/auth/firebase_auth/auth_util.dart';
 import '/backend/backend.dart';
-import '/backend/firebase_storage/storage.dart';
 import '/backend/schema/structs/index.dart';
 import '/components/bullet_text_widget.dart';
 import '/components/finding_row_widget.dart';
@@ -11,7 +10,6 @@ import '/flutter_flow/flutter_flow_icon_button.dart';
 import '/flutter_flow/flutter_flow_theme.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 import '/flutter_flow/flutter_flow_widgets.dart';
-import '/flutter_flow/upload_data.dart';
 import '/pages/components/main_appbar/main_appbar_widget.dart';
 import 'dart:ui';
 import '/custom_code/actions/index.dart' as actions;
@@ -55,24 +53,14 @@ class ScanResultPageModel extends FlutterFlowModel<ScanResultPageWidget> {
   ScansRecord? openedScan;
   // Model for MainAppbar.
   late MainAppbarModel mainAppbarModel;
-  bool isDataUploading_frontUpload = false;
-  FFUploadedFile uploadedLocalFile_frontUpload =
-      FFUploadedFile(bytes: Uint8List.fromList([]), originalFilename: '');
-  String uploadedFileUrl_frontUpload = '';
-
-  // Stores action output result for [Backend Call - Create Document] action in Button widget.
-  PhotosRecord? frontPhoto;
+  // Stores action output result for [Custom Action - addLabelPhoto] action in Button widget.
+  String? frontPhotoResult;
   // Models for HighlightRowItem1.
   late FlutterFlowDynamicModels<HighlightRowModel> highlightRowItem1Models;
   // Models for HighlightRowItem2.
   late FlutterFlowDynamicModels<HighlightRowModel> highlightRowItem2Models;
-  bool isDataUploading_uploadData = false;
-  FFUploadedFile uploadedLocalFile_uploadData =
-      FFUploadedFile(bytes: Uint8List.fromList([]), originalFilename: '');
-  String uploadedFileUrl_uploadData = '';
-
-  // Stores action output result for [Backend Call - Create Document] action in Button widget.
-  PhotosRecord? requestedPhoto;
+  // Stores action output result for [Custom Action - addLabelPhoto] action in Button widget.
+  String? rowPhotoResult;
   // Models for FindingRowItem1.
   late FlutterFlowDynamicModels<FindingRowModel> findingRowItem1Models;
   // Models for BulletTextItem1.

@@ -8,6 +8,7 @@ import '/pages/dialog_components/delete_account_dialog/delete_account_dialog_wid
 import 'dart:math';
 import 'dart:ui';
 import '/actions/actions.dart' as action_blocks;
+import '/custom_code/actions/index.dart' as actions;
 import '/index.dart';
 import 'settings_page_widget.dart' show SettingsPageWidget;
 import 'package:flutter/material.dart';
@@ -21,6 +22,8 @@ class SettingsPageModel extends FlutterFlowModel<SettingsPageWidget> {
 
   // Model for MainAppbar component.
   late MainAppbarModel mainAppbarModel;
+  // Stores action output result for [Custom Action - accountState] action in Row widget.
+  String? afterDelete;
 
   @override
   void initState(BuildContext context) {

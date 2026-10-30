@@ -20,10 +20,16 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 class SplashPageModel extends FlutterFlowModel<SplashPageWidget> {
+  ///  Local state fields for this page.
+
+  String? accountStatus = '';
+
   ///  State fields for stateful widgets in this page.
 
   // Stores action output result for [Custom Action - getPackageName] action in SplashPage widget.
   String? packageName;
+  // Stores action output result for [Custom Action - accountState] action in SplashPage widget.
+  String? accountNow;
   // Stores action output result for [Backend Call - Read Document] action in SplashPage widget.
   UsersRecord? me;
   // Model for MiniLogo component.

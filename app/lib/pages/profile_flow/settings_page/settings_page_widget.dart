@@ -8,6 +8,7 @@ import '/pages/dialog_components/delete_account_dialog/delete_account_dialog_wid
 import 'dart:math';
 import 'dart:ui';
 import '/actions/actions.dart' as action_blocks;
+import '/custom_code/actions/index.dart' as actions;
 import '/index.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
@@ -788,16 +789,23 @@ class _SettingsPageWidgetState extends State<SettingsPageWidget>
                                                           await authManager
                                                               .deleteUser(
                                                                   context);
-                                                          await action_blocks
-                                                              .dataClearBlock(
-                                                                  context);
-                                                          FFAppState()
-                                                              .homePageIndex = 0;
-                                                          safeSetState(() {});
+                                                          _model.afterDelete =
+                                                              await actions
+                                                                  .accountState();
+                                                          if (_model
+                                                                  .afterDelete ==
+                                                              'signed_out') {
+                                                            await action_blocks
+                                                                .dataClearBlock(
+                                                                    context);
+                                                            FFAppState()
+                                                                .homePageIndex = 0;
+                                                            safeSetState(() {});
 
-                                                          context.goNamed(
-                                                              DeleteAccountPageWidget
-                                                                  .routeName);
+                                                            context.goNamed(
+                                                                DeleteAccountPageWidget
+                                                                    .routeName);
+                                                          }
                                                         },
                                                       ),
                                                     ),
@@ -805,6 +813,8 @@ class _SettingsPageWidgetState extends State<SettingsPageWidget>
                                                 },
                                               ).then((value) =>
                                                   safeSetState(() {}));
+
+                                              safeSetState(() {});
                                             },
                                             child: Row(
                                               mainAxisSize: MainAxisSize.max,

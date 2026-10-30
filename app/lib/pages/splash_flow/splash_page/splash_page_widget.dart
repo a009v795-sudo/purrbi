@@ -62,16 +62,38 @@ class _SplashPageWidgetState extends State<SplashPageWidget>
           safeSetState(() {});
           FFAppState().isIntro = true;
           safeSetState(() {});
+          _model.accountNow = await actions.accountState();
+          _model.accountStatus = _model.accountNow;
+          safeSetState(() {});
           if (loggedIn) {
-            _model.me =
-                await UsersRecord.getDocumentOnce(currentUserReference!);
-            if (_model.me!.onboardingComplete) {
-              context.goNamed(HomeMainPageWidget.routeName);
+            if (_model.accountStatus == 'no_profile') {
+              GoRouter.of(context).prepareAuthEvent();
+              await authManager.signOut();
+              GoRouter.of(context).clearRedirectLocation();
+
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    'This account has no Purrbi profile any more. Sign in again or create an account.',
+                    style: TextStyle(),
+                  ),
+                  duration: Duration(milliseconds: 4000),
+                ),
+              );
             } else {
-              context.goNamed(PetOnboardingPageWidget.routeName);
+              _model.me =
+                  await UsersRecord.getDocumentOnce(currentUserReference!);
+              if (_model.me!.onboardingComplete) {
+                context.goNamedAuth(
+                    HomeMainPageWidget.routeName, context.mounted);
+              } else {
+                context.goNamedAuth(
+                    PetOnboardingPageWidget.routeName, context.mounted);
+              }
             }
           } else {
-            context.goNamed(WelcomeScreenPageWidget.routeName);
+            context.goNamedAuth(
+                WelcomeScreenPageWidget.routeName, context.mounted);
           }
 
           break;

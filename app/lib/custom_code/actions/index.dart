@@ -8,3 +8,6 @@ export '/custom_code/actions/share_content.dart' show shareContent;
 export '/custom_code/actions/text_to_speech.dart' show textToSpeech;
 export '/custom_code/actions/stop_t_t_s.dart' show stopTTS;
 export '/custom_code/actions/trace_scan.dart' show traceScan;
+export '/custom_code/actions/add_label_photo.dart' show addLabelPhoto;
+export '/custom_code/actions/create_scan_request.dart' show createScanRequest;
+export '/custom_code/actions/account_state.dart' show accountState;

@@ -1,6 +1,5 @@
 import '/auth/firebase_auth/auth_util.dart';
 import '/backend/backend.dart';
-import '/backend/firebase_storage/storage.dart';
 import '/backend/schema/structs/index.dart';
 import '/components/bullet_text_widget.dart';
 import '/components/finding_row_widget.dart';
@@ -11,7 +10,6 @@ import '/flutter_flow/flutter_flow_icon_button.dart';
 import '/flutter_flow/flutter_flow_theme.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 import '/flutter_flow/flutter_flow_widgets.dart';
-import '/flutter_flow/upload_data.dart';
 import '/pages/components/main_appbar/main_appbar_widget.dart';
 import 'dart:ui';
 import '/custom_code/actions/index.dart' as actions;
@@ -64,18 +62,12 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
         '',
       );
       _model.openedScan = await ScansRecord.getDocumentOnce(widget!.scanRef!);
-      if (((String a0, String a1, String a2, String a3, bool a4) {
-        return (a0 != 'assessment-3.0.0') &&
-            (a1 == 'complete' ||
-                a2 == 'needs_photos' ||
-                a3 == 'out_of_scope') &&
-            !((a4 ?? false));
-      }(
-          _model.openedScan!.assessmentVersion,
-          _model.openedScan!.status,
-          _model.openedScan!.status,
-          _model.openedScan!.status,
-          _model.openedScan!.refreshPersonalRequested))!) {
+      if (functions.isOlderAssessment(
+              _model.openedScan?.assessmentVersion, 'assessment-3.0.0') &&
+          ((_model.openedScan?.status == 'complete') ||
+              (_model.openedScan?.status == 'needs_photos') ||
+              (_model.openedScan?.status == 'out_of_scope')) &&
+          !_model.openedScan!.refreshPersonalRequested) {
         await widget!.scanRef!.update(createScansRecordData(
           refreshPersonalRequested: true,
           petId: !(_model.openedScan?.petId == '')
@@ -1028,157 +1020,27 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                         onPressed: _model.uploading!
                                             ? null
                                             : () async {
-                                                safeSetState(() {
-                                                  _model.isDataUploading_frontUpload =
-                                                      false;
-                                                  _model.uploadedLocalFile_frontUpload =
-                                                      FFUploadedFile(
-                                                          bytes: Uint8List
-                                                              .fromList([]),
-                                                          originalFilename: '');
-                                                  _model.uploadedFileUrl_frontUpload =
-                                                      '';
-                                                });
-
-                                                final selectedMedia =
-                                                    await selectMediaWithSourceBottomSheet(
-                                                  context: context,
-                                                  allowPhoto: true,
-                                                );
-                                                if (selectedMedia != null &&
-                                                    selectedMedia.every((m) =>
-                                                        validateFileFormat(
-                                                            m.storagePath,
-                                                            context))) {
-                                                  safeSetState(() => _model
-                                                          .isDataUploading_frontUpload =
-                                                      true);
-                                                  var selectedUploadedFiles =
-                                                      <FFUploadedFile>[];
-
-                                                  var downloadUrls = <String>[];
-                                                  try {
-                                                    showUploadMessage(
-                                                      context,
-                                                      'Uploading file...',
-                                                      showLoading: true,
-                                                    );
-                                                    selectedUploadedFiles =
-                                                        selectedMedia
-                                                            .map((m) =>
-                                                                FFUploadedFile(
-                                                                  name: m
-                                                                      .storagePath
-                                                                      .split(
-                                                                          '/')
-                                                                      .last,
-                                                                  bytes:
-                                                                      m.bytes,
-                                                                  height: m
-                                                                      .dimensions
-                                                                      ?.height,
-                                                                  width: m
-                                                                      .dimensions
-                                                                      ?.width,
-                                                                  blurHash: m
-                                                                      .blurHash,
-                                                                  originalFilename:
-                                                                      m.originalFilename,
-                                                                ))
-                                                            .toList();
-
-                                                    downloadUrls = (await Future
-                                                            .wait(
-                                                      selectedMedia.map(
-                                                        (m) async =>
-                                                            await uploadData(
-                                                                m.storagePath,
-                                                                m.bytes),
-                                                      ),
-                                                    ))
-                                                        .where((u) => u != null)
-                                                        .map((u) => u!)
-                                                        .toList();
-                                                  } finally {
-                                                    ScaffoldMessenger.of(
-                                                            context)
-                                                        .hideCurrentSnackBar();
-                                                    _model.isDataUploading_frontUpload =
-                                                        false;
-                                                  }
-                                                  if (selectedUploadedFiles
-                                                              .length ==
-                                                          selectedMedia
-                                                              .length &&
-                                                      downloadUrls.length ==
-                                                          selectedMedia
-                                                              .length) {
-                                                    safeSetState(() {
-                                                      _model.uploadedLocalFile_frontUpload =
-                                                          selectedUploadedFiles
-                                                              .first;
-                                                      _model.uploadedFileUrl_frontUpload =
-                                                          downloadUrls.first;
-                                                    });
-                                                    showUploadMessage(
-                                                        context, 'Success!');
-                                                  } else {
+                                                var _shouldSetState = false;
+                                                if (_model.uploading!) {
+                                                  if (_shouldSetState)
                                                     safeSetState(() {});
-                                                    showUploadMessage(context,
-                                                        'Failed to upload data');
-                                                    return;
-                                                  }
+                                                  return;
                                                 }
-
-                                                if (_model
-                                                        .uploadedFileUrl_frontUpload !=
-                                                    '') {
-                                                  _model.uploading = true;
-                                                  safeSetState(() {});
-
-                                                  var photosRecordReference =
-                                                      PhotosRecord.createDoc(
-                                                          currentUserReference!);
-                                                  await photosRecordReference
-                                                      .set({
-                                                    ...createPhotosRecordData(
-                                                      scanId: widget!.scanId,
-                                                      purpose: 'front',
-                                                      imageUrl: _model
-                                                          .uploadedFileUrl_frontUpload,
-                                                      status: 'uploaded',
-                                                    ),
-                                                    ...mapToFirestore(
-                                                      {
-                                                        'createdAt': FieldValue
-                                                            .serverTimestamp(),
-                                                      },
-                                                    ),
-                                                  });
-                                                  _model.frontPhoto =
-                                                      PhotosRecord
-                                                          .getDocumentFromData({
-                                                    ...createPhotosRecordData(
-                                                      scanId: widget!.scanId,
-                                                      purpose: 'front',
-                                                      imageUrl: _model
-                                                          .uploadedFileUrl_frontUpload,
-                                                      status: 'uploaded',
-                                                    ),
-                                                    ...mapToFirestore(
-                                                      {
-                                                        'createdAt':
-                                                            DateTime.now(),
-                                                      },
-                                                    ),
-                                                  }, photosRecordReference);
-                                                  await actions.traceScan(
-                                                    'photo_added',
-                                                    widget!.scanId,
-                                                    containerScansRecord
-                                                        .traceId,
-                                                    'front',
-                                                  );
+                                                _model.uploading = true;
+                                                safeSetState(() {});
+                                                _model.frontPhotoResult =
+                                                    await actions.addLabelPhoto(
+                                                  context,
+                                                  widget!.scanId!,
+                                                  'front',
+                                                );
+                                                _shouldSetState = true;
+                                                _model.uploading = false;
+                                                safeSetState(() {});
+                                                if (_model.frontPhotoResult ==
+                                                    'added') {
+                                                  ScaffoldMessenger.of(context)
+                                                      .clearSnackBars();
                                                   ScaffoldMessenger.of(context)
                                                       .showSnackBar(
                                                     SnackBar(
@@ -1190,11 +1052,58 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                                           milliseconds: 4000),
                                                     ),
                                                   );
-                                                  _model.uploading = false;
-                                                  safeSetState(() {});
+                                                } else if (_model
+                                                        .frontPhotoResult ==
+                                                    'too_large') {
+                                                  ScaffoldMessenger.of(context)
+                                                      .clearSnackBars();
+                                                  ScaffoldMessenger.of(context)
+                                                      .showSnackBar(
+                                                    SnackBar(
+                                                      content: Text(
+                                                        'That photo is too large to send. Take it again, a little further from the package.',
+                                                        style: TextStyle(),
+                                                      ),
+                                                      duration: Duration(
+                                                          milliseconds: 4000),
+                                                    ),
+                                                  );
+                                                } else if (_model
+                                                        .frontPhotoResult ==
+                                                    'not_accepted') {
+                                                  ScaffoldMessenger.of(context)
+                                                      .clearSnackBars();
+                                                  ScaffoldMessenger.of(context)
+                                                      .showSnackBar(
+                                                    SnackBar(
+                                                      content: Text(
+                                                        'Purrbi is updating this result. Add the photo again in a moment.',
+                                                        style: TextStyle(),
+                                                      ),
+                                                      duration: Duration(
+                                                          milliseconds: 4000),
+                                                    ),
+                                                  );
+                                                } else if (_model
+                                                        .frontPhotoResult !=
+                                                    'cancelled') {
+                                                  ScaffoldMessenger.of(context)
+                                                      .clearSnackBars();
+                                                  ScaffoldMessenger.of(context)
+                                                      .showSnackBar(
+                                                    SnackBar(
+                                                      content: Text(
+                                                        'The photo couldn’t be sent. Check your connection and try again.',
+                                                        style: TextStyle(),
+                                                      ),
+                                                      duration: Duration(
+                                                          milliseconds: 4000),
+                                                    ),
+                                                  );
                                                 }
 
-                                                safeSetState(() {});
+                                                if (_shouldSetState)
+                                                  safeSetState(() {});
                                               },
                                         text: 'Add a photo of the front',
                                         options: FFButtonOptions(
@@ -1667,6 +1576,39 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                                 fontStyle:
                                                     FlutterFlowTheme.of(context)
                                                         .bodyLarge
+                                                        .fontStyle,
+                                              ),
+                                        ),
+                                      if (functions.isRefreshFailure(
+                                          containerScansRecord.statusMessage))
+                                        Text(
+                                          containerScansRecord.statusMessage,
+                                          style: FlutterFlowTheme.of(context)
+                                              .bodySmall
+                                              .override(
+                                                font: GoogleFonts.nunito(
+                                                  fontWeight:
+                                                      FlutterFlowTheme.of(
+                                                              context)
+                                                          .bodySmall
+                                                          .fontWeight,
+                                                  fontStyle:
+                                                      FlutterFlowTheme.of(
+                                                              context)
+                                                          .bodySmall
+                                                          .fontStyle,
+                                                ),
+                                                color:
+                                                    FlutterFlowTheme.of(context)
+                                                        .error,
+                                                letterSpacing: 0.0,
+                                                fontWeight:
+                                                    FlutterFlowTheme.of(context)
+                                                        .bodySmall
+                                                        .fontWeight,
+                                                fontStyle:
+                                                    FlutterFlowTheme.of(context)
+                                                        .bodySmall
                                                         .fontStyle,
                                               ),
                                         ),
@@ -2168,152 +2110,40 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                                             _model.uploading!
                                                                 ? null
                                                                 : () async {
-                                                                    safeSetState(
-                                                                        () {
-                                                                      _model.isDataUploading_uploadData =
-                                                                          false;
-                                                                      _model.uploadedLocalFile_uploadData = FFUploadedFile(
-                                                                          bytes:
-                                                                              Uint8List.fromList([]),
-                                                                          originalFilename:
-                                                                              '');
-                                                                      _model.uploadedFileUrl_uploadData =
-                                                                          '';
-                                                                    });
-
-                                                                    final selectedMedia =
-                                                                        await selectMediaWithSourceBottomSheet(
-                                                                      context:
-                                                                          context,
-                                                                      allowPhoto:
-                                                                          true,
-                                                                    );
-                                                                    if (selectedMedia !=
-                                                                            null &&
-                                                                        selectedMedia.every((m) => validateFileFormat(
-                                                                            m.storagePath,
-                                                                            context))) {
-                                                                      safeSetState(() =>
-                                                                          _model.isDataUploading_uploadData =
-                                                                              true);
-                                                                      var selectedUploadedFiles =
-                                                                          <FFUploadedFile>[];
-
-                                                                      var downloadUrls =
-                                                                          <String>[];
-                                                                      try {
-                                                                        showUploadMessage(
-                                                                          context,
-                                                                          'Uploading file...',
-                                                                          showLoading:
-                                                                              true,
-                                                                        );
-                                                                        selectedUploadedFiles = selectedMedia
-                                                                            .map((m) => FFUploadedFile(
-                                                                                  name: m.storagePath.split('/').last,
-                                                                                  bytes: m.bytes,
-                                                                                  height: m.dimensions?.height,
-                                                                                  width: m.dimensions?.width,
-                                                                                  blurHash: m.blurHash,
-                                                                                  originalFilename: m.originalFilename,
-                                                                                ))
-                                                                            .toList();
-
-                                                                        downloadUrls = (await Future
-                                                                                .wait(
-                                                                          selectedMedia
-                                                                              .map(
-                                                                            (m) async =>
-                                                                                await uploadData(m.storagePath, m.bytes),
-                                                                          ),
-                                                                        ))
-                                                                            .where((u) =>
-                                                                                u !=
-                                                                                null)
-                                                                            .map((u) =>
-                                                                                u!)
-                                                                            .toList();
-                                                                      } finally {
-                                                                        ScaffoldMessenger.of(context)
-                                                                            .hideCurrentSnackBar();
-                                                                        _model.isDataUploading_uploadData =
-                                                                            false;
-                                                                      }
-                                                                      if (selectedUploadedFiles.length ==
-                                                                              selectedMedia
-                                                                                  .length &&
-                                                                          downloadUrls.length ==
-                                                                              selectedMedia.length) {
-                                                                        safeSetState(
-                                                                            () {
-                                                                          _model.uploadedLocalFile_uploadData =
-                                                                              selectedUploadedFiles.first;
-                                                                          _model.uploadedFileUrl_uploadData =
-                                                                              downloadUrls.first;
-                                                                        });
-                                                                        showUploadMessage(
-                                                                            context,
-                                                                            'Success!');
-                                                                      } else {
+                                                                    var _shouldSetState =
+                                                                        false;
+                                                                    if (_model
+                                                                        .uploading!) {
+                                                                      if (_shouldSetState)
                                                                         safeSetState(
                                                                             () {});
-                                                                        showUploadMessage(
-                                                                            context,
-                                                                            'Failed to upload data');
-                                                                        return;
-                                                                      }
+                                                                      return;
                                                                     }
-
-                                                                    if (!(_model
-                                                                            .uploadedFileUrl_uploadData ==
-                                                                        '')) {
-                                                                      _model.uploading =
-                                                                          true;
-                                                                      safeSetState(
-                                                                          () {});
-
-                                                                      var photosRecordReference =
-                                                                          PhotosRecord.createDoc(
-                                                                              currentUserReference!);
-                                                                      await photosRecordReference
-                                                                          .set({
-                                                                        ...createPhotosRecordData(
-                                                                          scanId:
-                                                                              widget!.scanId,
-                                                                          purpose:
-                                                                              photoRequestItem.purpose,
-                                                                          imageUrl:
-                                                                              _model.uploadedFileUrl_uploadData,
-                                                                          status:
-                                                                              'uploaded',
-                                                                        ),
-                                                                        ...mapToFirestore(
-                                                                          {
-                                                                            'createdAt':
-                                                                                FieldValue.serverTimestamp(),
-                                                                          },
-                                                                        ),
-                                                                      });
-                                                                      _model.requestedPhoto =
-                                                                          PhotosRecord
-                                                                              .getDocumentFromData({
-                                                                        ...createPhotosRecordData(
-                                                                          scanId:
-                                                                              widget!.scanId,
-                                                                          purpose:
-                                                                              photoRequestItem.purpose,
-                                                                          imageUrl:
-                                                                              _model.uploadedFileUrl_uploadData,
-                                                                          status:
-                                                                              'uploaded',
-                                                                        ),
-                                                                        ...mapToFirestore(
-                                                                          {
-                                                                            'createdAt':
-                                                                                DateTime.now(),
-                                                                          },
-                                                                        ),
-                                                                      }, photosRecordReference);
+                                                                    _model.uploading =
+                                                                        true;
+                                                                    safeSetState(
+                                                                        () {});
+                                                                    _model.rowPhotoResult =
+                                                                        await actions
+                                                                            .addLabelPhoto(
+                                                                      context,
+                                                                      widget!
+                                                                          .scanId!,
+                                                                      photoRequestItem
+                                                                          .purpose,
+                                                                    );
+                                                                    _shouldSetState =
+                                                                        true;
+                                                                    _model.uploading =
+                                                                        false;
+                                                                    safeSetState(
+                                                                        () {});
+                                                                    if (_model
+                                                                            .rowPhotoResult ==
+                                                                        'added') {
+                                                                      ScaffoldMessenger.of(
+                                                                              context)
+                                                                          .clearSnackBars();
                                                                       ScaffoldMessenger.of(
                                                                               context)
                                                                           .showSnackBar(
@@ -2328,14 +2158,71 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                                                               Duration(milliseconds: 4000),
                                                                         ),
                                                                       );
-                                                                      _model.uploading =
-                                                                          false;
-                                                                      safeSetState(
-                                                                          () {});
+                                                                    } else if (_model
+                                                                            .rowPhotoResult ==
+                                                                        'too_large') {
+                                                                      ScaffoldMessenger.of(
+                                                                              context)
+                                                                          .clearSnackBars();
+                                                                      ScaffoldMessenger.of(
+                                                                              context)
+                                                                          .showSnackBar(
+                                                                        SnackBar(
+                                                                          content:
+                                                                              Text(
+                                                                            'That photo is too large to send. Take it again, a little further from the package.',
+                                                                            style:
+                                                                                TextStyle(),
+                                                                          ),
+                                                                          duration:
+                                                                              Duration(milliseconds: 4000),
+                                                                        ),
+                                                                      );
+                                                                    } else if (_model
+                                                                            .rowPhotoResult ==
+                                                                        'not_accepted') {
+                                                                      ScaffoldMessenger.of(
+                                                                              context)
+                                                                          .clearSnackBars();
+                                                                      ScaffoldMessenger.of(
+                                                                              context)
+                                                                          .showSnackBar(
+                                                                        SnackBar(
+                                                                          content:
+                                                                              Text(
+                                                                            'Purrbi is updating this result. Add the photo again in a moment.',
+                                                                            style:
+                                                                                TextStyle(),
+                                                                          ),
+                                                                          duration:
+                                                                              Duration(milliseconds: 4000),
+                                                                        ),
+                                                                      );
+                                                                    } else if (_model
+                                                                            .rowPhotoResult !=
+                                                                        'cancelled') {
+                                                                      ScaffoldMessenger.of(
+                                                                              context)
+                                                                          .clearSnackBars();
+                                                                      ScaffoldMessenger.of(
+                                                                              context)
+                                                                          .showSnackBar(
+                                                                        SnackBar(
+                                                                          content:
+                                                                              Text(
+                                                                            'The photo couldn’t be sent. Check your connection and try again.',
+                                                                            style:
+                                                                                TextStyle(),
+                                                                          ),
+                                                                          duration:
+                                                                              Duration(milliseconds: 4000),
+                                                                        ),
+                                                                      );
                                                                     }
 
-                                                                    safeSetState(
-                                                                        () {});
+                                                                    if (_shouldSetState)
+                                                                      safeSetState(
+                                                                          () {});
                                                                   },
                                                         text: 'Add photo',
                                                         options:
@@ -2344,9 +2231,9 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                                           padding:
                                                               EdgeInsetsDirectional
                                                                   .fromSTEB(
+                                                                      16.0,
                                                                       0.0,
-                                                                      0.0,
-                                                                      0.0,
+                                                                      16.0,
                                                                       0.0),
                                                           iconPadding:
                                                               EdgeInsetsDirectional
@@ -2406,12 +2293,15 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                       if (containerScansRecord.status ==
                                           'needs_photos')
                                         FFButtonWidget(
-                                          onPressed: () async {
-                                            await widget!.scanRef!
-                                                .update(createScansRecordData(
-                                              skipPhotos: true,
-                                            ));
-                                          },
+                                          onPressed: containerScansRecord
+                                                  .refreshPersonalRequested
+                                              ? null
+                                              : () async {
+                                                  await widget!.scanRef!.update(
+                                                      createScansRecordData(
+                                                    skipPhotos: true,
+                                                  ));
+                                                },
                                           text: 'Continue without photos',
                                           options: FFButtonOptions(
                                             width: double.infinity,
@@ -3268,7 +3158,7 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                       ),
                                       Text(
                                         _model.concernFirst!
-                                            ? 'Red, then yellow, gray and green. Tap Label order for the order printed on the package.'
+                                            ? 'Red, then yellow, gray and green. Tap Concerns first again for the order printed on the package.'
                                             : 'In the order printed on the package (largest amount first). Tap an ingredient for what it is, why it’s used and its sources.',
                                         style: FlutterFlowTheme.of(context)
                                             .bodySmall
@@ -4121,9 +4011,14 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                                           12.0),
                                                 ),
                                               ),
-                                            if (containerScansRecord
-                                                    .personalState !=
-                                                'not_applicable')
+                                            if ((containerScansRecord
+                                                        .personalState !=
+                                                    'not_applicable') &&
+                                                ((containerScansRecord.status ==
+                                                        'complete') ||
+                                                    (containerScansRecord
+                                                            .status ==
+                                                        'needs_photos')))
                                               Text(
                                                 'Check it for another pet',
                                                 style: FlutterFlowTheme.of(
@@ -4159,9 +4054,14 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                                               .fontStyle,
                                                     ),
                                               ),
-                                            if (containerScansRecord
-                                                    .personalState !=
-                                                'not_applicable')
+                                            if ((containerScansRecord
+                                                        .personalState !=
+                                                    'not_applicable') &&
+                                                ((containerScansRecord.status ==
+                                                        'complete') ||
+                                                    (containerScansRecord
+                                                            .status ==
+                                                        'needs_photos')))
                                               Container(
                                                 height: 44.0,
                                                 child: StreamBuilder<
@@ -4243,7 +4143,7 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                                                     SnackBar(
                                                                       content:
                                                                           Text(
-                                                                        'Still checking it for the last petChoice you chose…',
+                                                                        'Still checking the last request; try again in a moment.',
                                                                         style:
                                                                             TextStyle(),
                                                                       ),
@@ -5369,8 +5269,13 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                                       highlightColor:
                                                           Colors.transparent,
                                                       onTap: () async {
-                                                        await launchURL(
-                                                            sourceItemItem.url);
+                                                        if (sourceItemItem
+                                                                .url !=
+                                                            '') {
+                                                          await launchURL(
+                                                              sourceItemItem
+                                                                  .url);
+                                                        }
                                                       },
                                                       child: Text(
                                                         sourceItemItem.label,
@@ -5390,9 +5295,15 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                                                         .bodySmall
                                                                         .fontStyle,
                                                                   ),
-                                                                  color: FlutterFlowTheme.of(
-                                                                          context)
-                                                                      .primary,
+                                                                  color: sourceItemItem
+                                                                              .url !=
+                                                                          ''
+                                                                      ? FlutterFlowTheme.of(
+                                                                              context)
+                                                                          .primary
+                                                                      : FlutterFlowTheme.of(
+                                                                              context)
+                                                                          .secondaryText,
                                                                   letterSpacing:
                                                                       0.0,
                                                                   fontWeight: FlutterFlowTheme.of(

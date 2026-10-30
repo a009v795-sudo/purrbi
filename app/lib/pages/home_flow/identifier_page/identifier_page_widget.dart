@@ -1,5 +1,4 @@
 import '/auth/firebase_auth/auth_util.dart';
-import '/backend/backend.dart';
 import '/flutter_flow/ff_builtin_enums.dart';
 import '/flutter_flow/flutter_flow_theme.dart';
 import '/flutter_flow/flutter_flow_util.dart';
@@ -10,6 +9,7 @@ import '/actions/actions.dart' as action_blocks;
 import '/custom_code/actions/index.dart' as actions;
 import '/custom_code/widgets/index.dart' as custom_widgets;
 import '/flutter_flow/custom_functions.dart' as functions;
+import '/flutter_flow/permissions_util.dart';
 import '/index.dart';
 import 'package:cloud_firestore/cloud_firestore.dart' hide Type;
 import 'package:auto_size_text/auto_size_text.dart';
@@ -301,17 +301,21 @@ class _IdentifierPageWidgetState extends State<IdentifierPageWidget> {
                                               safeSetState(() {});
                                             return;
                                           }
+                                          _model.creating = true;
+                                          safeSetState(() {});
                                           await actions.traceScan(
                                             'camera_open',
                                             '',
                                             '',
                                             '',
                                           );
+                                          await requestPermission(
+                                              cameraPermission);
                                           _model.scannedBarcode =
                                               await FlutterBarcodeScanner
                                                   .scanBarcode(
                                             '#C62828', // scanning line color
-                                            '', // cancel button text
+                                            'Cancel', // cancel button text
                                             true, // whether to show the torch (camera LED) toggle icon
                                             ScanMode.BARCODE,
                                           );
@@ -319,11 +323,26 @@ class _IdentifierPageWidgetState extends State<IdentifierPageWidget> {
                                           _shouldSetState = true;
                                           if (functions.isScanCancelled(
                                               _model.scannedBarcode)) {
+                                            _model.creating = false;
+                                            safeSetState(() {});
                                             await actions.traceScan(
                                               'camera_cancelled',
                                               '',
                                               '',
                                               '',
+                                            );
+                                            ScaffoldMessenger.of(context)
+                                                .clearSnackBars();
+                                            ScaffoldMessenger.of(context)
+                                                .showSnackBar(
+                                              SnackBar(
+                                                content: Text(
+                                                  'No barcode was scanned. If the camera didn’t open, allow camera access for Purrbi in your phone’s settings, or type the number below.',
+                                                  style: TextStyle(),
+                                                ),
+                                                duration: Duration(
+                                                    milliseconds: 4000),
+                                              ),
                                             );
                                             if (_shouldSetState)
                                               safeSetState(() {});
@@ -335,12 +354,16 @@ class _IdentifierPageWidgetState extends State<IdentifierPageWidget> {
                                           safeSetState(() {});
                                           if (!functions.isLikelyBarcode(
                                               _model.lastScan)) {
+                                            _model.creating = false;
+                                            safeSetState(() {});
                                             await actions.traceScan(
                                               'camera_unreadable',
                                               '',
                                               '',
-                                              '',
+                                              'unreadable',
                                             );
+                                            ScaffoldMessenger.of(context)
+                                                .clearSnackBars();
                                             ScaffoldMessenger.of(context)
                                                 .showSnackBar(
                                               SnackBar(
@@ -353,89 +376,63 @@ class _IdentifierPageWidgetState extends State<IdentifierPageWidget> {
                                               ),
                                             );
                                           } else {
-                                            _model.creating = true;
-                                            safeSetState(() {});
                                             await actions.traceScan(
                                               'create_start',
                                               '',
                                               '',
                                               'camera',
                                             );
-
-                                            var scansRecordReference =
-                                                ScansRecord.createDoc(
-                                                    currentUserReference!);
-                                            await scansRecordReference.set({
-                                              ...createScansRecordData(
-                                                barcode: _model.lastScan,
-                                                petId: valueOrDefault(
-                                                    currentUserDocument
-                                                        ?.activePetId,
-                                                    ''),
-                                                source: 'camera',
-                                                status: 'queued',
-                                                clientVersion:
-                                                    'purrbi-app-1.1.0',
-                                              ),
-                                              ...mapToFirestore(
-                                                {
-                                                  'createdAt': FieldValue
-                                                      .serverTimestamp(),
-                                                },
-                                              ),
-                                            });
-                                            _model.cameraScan = ScansRecord
-                                                .getDocumentFromData({
-                                              ...createScansRecordData(
-                                                barcode: _model.lastScan,
-                                                petId: valueOrDefault(
-                                                    currentUserDocument
-                                                        ?.activePetId,
-                                                    ''),
-                                                source: 'camera',
-                                                status: 'queued',
-                                                clientVersion:
-                                                    'purrbi-app-1.1.0',
-                                              ),
-                                              ...mapToFirestore(
-                                                {
-                                                  'createdAt': DateTime.now(),
-                                                },
-                                              ),
-                                            }, scansRecordReference);
-                                            _shouldSetState = true;
-                                            _model.createdScan =
-                                                _model.cameraScan?.reference;
-                                            safeSetState(() {});
-                                            _model.createdScanId =
-                                                ((_model.createdScan!))
-                                                    .id
-                                                    .trim();
-                                            safeSetState(() {});
-                                            await actions.traceScan(
-                                              'create_done',
-                                              _model.createdScanId,
-                                              '',
+                                            _model.cameraRequest =
+                                                await actions.createScanRequest(
+                                              _model.lastScan!,
+                                              valueOrDefault(
+                                                  currentUserDocument
+                                                      ?.activePetId,
+                                                  ''),
                                               'camera',
                                             );
+                                            _shouldSetState = true;
                                             _model.creating = false;
                                             safeSetState(() {});
+                                            if (_model.cameraRequest == '') {
+                                              ScaffoldMessenger.of(context)
+                                                  .clearSnackBars();
+                                              ScaffoldMessenger.of(context)
+                                                  .showSnackBar(
+                                                SnackBar(
+                                                  content: Text(
+                                                    'The scan couldn’t be started. Check your connection and try again.',
+                                                    style: TextStyle(),
+                                                  ),
+                                                  duration: Duration(
+                                                      milliseconds: 4000),
+                                                ),
+                                              );
+                                            } else {
+                                              _model.createdScanId =
+                                                  _model.cameraRequest;
+                                              safeSetState(() {});
+                                              await actions.traceScan(
+                                                'create_done',
+                                                _model.cameraRequest,
+                                                '',
+                                                'camera',
+                                              );
 
-                                            context.pushNamed(
-                                              ScanResultPageWidget.routeName,
-                                              queryParameters: {
-                                                'scanRef': serializeParam(
-                                                  _model.createdScan,
-                                                  ParamType.DocumentReference,
-                                                ),
-                                                'scanId': serializeParam(
-                                                  ((_model.createdScan!))
-                                                      .id
-                                                      .trim(),
-                                                  ParamType.String,
-                                                ),
-                                              }.withoutNulls,
-                                            );
+                                              context.pushNamed(
+                                                ScanResultPageWidget.routeName,
+                                                queryParameters: {
+                                                  'scanRef': serializeParam(
+                                                    FFAppState().lastScanRef,
+                                                    ParamType.DocumentReference,
+                                                  ),
+                                                  'scanId': serializeParam(
+                                                    _model.cameraRequest,
+                                                    ParamType.String,
+                                                  ),
+                                                }.withoutNulls,
+                                              );
+                                            }
                                           }
                                         } else {
                                           await action_blocks.mainSanckbar(
@@ -814,6 +811,14 @@ class _IdentifierPageWidgetState extends State<IdentifierPageWidget> {
                                     safeSetState(() {});
                                     if (!functions
                                         .isLikelyBarcode(_model.lastScan)) {
+                                      await actions.traceScan(
+                                        'manual_invalid',
+                                        '',
+                                        '',
+                                        'invalid',
+                                      );
+                                      ScaffoldMessenger.of(context)
+                                          .clearSnackBars();
                                       ScaffoldMessenger.of(context)
                                           .showSnackBar(
                                         SnackBar(
@@ -834,73 +839,56 @@ class _IdentifierPageWidgetState extends State<IdentifierPageWidget> {
                                         '',
                                         'manual',
                                       );
-
-                                      var scansRecordReference =
-                                          ScansRecord.createDoc(
-                                              currentUserReference!);
-                                      await scansRecordReference.set({
-                                        ...createScansRecordData(
-                                          barcode: _model.lastScan,
-                                          petId: valueOrDefault(
-                                              currentUserDocument?.activePetId,
-                                              ''),
-                                          source: 'manual',
-                                          status: 'queued',
-                                          clientVersion: 'purrbi-app-1.1.0',
-                                        ),
-                                        ...mapToFirestore(
-                                          {
-                                            'createdAt':
-                                                FieldValue.serverTimestamp(),
-                                          },
-                                        ),
-                                      });
-                                      _model.manualScan =
-                                          ScansRecord.getDocumentFromData({
-                                        ...createScansRecordData(
-                                          barcode: _model.lastScan,
-                                          petId: valueOrDefault(
-                                              currentUserDocument?.activePetId,
-                                              ''),
-                                          source: 'manual',
-                                          status: 'queued',
-                                          clientVersion: 'purrbi-app-1.1.0',
-                                        ),
-                                        ...mapToFirestore(
-                                          {
-                                            'createdAt': DateTime.now(),
-                                          },
-                                        ),
-                                      }, scansRecordReference);
-                                      _shouldSetState = true;
-                                      _model.createdScan =
-                                          _model.manualScan?.reference;
-                                      safeSetState(() {});
-                                      _model.createdScanId =
-                                          ((_model.createdScan!)).id.trim();
-                                      safeSetState(() {});
-                                      await actions.traceScan(
-                                        'create_done',
-                                        _model.createdScanId,
-                                        '',
+                                      _model.manualRequest =
+                                          await actions.createScanRequest(
+                                        _model.lastScan!,
+                                        valueOrDefault(
+                                            currentUserDocument?.activePetId,
+                                            ''),
                                         'manual',
                                       );
+                                      _shouldSetState = true;
                                       _model.creating = false;
                                       safeSetState(() {});
+                                      if (_model.manualRequest == '') {
+                                        ScaffoldMessenger.of(context)
+                                            .clearSnackBars();
+                                        ScaffoldMessenger.of(context)
+                                            .showSnackBar(
+                                          SnackBar(
+                                            content: Text(
+                                              'The scan couldn’t be started. Check your connection and try again.',
+                                              style: TextStyle(),
+                                            ),
+                                            duration:
+                                                Duration(milliseconds: 4000),
+                                          ),
+                                        );
+                                      } else {
+                                        _model.createdScanId =
+                                            _model.manualRequest;
+                                        safeSetState(() {});
+                                        await actions.traceScan(
+                                          'create_done',
+                                          _model.manualRequest,
+                                          '',
+                                          'manual',
+                                        );
 
-                                      context.pushNamed(
-                                        ScanResultPageWidget.routeName,
-                                        queryParameters: {
-                                          'scanRef': serializeParam(
-                                            _model.createdScan,
-                                            ParamType.DocumentReference,
-                                          ),
-                                          'scanId': serializeParam(
-                                            ((_model.createdScan!)).id.trim(),
-                                            ParamType.String,
-                                          ),
-                                        }.withoutNulls,
-                                      );
+                                        context.pushNamed(
+                                          ScanResultPageWidget.routeName,
+                                          queryParameters: {
+                                            'scanRef': serializeParam(
+                                              FFAppState().lastScanRef,
+                                              ParamType.DocumentReference,
+                                            ),
+                                            'scanId': serializeParam(
+                                              _model.manualRequest,
+                                              ParamType.String,
+                                            ),
+                                          }.withoutNulls,
+                                        );
+                                      }
                                     }
 
                                     if (_shouldSetState) safeSetState(() {});

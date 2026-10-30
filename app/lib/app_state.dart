@@ -842,6 +842,13 @@ class FFAppState extends ChangeNotifier {
   set isSpeaking(bool value) {
     _isSpeaking = value;
   }
+
+  /// App state lastScanRef
+  DocumentReference? _lastScanRef;
+  DocumentReference? get lastScanRef => _lastScanRef;
+  set lastScanRef(DocumentReference? value) {
+    _lastScanRef = value;
+  }
 }
 
 void _safeInit(Function() initializeField) {

@@ -21,3 +21,5 @@ export '/custom_code/functions/scan_status_text.dart';
 export '/custom_code/functions/is_stuck_scan.dart';
 export '/custom_code/functions/photo_stage_label.dart';
 export '/custom_code/functions/is_scan_cancelled.dart';
+export '/custom_code/functions/is_older_assessment.dart';
+export '/custom_code/functions/is_refresh_failure.dart';

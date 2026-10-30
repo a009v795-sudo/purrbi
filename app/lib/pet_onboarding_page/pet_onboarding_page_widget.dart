@@ -579,6 +579,7 @@ class _PetOnboardingPageWidgetState extends State<PetOnboardingPageWidget> {
                                   ),
                                   style: TextStyle(),
                                   maxLines: null,
+                                  maxLength: 40,
                                   validator: _model
                                       .petNameFieldTextControllerValidator
                                       .asValidator(context),

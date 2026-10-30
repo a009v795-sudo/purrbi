@@ -379,6 +379,9 @@ class _SignUpPageWidgetState extends State<SignUpPageWidget> {
                                                   .fontStyle,
                                           lineHeight: 1.0,
                                         ),
+                                    maxLength: 80,
+                                    maxLengthEnforcement:
+                                        MaxLengthEnforcement.none,
                                     cursorColor: FlutterFlowTheme.of(context)
                                         .primaryText,
                                     validator: _model.textController1Validator
