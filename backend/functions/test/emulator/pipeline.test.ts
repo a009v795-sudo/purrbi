@@ -29,6 +29,9 @@ const BC = {
   offDown: withCheck('501234567897'),
   misfiledFront: withCheck('501234567898'), // misfiled too, with a front image in the database
   ingrImage: withCheck('501234567899'), // no ingredient list or analysis; the database has an ingredients image only
+  hyphenA: withCheck('501234567800'), // "Mannan-Oligosaccharides"
+  hyphenB: withCheck('501234567801'), // the same term spelled "Mannan Oligosaccharides"
+  longList: withCheck('501234567802'), // more explainable terms than one run explains
 };
 
 let db: Firestore;
@@ -60,6 +63,19 @@ const sources: Sources = {
       return { found: true, db: dbName, code: barcode.digits, source: src(dbName, barcode.digits), product: {
         product_name: 'TEST FIXTURE Chicken Dry Cat Food', brands: 'TESTBRAND', categories_tags: ['en:cat-food', 'en:dry-cat-food'],
         ingredients_text: 'Chicken, chicken meal, brown rice, chicken fat, taurine',
+      } };
+    }
+    if (dbName === 'opff' && (barcode.digits === BC.hyphenA || barcode.digits === BC.hyphenB)) {
+      return { found: true, db: dbName, code: barcode.digits, source: src(dbName, barcode.digits), product: {
+        product_name: `TEST FIXTURE Chicken Dry Dog Food ${barcode.digits === BC.hyphenA ? 'A' : 'B'}`, brands: 'TESTBRAND', categories_tags: ['en:dog-food', 'en:dry-dog-food'],
+        ingredients_text: `Chicken, brown rice, chicken fat, ${barcode.digits === BC.hyphenA ? 'Mannan-Oligosaccharides' : 'Mannan Oligosaccharides'}, taurine`,
+      } };
+    }
+    if (dbName === 'opff' && barcode.digits === BC.longList) {
+      const extras = Array.from({ length: 30 }, (_, i) => `TEST FIXTURE Additive ${String.fromCharCode(65 + (i % 26))}${i >= 26 ? i : ''}`);
+      return { found: true, db: dbName, code: barcode.digits, source: src(dbName, barcode.digits), product: {
+        product_name: 'TEST FIXTURE Long List Dog Food', brands: 'TESTBRAND', categories_tags: ['en:dog-food', 'en:dry-dog-food'],
+        ingredients_text: `Chicken, Vitamins [${extras.join(', ')}]`,
       } };
     }
     if (dbName === 'opff' && barcode.digits === BC.supplement) {
@@ -1174,5 +1190,52 @@ describe('saved results under older rules', () => {
     const s = await read(ref);
     expect(s.status).toBe('complete');
     expect(s.refreshPersonalRequested).toBe(false);
+  });
+});
+
+describe('explanations reach every row that asks for them', () => {
+  it('a spelling variant of a cached term gets the same checked claims', async () => {
+    const a = await newScan('u1', BC.hyphenA);
+    await processScan(deps(), 'u1', a.id);
+    const rowA = (await read(a)).ingredientRows.find((r: { name: string }) => r.name === 'Mannan-Oligosaccharides');
+    expect(rowA.sources.length).toBeGreaterThan(0);
+    const explained = calls.explainTerms;
+    const b = await newScan('u1', BC.hyphenB);
+    await processScan(deps(), 'u1', b.id);
+    const rowB = (await read(b)).ingredientRows.find((r: { name: string }) => r.name === 'Mannan Oligosaccharides');
+    expect(calls.explainTerms).toBe(explained); // reused, not paid for again
+    expect(rowB.sources.length).toBe(rowA.sources.length);
+    expect(rowB.statusRole).toBe(rowA.statusRole);
+  });
+  it('the per-run cap applies to the terms still missing, so the next scan explains the next ones', async () => {
+    const first = await newScan('u1', BC.longList);
+    await processScan(deps(), 'u1', first.id);
+    const one = calls.explainTerms;
+    expect(one).toBe(24);
+    expect((await read(first)).explanationsStatus).toBe('partial');
+    const second = await newScan('u1', BC.longList);
+    await processScan(deps(), 'u1', second.id);
+    expect(calls.explainTerms - one).toBeGreaterThan(0);
+    expect((await read(second)).explanationsStatus).toBe('ready');
+  });
+  it('a supplement’s rows are its actives and its inactive ingredients, and amounts never reach explanation terms', async () => {
+    const ref = await newScan('u1', BC.supplement);
+    await processScan(deps(), 'u1', ref.id);
+    const s = await read(ref);
+    expect(s.ingredientRows.map((r: { name: string }) => r.name)).toEqual(['Glucosamine HCl', 'MSM', 'Chondroitin Sulfate', 'Brewers Dried Yeast', 'Chicken Liver Flavor', 'Glycerin']);
+    const keys = (await db.collection('knowledge').get()).docs.map((d) => d.id);
+    expect(keys.some((k) => /\d+-mg|active-ingredients|inactive/.test(k))).toBe(false);
+  });
+  it('explanations handed to a run of their own are added from the saved evidence', async () => {
+    const ref = await newScan('u1', BC.hyphenA);
+    await processScan(deps({ explanationsEnabled: false }), 'u1', ref.id);
+    const before = await read(ref);
+    expect(before.ingredientRows.find((r: { name: string }) => r.name === 'Mannan-Oligosaccharides').sources).toEqual([]);
+    await ref.update({ explanationsQueued: true }); // as a job that reached its explanations late leaves it
+    await handleScanUpdate(deps(), 'u1', ref.id, before, await read(ref));
+    const s = await read(ref);
+    expect(s.explanationsQueued).toBe(false);
+    expect(s.ingredientRows.find((r: { name: string }) => r.name === 'Mannan-Oligosaccharides').sources.length).toBeGreaterThan(0);
+    expect(calls.research ?? 0).toBe(0); // no source read again
   });
 });

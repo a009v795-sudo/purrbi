@@ -87,6 +87,11 @@ export const WORKING_STATUSES: readonly string[] = [SCAN_STATUS.queued, SCAN_STA
 export const STUCK_AFTER_MS = 6 * 60 * 1000;
 /** Research must finish this long after the job starts (functions stop at 300 s; the result is written after it). */
 export const RESEARCH_TIME_LIMIT_MS = 200 * 1000;
+/** New explanations and the verdict start in the same job only this soon after it started; later, in a run of their own. */
+export const STEP8_LATEST_START_MS = 100 * 1000;
+/** Terms whose cached explanations a result looks up, and new ones explained per run (later runs explain the next ones). */
+export const MAX_CACHE_LOOKUPS = 80;
+export const MAX_NEW_TERMS = 24;
 
 export type ErrorCode =
   | 'invalid_barcode'

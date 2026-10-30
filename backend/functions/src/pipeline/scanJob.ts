@@ -16,7 +16,8 @@ import { buildHighlights } from '../domain/highlights';
 import { normalizeRole } from '../domain/roles';
 import { ingredientRelevance, personalize } from '../domain/personalize';
 import { ingredientRows } from '../domain/ingredientRows';
-import { normalizeIngredientName, type ParsedIngredient } from '../domain/ingredients';
+import { normalizeIngredientName, parseIngredientList, type ParsedIngredient } from '../domain/ingredients';
+import { parseActiveIngredients } from '../domain/supplements';
 import { classifyScope, SCOPE_VERSION, type DatabaseOrigin, type SpeciesClaim } from '../domain/scope';
 import { assessedSpecies, assessGeneral, productIngredients } from '../domain/score';
 import { buildSummary, overallState } from '../domain/summary';
@@ -30,7 +31,7 @@ import { RESEARCH_RESULTS_IN_USE, RESEARCH_VERSION, researchProduct as researchI
 import { currentCalls, errorDetail, runWithCallLog } from '../util/diagnostics';
 import { SourceError } from '../util/http';
 import { rematchAnalysis } from '../domain/nutrition';
-import { ASSESSMENT_VERSION, olderAssessment, RESEARCH_TIME_LIMIT_MS, SCAN_STATUS, STUCK_AFTER_MS, WORKING_STATUSES, type ErrorCode, type RuntimeConfig } from './config';
+import { ASSESSMENT_VERSION, MAX_CACHE_LOOKUPS, MAX_NEW_TERMS, olderAssessment, RESEARCH_TIME_LIMIT_MS, SCAN_STATUS, STEP8_LATEST_START_MS, STUCK_AFTER_MS, WORKING_STATUSES, type ErrorCode, type RuntimeConfig } from './config';
 import { corroborateLabel } from './corroborate';
 import { dropStaleImageReads, enrichmentFacts, fillMissing, labelToFacts, missingInfo, type PhotoRequest } from './facts';
 import { explanationFields, highlightFields, ingredientRowFields, jobFields, resultFields, type JobInfo } from './serialize';
@@ -654,11 +655,11 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   const personal = personalize(pet, facts, scope, general, recall, now);
   // One row per label entry (blends with their items), coloured from Purrbi's lists and the claims that passed
   // claim-by-claim checks; what each means for this pet. Rebuilt when new explanations arrive (step 8).
-  const parsed = productIngredients(facts);
+  const parsed = general.category === 'supplement' ? supplementEntries(facts) : productIngredients(facts);
   const claimsByTerm = new Map<string, ClaimSource[]>();
   const relevance = ingredientRelevance(pet, facts, general);
   const rowFields = () =>
-    scope.status === 'out_of_scope' ? { ingredientRows: [], ingredientRowsByConcern: [] } : ingredientRowFields(ingredientRows(parsed, assessedSpecies(scope), (term) => claimsByTerm.get(normalizeIngredientName(term)) ?? []), relevance);
+    scope.status === 'out_of_scope' ? { ingredientRows: [], ingredientRowsByConcern: [] } : ingredientRowFields(ingredientRows(parsed, assessedSpecies(scope), (term) => claimsByTerm.get(termKey(term)) ?? []), relevance);
   const summary = buildSummary(facts, scope, general, personal, recall);
   const state = overallState(general, recall, scope);
   // What a photo would still add. After "Continue without photos" the result is complete, but the requests
@@ -707,6 +708,10 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   const explain = await cachedExplanations(deps, general, scope, now, parsed, claimsByTerm);
   job.explanationsCached = explain.cachedCount;
   const pending = o.allowExplain && config.aiEnabled && config.explanationsEnabled && explain.missing.length > 0;
+  // New explanations and the verdict need up to about three minutes. A job that reaches them late (after a long
+  // search) hands them to a run of their own, started by the saved result, so neither is cut off by the
+  // function's time limit and left "pending".
+  const deferred = (pending || verdictPending) && Date.now() - (job.clockStart ?? Date.now()) > STEP8_LATEST_START_MS;
 
   const status = scope.status === 'out_of_scope' ? SCAN_STATUS.outOfScope : requests.length && !o.skipPhotos ? SCAN_STATUS.needsPhotos : SCAN_STATUS.complete;
   const statusMessage =
@@ -748,7 +753,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       // the re-check again when the owner next opens it.
       const saved = snap.get('assessmentVersion') as string | undefined;
       const version = recheckPending || o.keepVersion ? (olderAssessment(saved) ? (saved ?? '') : '') : ASSESSMENT_VERSION;
-      tx.update(ref, { ...fields, assessmentVersion: version, refreshPersonalRequested: false });
+      tx.update(ref, { ...fields, assessmentVersion: version, refreshPersonalRequested: false, explanationsQueued: deferred });
       return false;
     });
   } catch (err) {
@@ -764,7 +769,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   // 8. New cited explanations and the written verdict (in parallel), then the second update. All of the
   // product's new terms are explained now (parallel calls of explanationsPerCall terms), so a later rescan
   // needs no AI call. Failure here never fails the scan; a failed call is tried again on the next scan.
-  if (!pending && !verdictPending) return;
+  if ((!pending && !verdictPending) || deferred) return;
   const explainStep = async () => {
     let finalStatus = explain.status;
     try {
@@ -783,12 +788,12 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       applyExplanations(general, new Map(fresh.map((e) => [e.key, e])), species);
       collectClaims(fresh, claimsByTerm);
       job.explanationsNew = fresh.filter((e) => e.status === 'verified').length;
-      finalStatus = explanationStatus(general, parsed, new Set([...explain.looked, ...fresh.map((e) => normalizeIngredientName(e.term))]));
+      finalStatus = explanationStatus(explain, fresh);
       const misses = fresh.filter((e) => e.status !== 'verified').map((e) => `${e.term.slice(0, 40)}: ${e.reason}`);
       job.diagnosticNotes.push(`Explanations (${fresh[0]?.model ?? config.explainModel}): ${job.explanationsNew} of ${fresh.length} verified against their cited page.`, ...misses.slice(0, 10));
       log('explanations', { requested: explain.missing.length, verified: job.explanationsNew, unverified: misses });
     } catch (err) {
-      finalStatus = explanationStatus(general, parsed, explain.looked) === 'not_needed' ? 'unavailable' : explanationStatus(general, parsed, explain.looked);
+      finalStatus = explanationStatus(explain) === 'not_needed' ? 'unavailable' : explanationStatus(explain);
       const reason = err instanceof QuotaError ? err.kind : errorDetail((err as Error).message);
       job.diagnosticNotes.push(`Explanations not run: ${reason}`);
       log('explanations skipped', { reason });
@@ -817,10 +822,15 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   };
   const [finalStatus, written] = await Promise.all([pending ? explainStep() : Promise.resolve(explain.status), verdictPending ? verdictStep() : Promise.resolve(verdict)]);
   verdict = written;
-  // Written only while this run's result is still the one saved.
+  // Written only while this run's result is still the one saved. When a newer run (e.g. a pet change) saved it
+  // meanwhile without these explanations, a run from the saved evidence is queued to add them from the cache.
   await db
     .runTransaction(async (tx) => {
-      if ((await tx.get(ref)).get('assessmentRunId') !== job.runId) return;
+      const snap = await tx.get(ref);
+      if (snap.get('assessmentRunId') !== job.runId) {
+        if (job.explanationsNew && snap.get('explanationsStatus') !== 'ready' && snap.get('explanationsQueued') !== true) tx.update(ref, { explanationsQueued: true });
+        return;
+      }
       tx.update(ref, { ...explanationFields(general, finalStatus), ...rowFields(), ...highlightFields(highlights, verdict), ...jobFields(job, currentCalls(), deps.now()), updatedAt: Timestamp.fromDate(deps.now()) });
     })
     .catch((err) => {
@@ -889,13 +899,29 @@ function explainRequests(general: GeneralAssessment, parsed: ParsedIngredient[])
   const curated = new Set(general.ingredientNotes.filter((n) => n.explanationKind !== 'none').map((n) => normalizeIngredientName(n.name)));
   for (const i of parsed.slice(0, 20)) if (i.kind !== 'group' && !curated.has(normalizeIngredientName(i.name))) add(i.name);
   for (const i of parsed) for (const c of i.children) add(c.name);
-  // Bounded per scan (each term is explained once per species for every product, so later scans reuse them).
-  return out.slice(0, 24);
+  return out;
+}
+
+/** The cache's key for a term without species or kind: spelling variants ("Mannan-Oligosaccharides" / "Mannan Oligosaccharides") share it. */
+const termKey = (term: string) => explanationKey('any', 'ingredient', term).slice('any_ingredient_'.length);
+
+/**
+ * A supplement's label as rows: its active ingredients (by name, without the amounts, which belong to the
+ * actives' own section) and then its inactive ingredients, so "Chondroitin Sulfate 100 mg. Inactive
+ * Ingredients: Brewers Dried Yeast" is never one row. A label without these headers is read as a list.
+ */
+function supplementEntries(facts: ProductFacts): ParsedIngredient[] {
+  const text = facts.ingredientsText?.value ?? (facts.ingredients?.value ?? []).join(', ');
+  if (!/active ingredients?/i.test(text)) return productIngredients(facts);
+  const actives = parseActiveIngredients(text).map((a) => a.name);
+  const inactive = /\b(?:inactive|other) ingredients?\s*(?:\([^)]*\))?\s*[:：]\s*([\s\S]+)$/i.exec(text)?.[1] ?? '';
+  return parseIngredientList([...actives, inactive.replace(/\.\s*$/, '')].filter(Boolean).join(', '));
 }
 
 /** The claims that passed claim-by-claim checks, by term, for the ingredient rows. */
 function collectClaims(items: Iterable<CitedExplanation>, into: Map<string, ClaimSource[]>): void {
-  for (const e of items) if (e.status === 'verified' && e.kind === 'ingredient') into.set(normalizeIngredientName(e.term), (e as CitedExplanation & { claims?: ClaimSource[] }).claims ?? []);
+  // A supplement's active ingredient is a row too: its checked claims go with it.
+  for (const e of items) if (e.status === 'verified') into.set(termKey(e.term), [...(into.get(termKey(e.term)) ?? []), ...((e as CitedExplanation & { claims?: ClaimSource[] }).claims ?? [])]);
 }
 
 function applyExplanations(general: GeneralAssessment, byKey: Map<string, CitedExplanation>, species: string): number {
@@ -925,26 +951,46 @@ function applyExplanations(general: GeneralAssessment, byKey: Map<string, CitedE
 
 type ExplanationStatus = 'ready' | 'partial' | 'unavailable' | 'not_needed' | 'pending';
 
-function explanationStatus(general: GeneralAssessment, parsed: ParsedIngredient[], explained = new Set<string>()): ExplanationStatus {
-  const requests = explainRequests(general, parsed).filter((r) => !explained.has(normalizeIngredientName(r.term)));
-  const wanted = requests.length + explained.size;
-  if (!wanted) return 'not_needed';
-  const remaining = requests.length;
-  if (!remaining) return 'ready';
-  return remaining < wanted ? 'partial' : 'unavailable';
+interface ExplainPlan {
+  requests: ExplainRequest[]; // every term this result wants explained (made once, before any is applied)
+  missing: ExplainRequest[]; // the ones not in the cache, at most MAX_NEW_TERMS (the rest follow in later runs)
+  cachedCount: number;
+  status: ExplanationStatus;
+  looked: Set<string>; // term keys looked up (verified or not)
+  verified: Set<string>; // term keys with a verified explanation
 }
 
-async function cachedExplanations(deps: Deps, general: GeneralAssessment, scope: ScopeResult, now: Date, parsed: ParsedIngredient[], claims: Map<string, ClaimSource[]>): Promise<{ missing: ExplainRequest[]; cachedCount: number; status: ExplanationStatus; looked: Set<string> }> {
+/**
+ * Ready when every wanted term has a verified explanation; partial when some do or some are still to be
+ * looked up; unavailable when every term was looked up and none could be verified.
+ */
+function explanationStatus(plan: Omit<ExplainPlan, 'status'>, fresh: CitedExplanation[] = []): ExplanationStatus {
+  if (!plan.requests.length) return 'not_needed';
+  const looked = new Set([...plan.looked, ...fresh.map((e) => termKey(e.term))]);
+  const verified = new Set([...plan.verified, ...fresh.filter((e) => e.status === 'verified').map((e) => termKey(e.term))]);
+  const v = plan.requests.filter((r) => verified.has(termKey(r.term))).length;
+  if (v === plan.requests.length) return 'ready';
+  if (plan.requests.every((r) => looked.has(termKey(r.term)))) return v ? 'partial' : 'unavailable';
+  return v || plan.requests.some((r) => looked.has(termKey(r.term))) ? 'partial' : 'unavailable';
+}
+
+async function cachedExplanations(deps: Deps, general: GeneralAssessment, scope: ScopeResult, now: Date, parsed: ParsedIngredient[], claims: Map<string, ClaimSource[]>): Promise<ExplainPlan> {
   const species = scope.species === 'unknown' ? 'cat_and_dog' : scope.species;
-  const requests = scope.status === 'out_of_scope' ? [] : explainRequests(general, parsed);
-  if (!requests.length) return { missing: [], cachedCount: 0, status: explanationStatus(general, parsed), looked: new Set() };
+  // Nothing is paid for until it is known who the product is for (or once it is out of scope).
+  const requests = scope.status === 'supported' ? explainRequests(general, parsed).slice(0, MAX_CACHE_LOOKUPS) : [];
+  const empty = { requests, missing: [], cachedCount: 0, looked: new Set<string>(), verified: new Set<string>() };
+  if (!requests.length) return { ...empty, status: 'not_needed' };
   const cache = await readExplanations(deps.db, requests.map((r) => explanationKey(species, r.kind, r.term)), now);
   const cachedCount = applyExplanations(general, cache, species);
   collectClaims(cache.values(), claims);
-  // Terms already looked up (even without a verifiable source) are not paid for again until they expire.
-  const missing = requests.filter((r) => !cache.has(explanationKey(species, r.kind, r.term)));
-  const looked = new Set(requests.filter((r) => cache.has(explanationKey(species, r.kind, r.term))).map((r) => normalizeIngredientName(r.term)));
-  return { missing, cachedCount, status: explanationStatus(general, parsed, looked), looked };
+  // Terms already looked up (even without a verifiable source) are not paid for again until they expire. The
+  // cap applies to the terms still missing, so a later scan explains the next ones.
+  const inCache = (r: ExplainRequest) => cache.get(explanationKey(species, r.kind, r.term));
+  const missing = requests.filter((r) => !inCache(r)).slice(0, MAX_NEW_TERMS);
+  const looked = new Set(requests.filter((r) => inCache(r)).map((r) => termKey(r.term)));
+  const verified = new Set(requests.filter((r) => inCache(r)?.status === 'verified').map((r) => termKey(r.term)));
+  const plan = { requests, missing, cachedCount, looked, verified };
+  return { ...plan, status: explanationStatus(plan) };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1068,6 +1114,20 @@ export async function handleScanUpdate(deps: Deps, uid: string, scanId: string, 
   }
   const barcode = normalizeBarcode(after.barcode);
   if (!barcode.ok) return;
+  // Explanations and the verdict handed over by a job that reached them late, or explanations a newer run
+  // saved the result without: added now, from the saved evidence (no source is read again).
+  if (rising('explanationsQueued')) {
+    const job = newJob('refresh', (after.traceId as string) || randomUUID().slice(0, 12), deps.now());
+    await runWithCallLog(async () => {
+      try {
+        await runAssessment(deps, job, { uid, scanId, barcode, petId: (after.petId as string) ?? null, allowFetch: false, allowExplain: true, skipPhotos: after.skipPhotos === true || after.status === SCAN_STATUS.complete, keepVersion: after.assessmentVersion !== ASSESSMENT_VERSION });
+      } catch (err) {
+        deps.log.error('queued explanations failed', { traceId: job.traceId, uid, scanId, error: (err as Error).message });
+        await ref.update({ explanationsQueued: false, explanationsStatus: 'unavailable', verdictStatus: 'ready' }).catch(() => undefined);
+      }
+    });
+    return;
+  }
   if (rising('skipPhotos') && after.status === SCAN_STATUS.needsPhotos) {
     // The findings stay; the photo requests stay listed as optional, so a photo can still be added later.
     await ref.update({ status: SCAN_STATUS.complete, statusMessage: 'Assessment ready (some information is missing)', completedAt: Timestamp.fromDate(deps.now()), updatedAt: Timestamp.fromDate(deps.now()) });
