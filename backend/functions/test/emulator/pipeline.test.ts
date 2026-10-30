@@ -1135,14 +1135,14 @@ describe('fallbacks before asking the owner for photos', () => {
     const first = await newScan('u1', BC.unknown);
     await processScan(deps({ researchEnabled: true }), 'u1', first.id);
     expect(calls.hint).toBe(1);
-    expect((await read(first)).diagnosticNotes).toContain('Barcode database not checked: it is limiting requests until 14:00 UTC');
+    expect((await read(first)).diagnosticNotes).toContain('Barcode database not checked: it is limiting requests until 2026-10-28 14:00 UTC');
     // Another product without a name an hour later: the barcode database is not asked, and research still runs.
     const other = await newScan('u1', withCheck('761234567891'));
     await processScan({ ...deps({ researchEnabled: true }), now: () => new Date(NOW.getTime() + 3600 * 1000) }, 'u1', other.id);
     expect(calls.hint).toBe(1);
     expect(calls.research).toBe(2);
     const o = await read(other);
-    expect(o.diagnosticNotes).toContain('Barcode database not checked: its daily allowance is used up until 14:00 UTC, so it isn’t asked before then');
+    expect(o.diagnosticNotes).toContain('Barcode database not checked: its daily allowance is used up until 2026-10-28 14:00 UTC, so it isn’t asked before then');
     expect(o.fieldStatus.every((x: { status: string }) => x.status === 'source_unavailable')).toBe(true);
     // After the reset it is asked again.
     hintDown = false;

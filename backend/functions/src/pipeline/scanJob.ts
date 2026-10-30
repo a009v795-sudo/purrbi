@@ -372,6 +372,9 @@ const scopeOf = (facts: ProductFacts, origin: DatabaseOrigin): ScopeResult =>
   });
 
 /** Gathers evidence, assesses and saves. Explanations not yet cached are added in a second, separate update. */
+/** "2026-10-31 13:13 UTC": a date and minute, for notes about when something resumes. */
+const utcMinute = (d: Date) => `${d.toISOString().slice(0, 10)} ${d.toISOString().slice(11, 16)} UTC`;
+
 export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions): Promise<void> {
   const now = deps.now();
   const { db, config } = deps;
@@ -551,7 +554,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
         const paused = await providerPausedUntil(db, 'upcitemdb', now);
         if (paused) {
           hintFailed = true;
-          job.diagnosticNotes.push(`Barcode database not checked: its daily allowance is used up until ${paused.toISOString().slice(11, 16)} UTC, so it isn’t asked before then`);
+          job.diagnosticNotes.push(`Barcode database not checked: its daily allowance is used up until ${utcMinute(paused)}, so it isn’t asked before then`);
         } else {
           try {
             hint = await deps.sources.barcodeHint(gtin, config.userAgent);
@@ -561,7 +564,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
             const limited = err instanceof SourceError && err.kind === 'rate_limited';
             if (limited && err.retryAt) await pauseProvider(db, 'upcitemdb', err.retryAt, now).catch(() => undefined);
             job.diagnosticNotes.push(
-              `Barcode database not checked: ${err instanceof SourceError ? (limited ? `it is limiting requests${err.retryAt ? ` until ${err.retryAt.toISOString().slice(11, 16)} UTC` : ''}` : err.kind === 'timeout' ? 'it didn’t answer in time' : `it failed (${err.status ? `HTTP ${err.status}` : err.kind})`) : errorDetail((err as Error).message)}`,
+              `Barcode database not checked: ${err instanceof SourceError ? (limited ? `it is limiting requests${err.retryAt ? ` until ${utcMinute(err.retryAt)}` : ''}` : err.kind === 'timeout' ? 'it didn’t answer in time' : `it failed (${err.status ? `HTTP ${err.status}` : err.kind})`) : errorDetail((err as Error).message)}`,
             );
           }
         }

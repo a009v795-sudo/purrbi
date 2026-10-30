@@ -375,3 +375,80 @@ describe('barcode database allowance (2026-10-30: HTTP 429 on every scan, X-Rate
     expect(err.retryAt.toISOString()).toBe('2026-10-31T00:28:00.000Z');
   });
 });
+
+// Rerun of test B after research 2.2.0 (2026-10-30 16:16Z, trace cdd31e2d-f90, backend 1e955ef): the model ran one
+// search and answered "no matching product", while shops list the barcode. The search's own result pages are now
+// recorded in the trace and checked by Purrbi itself; the first that shows the barcode is read from Purrbi's copy.
+describe('the search’s result pages, checked by Purrbi (test B rerun, trace cdd31e2d-f90)', () => {
+  const GRAVIES = '00076344886570';
+  const searchOutput = (urls: string[], answer: unknown) =>
+    new Response(JSON.stringify({ output: [{ type: 'web_search_call', action: { type: 'search', query: '076344886570', sources: urls.map((url) => ({ type: 'url', url })) } }, { type: 'message', content: [{ type: 'output_text', text: JSON.stringify(answer), annotations: [] }] }] }), { status: 200 });
+  const chat = (answer: unknown) => new Response(JSON.stringify({ model: 'gpt-4.1-mini', choices: [{ message: { content: JSON.stringify(answer) }, finish_reason: 'stop' }] }), { status: 200 });
+  const shop = `<html><head><title>Wellness Healthy Indulgence Gravies Chicken &amp; Turkey Cat Food Pouch 3 oz</title></head><body><h1>Wellness Healthy Indulgence Gravies Chicken &amp; Turkey in Gravy Cat Food Pouch</h1>
+    <p>Ingredients: Chicken Broth, Water Sufficient For Processing, Chicken, Potato Starch, Turkey, Eggs, Chicken Liver, Carrots, Natural Flavor, Salt</p>
+    <p>Guaranteed Analysis Crude Protein (min.) 4% Crude Fat (min.) 2% Crude Fiber (max.) 1% Moisture (max.) 85%</p><table><tr><td>UPC</td><td>076344886570</td></tr><tr><td>Size</td><td>3 oz</td></tr></table></body></html>`;
+  const other = '<html><head><title>Wellness cat food</title></head><body><h1>Wellness Cat Food</h1><p>Shop all Wellness pouches</p></body></html>';
+  it('records each search and its result pages, reads the first result page that shows the barcode, and verifies it there', async () => {
+    const bodies: { url: string; body: string }[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: { body?: string }) => {
+      if (url.startsWith('https://api.openai.com/')) bodies.push({ url, body: String(init?.body ?? '') });
+      if (url === 'https://api.openai.com/v1/responses') return searchOutput(['https://www.chewy.com/wellness-pouches', 'https://www.petsupermarket.com/wellness-gravies-chicken-turkey.html', 'https://www.admc.us/price-list.pdf'], { ...modelAnswer({}), found: false });
+      if (url === 'https://api.openai.com/v1/chat/completions') {
+        return chat(modelAnswer({ product_name: 'Wellness Healthy Indulgence Gravies Chicken & Turkey in Gravy Cat Food Pouch', brand: 'Wellness', intended_for: 'cats', ingredients_verbatim: 'Chicken Broth, Water Sufficient For Processing, Chicken, Potato Starch, Turkey, Eggs, Chicken Liver, Carrots, Natural Flavor, Salt', guaranteed_analysis: [{ label: 'Crude Protein', qualifier: 'min', value: 4, unit: '%' }, { label: 'Crude Fat', qualifier: 'min', value: 2, unit: '%' }], package_size_verbatim: '3 oz' }));
+      }
+      return new Response(url.includes('petsupermarket') ? shop : other, { status: 200 });
+    }));
+    const r = await researchProduct({ apiKey: 'k', model: 'm', gtin14: GRAVIES, barcode: '076344886570', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-10-30T00:00:00Z') });
+    expect(JSON.parse(bodies[0].body).include).toEqual(['web_search_call.action.sources']);
+    expect(r.discarded.slice(0, 4)).toEqual([
+      'barcode search: searched “076344886570” (3 results: chewy.com, petsupermarket.com, admc.us)',
+      'barcode search: model reported no matching product (1 search, 0 citations)',
+      'barcode search: result pages without this barcode: chewy.com',
+      'barcode search: petsupermarket.com (a search result) shows this barcode, so Purrbi read it',
+    ]);
+    // The page was read from Purrbi's copy with one model call (no web search), and every value checked on it.
+    // Then, as after any shop's page, the manufacturer's own page is sought for what is missing.
+    expect(bodies.map((b) => b.url.replace('https://api.openai.com/v1/', ''))).toEqual(['responses', 'chat/completions', 'responses']);
+    expect(JSON.parse(bodies[2].body).input[1].content).toContain('Find the manufacturer’s own product page for this exact product: brand "Wellness"');
+    expect(r.calls).toBe(3);
+    expect(JSON.parse(bodies[1].body).messages[1].content[0].text).toContain('UPC 076344886570');
+    expect(r.sources[0]).toMatchObject({ sourceName: 'petsupermarket.com', sourceType: 'retailer_or_web', matchConfidence: 'exact_barcode' });
+    expect(r.facts?.productName?.value).toBe('Wellness Healthy Indulgence Gravies Chicken & Turkey in Gravy Cat Food Pouch');
+    expect(r.facts?.ingredients?.value.slice(0, 3)).toEqual(['Chicken Broth', 'Water Sufficient For Processing', 'Chicken']);
+    expect(r.facts?.guaranteedAnalysis?.value.map((g) => `${g.nutrient}:${g.value}`)).toEqual(['crude_protein:4', 'crude_fat:2', 'crude_fiber:1', 'moisture:85']);
+    expect((r.facts?.classificationSignals ?? []).map((c) => c.text)).toContain('intended for cats');
+    expect(r.facts?.packageSize?.value).toMatchObject({ amount: 3, unit: 'oz' });
+  });
+  it('reads no page when no result page shows the barcode, and says which were checked', async () => {
+    let chats = 0;
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url === 'https://api.openai.com/v1/responses') return searchOutput(['https://www.chewy.com/wellness-pouches', 'https://shop.example/gone'], { ...modelAnswer({}), found: false });
+      if (url.includes('chat/completions')) {
+        chats++;
+        return chat(modelAnswer({}));
+      }
+      if (url.includes('gone')) return new Response('gone', { status: 404 });
+      return new Response(other, { status: 200 });
+    }));
+    const r = await researchProduct({ apiKey: 'k', model: 'm', gtin14: GRAVIES, barcode: '076344886570', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-10-30T00:00:00Z') });
+    expect(chats).toBe(0);
+    expect(r.facts).toBeNull();
+    expect(r.discarded).toContain('barcode search: result pages without this barcode: chewy.com');
+    expect(r.discarded).toContain('barcode search: result pages that could not be read: shop.example (HTTP 404)');
+  });
+  it('asks again without the result pages when the API refuses that option', async () => {
+    const sent: Record<string, unknown>[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: { body?: string }) => {
+      if (url === 'https://api.openai.com/v1/responses') {
+        const body = JSON.parse(String(init?.body ?? '{}'));
+        sent.push(body);
+        if (body.include) return new Response(JSON.stringify({ error: { message: "Unsupported parameter: 'include'" } }), { status: 400 });
+        return openAi({ ...modelAnswer({}), found: false });
+      }
+      return new Response('', { status: 404 });
+    }));
+    const r = await researchProduct({ apiKey: 'k', model: 'm', gtin14: GRAVIES, barcode: '076344886570', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-10-30T00:00:00Z') });
+    expect(sent.map((b) => 'include' in b)).toEqual([true, false]);
+    expect(r.discarded).toContain('barcode search: model reported no matching product (1 search, 0 citations)');
+  });
+});
