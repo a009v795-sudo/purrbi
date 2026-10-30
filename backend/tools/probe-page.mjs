@@ -15,7 +15,7 @@ const bi = args.indexOf('--barcode');
 const barcode = bi >= 0 ? args[bi + 1] : null;
 const fi = args.indexOf('--find');
 const find = fi >= 0 ? args[fi + 1] : null; // a phrase looked for in the raw HTML (where a page keeps a section)
-const urls = args.filter((a, i) => /^https:\/\//.test(a) && i !== bi + 1 && i !== fi + 1);
+const urls = args.filter((a, i) => /^https:\/\//.test(a) && !(bi >= 0 && i === bi + 1) && !(fi >= 0 && i === fi + 1));
 
 const text = (html) =>
   html
