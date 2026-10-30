@@ -34,7 +34,9 @@ function pdfWith(lines: string[]): Buffer {
   );
 }
 // The text the backend's PDF reader got from Wellness's real document (first lines; numbers as printed).
-const NUTRIENT_PROFILE_LINES = ['FELINE MAINTENANCE AAFCO NUTRIENT PROFILE CLAIM SUBSTANTIATION', 'Per 2.8 oz can Per 5.3 oz can', 'Nutrients 79g 150g', 'M.E. kcal/kg 70.00 133.00', 'PROXIMATES:', 'PROTEIN 10.37 19.03'];
+const NUTRIENT_PROFILE_LINES = ['FELINE MAINTENANCE AAFCO NUTRIENT PROFILE CLAIM SUBSTANTIATION', 'Per 2.8 oz can Per 5.3 oz can', 'Nutrients 79g 150g', 'M.E. kcal/kg 70.00 133.00', 'PROXIMATES:', 'PROTEIN 10.37 19.03', 'PRODUCT', 'WCC CORE Signature Selects', 'Flaked Skipjack Tuna with Wild Salmon', '© 2022 Wellness Pet Company, Inc. All Rights Reserved. MAR 2022'];
+const CAN = { gtin14: '00076344060048', name: 'Wellness CORE Signature Selects Flaked Skipjack Tuna & Wild Salmon Entrée in Broth' };
+const CAN_NAME = '\nPRODUCT\nWCC CORE Signature Selects\nFlaked Skipjack Tuna with Wild Salmon';
 
 const modelAnswer = (over: Record<string, unknown>) => ({
   found: true, product_name: null, brand: null, intended_for: 'not_stated', product_type: null, package_size_verbatim: null, ingredients_verbatim: null, active_ingredients_verbatim: null,
@@ -108,15 +110,16 @@ describe('what a product page holds beyond its text', () => {
     expect(shop).toMatchObject({ barcodes: ['00860004608905'], variantTitles: ['Standard 1 Pack', 'Half Size 1 Pack'] });
   });
   it('reads the AAFCO claim and the calories per package from a nutrient-profile document, in either text order', () => {
-    const unpdf = documentFacts(NUTRIENT_PROFILE_LINES.join('\n'));
+    const unpdf = documentFacts(NUTRIENT_PROFILE_LINES.join('\n'), CAN);
+    expect(unpdf.namesProduct).toBe(true);
     expect(unpdf.adequacyText).toBe('FELINE MAINTENANCE AAFCO NUTRIENT PROFILE CLAIM SUBSTANTIATION');
     expect(unpdf.calories.map(describeCalories)).toEqual(['70 kcal per 2.8-oz can', '133 kcal per 5.3-oz can']);
     // pdftotext's layout order: the product's kcal/kg and the AAFCO columns come first on the same row.
-    const layout = documentFacts('FELINE MAINTENANCE AAFCO NUTRIENT PROFILE CLAIM SUBSTANTIATION\nUnit BASIS DM Dry Matter g/Per 1,000 As fed Basis, Dry Matter g/Per 1,000 Per 2.8 oz can Per 5.3 oz can\nM.E. kcal/kg kcal/kg 4,000.00 - 884.00 4,055.05 - 70.00 133.00');
+    const layout = documentFacts(`FELINE MAINTENANCE AAFCO NUTRIENT PROFILE CLAIM SUBSTANTIATION\nUnit BASIS DM Dry Matter g/Per 1,000 As fed Basis, Dry Matter g/Per 1,000 Per 2.8 oz can Per 5.3 oz can\nM.E. kcal/kg kcal/kg 4,000.00 - 884.00 4,055.05 - 70.00 133.00${CAN_NAME}`, CAN);
     expect(layout.calories.map((c) => c.kcal)).toEqual([70, 133]);
     // A row that doesn't line up with the sizes (implausible energy density) is left out, not guessed.
-    expect(documentFacts('Per 2.8 oz can Per 5.3 oz can\nM.E. kcal/kg 4,000.00 884.00').calories).toEqual([]);
-    expect(documentFacts('Per 3 oz pouch\nNutrients 85 g\nM.E. kcal/kg 57.00').calories.map(describeCalories)).toEqual(['57 kcal per 3-oz pouch']);
+    expect(documentFacts(`Per 2.8 oz can Per 5.3 oz can\nM.E. kcal/kg 4,000.00 884.00${CAN_NAME}`, CAN).calories).toEqual([]);
+    expect(documentFacts('Per 3 oz pouch\nNutrients 85 g\nM.E. kcal/kg 57.00\nHealthy Indulgence Gravies\nChicken & Turkey', { gtin14: '00076344886570', name: 'Wellness Healthy Indulgence Gravies with Chicken & Turkey in Gravy' }).calories.map(describeCalories)).toEqual(['57 kcal per 3-oz pouch']);
   });
   it('matches a catalogue title by its written-out words, never by brand alone', () => {
     expect(nameTokens('Dog Trt Frz Dr Wld Salmn')).toEqual(['freeze', 'dried', 'wild', 'salmon']);

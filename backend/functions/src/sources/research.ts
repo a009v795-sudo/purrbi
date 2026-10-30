@@ -4,18 +4,18 @@
 // and linked nutrition documents (PDF). A barcode found first on a retailer's page is followed by the
 // manufacturer's own page for the fields still missing. Anything that cannot be verified is discarded.
 // Switched by the RESEARCH_ENABLED parameter; attempted at most once per product per freshness window.
-import { extractText, getDocumentProxy } from 'unpdf';
+import { getDocumentProxy } from 'unpdf';
 import { analysisRows } from '../ai/labelExtract';
 import { researchJson } from '../ai/openai';
 import { detectSpecies, parseAdequacyStatement } from '../domain/adequacy';
 import { textContainsGtin } from '../domain/barcode';
-import { normalizeIngredientName, parseIngredientList } from '../domain/ingredients';
+import { normalizeIngredientName, parseIngredientList, type ParsedIngredient } from '../domain/ingredients';
 import { CORE_GA, hasCoreGuaranteedAnalysis, normalizeUnit, nutrientKeyFromLabel, parseCalorieText, parsePackageSize, qualifierFrom, validateGuaranteedAnalysis } from '../domain/nutrition';
 import { parseActiveIngredients } from '../domain/supplements';
-import type { GuaranteedAnalysisEntry, ProductFacts, ProductSpecies, SourceRef } from '../domain/types';
+import type { GuaranteedAnalysisEntry, PackageSize, ProductFacts, ProductSpecies, SourceRef } from '../domain/types';
 import { httpBytes, httpJson, httpRequest, SourceError } from '../util/http';
 import type { BarcodeHint } from './barcodeLookup';
-import { altTextIngredientLists, documentFacts, markupGtins, nameOnPage, nameTokens, nutritionDocLinks, pageText, parseShopifyProduct, shopifyProductUrl } from './pageEvidence';
+import { altTextIngredientLists, documentFacts, markupGtins, nameOnPage, nameTokens, nutritionDocLinks, pageText, parseShopifyProduct, pdfSafety, productHeading, shopifyProductUrl } from './pageEvidence';
 
 export const RESEARCH_VERSION = 'research-2.0.0'; // 2.0.0: alt text, markup and Shopify barcodes, linked nutrition documents, a manufacturer follow-up, catalogue abbreviations, package sizes
 /** Research results still used as they were saved (older ones are read again: they could take who a product is for from a retailer's title). */
@@ -167,6 +167,14 @@ export interface ResearchOutcome {
   fetchFailed?: boolean;
   /** Model calls made (each counts against the AI budget). */
   calls?: number;
+  /**
+   * How the page the facts come from was shown to be this product: it shows this barcode (barcode), it lists
+   * the same recipe as the product's record (recipe), it lists this barcode among its sizes' or variants'
+   * (family), or only its brand and name match (name).
+   */
+  identity?: 'barcode' | 'recipe' | 'family' | 'name';
+  /** The heading (h1) of the page tied to this barcode: what the manufacturer's page is searched for and must match when no name was verified. */
+  pageTitle?: string;
 }
 
 interface ResearchOptions {
@@ -174,6 +182,7 @@ interface ResearchOptions {
   model: string;
   gtin14: string;
   barcode: string;
+  /** The product's name from its database record or a page shown to be this product: what a page without the barcode must match. */
   knownName?: string;
   knownBrand?: string;
   knownIngredients?: string[]; // from the database record: a page with another recipe is not used
@@ -184,9 +193,14 @@ interface ResearchOptions {
   now: Date;
   /** Called before each model call (AI budget); throws to stop research. */
   beforeAiCall?: () => Promise<void>;
+  /** Epoch ms by which research must be done (the scan job's time limit): later steps are skipped, never left running. */
+  deadline?: number;
 }
 
 type Mode = 'barcode' | 'name' | 'manufacturer';
+
+const left = (o: ResearchOptions) => (o.deadline ?? Number.POSITIVE_INFINITY) - Date.now();
+const MODEL_CALL_MS = 60000;
 
 /** The fields whose absence sends research on to the manufacturer's own page. */
 const missingFields = (f: Partial<ProductFacts>) =>
@@ -194,13 +208,30 @@ const missingFields = (f: Partial<ProductFacts>) =>
     (x): x is string => !!x,
   );
 
-/** Facts of `extra` for the keys `base` lacks; statements and sources of both. */
-function mergeResearch(base: Partial<ProductFacts>, extra: Partial<ProductFacts>): Partial<ProductFacts> {
+/**
+ * Facts of `extra` for the keys `base` lacks; statements and sources of both. When `extra` comes from a page
+ * shown to be this product (barcode or same recipe), its analysis replaces a partial one from the first page,
+ * and values the two pages print differently are noted.
+ */
+function mergeResearch(base: Partial<ProductFacts>, extra: Partial<ProductFacts>, strong: boolean, notes: string[]): Partial<ProductFacts> {
   const out: Partial<ProductFacts> = { ...base };
   for (const [k, v] of Object.entries(extra)) {
     if (k === 'classificationSignals' || k === 'sources' || v === undefined) continue;
     if ((out as Record<string, unknown>)[k] === undefined) (out as Record<string, unknown>)[k] = v;
   }
+  const a = base.guaranteedAnalysis;
+  const b = extra.guaranteedAnalysis;
+  if (a && b) {
+    const differ = b.value.filter((x) => x.nutrient !== 'other' && a.value.some((y) => y.nutrient === x.nutrient && y.unit === x.unit && Math.abs(y.value - x.value) > 0.05));
+    const fuller = strong && (coreRows(b.value) > coreRows(a.value) || (differ.length > 0 && b.source.sourceType === 'manufacturer'));
+    if (fuller) out.guaranteedAnalysis = b;
+    if (differ.length) notes.push(`guaranteed analysis: ${a.source.sourceName} and ${b.source.sourceName} print different values (${differ.slice(0, 3).map((x) => x.label).join(', ')}); ${(fuller ? b : a).source.sourceName}’s was used`);
+    else if (fuller) notes.push(`guaranteed analysis: ${b.source.sourceName} prints more of it than ${a.source.sourceName}, so its analysis was used`);
+  }
+  const ca = base.calories?.value ?? [];
+  const cb = extra.calories?.value ?? [];
+  const clash = cb.filter((x) => ca.some((y) => y.per === x.per && (y.size?.grams ?? 0) === (x.size?.grams ?? 0) && Math.abs(y.kcal - x.kcal) > Math.max(2, y.kcal * 0.02)));
+  if (clash.length) notes.push(`calories: ${base.calories!.source.sourceName} and ${extra.calories!.source.sourceName} print different values; ${base.calories!.source.sourceName}’s were kept`);
   out.classificationSignals = [...(base.classificationSignals ?? []), ...(extra.classificationSignals ?? [])];
   return out;
 }
@@ -209,11 +240,12 @@ function mergeResearch(base: Partial<ProductFacts>, extra: Partial<ProductFacts>
  * A barcode search first (with a barcode database's title as a search hint when there is one); when it
  * finds nothing and a name, brand or hint is known, a search by identity. When the page found is a
  * retailer's, or label fields are still missing, the manufacturer's own page is sought for them. Each
- * candidate page is verified the same way; at most three model calls.
+ * candidate page is verified the same way; at most three model calls, all within the job's time limit.
  */
 export async function researchProduct(opts: ResearchOptions): Promise<ResearchOutcome> {
   const ask = 'Find who it is for and its ingredient list, guaranteed analysis, calorie content, package size and nutritional adequacy (feeding) statement; for a supplement, its active ingredients with amounts (start that text with "Active ingredients").';
   const hint = opts.hint ? `A barcode database lists this barcode as "${opts.hint.title}"${opts.hint.brand ? ` (brand "${opts.hint.brand}")` : ''}; that listing is unverified, so confirm the product on a page.` : '';
+  // Search words only: a barcode database's title is never what a page is checked against.
   const name = opts.knownName ?? opts.hint?.title;
   const brand = opts.knownBrand ?? opts.hint?.brand;
   const attempts: { label: string; mode: Mode; user: string }[] = [
@@ -228,9 +260,13 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
   let calls = 0;
   let found: ResearchOutcome | null = null;
   for (const attempt of attempts) {
+    if (left(opts) < MODEL_CALL_MS + 15000) {
+      discarded.push(`${attempt.label}: not run (the scan’s time limit)`);
+      break;
+    }
     await opts.beforeAiCall?.();
     calls++;
-    const r = await researchAttempt({ ...opts, knownName: attempt.mode === 'name' ? name : opts.knownName, knownBrand: attempt.mode === 'name' ? brand : opts.knownBrand }, attempt.user, attempt.mode);
+    const r = await researchAttempt({ ...opts, knownBrand: attempt.mode === 'name' ? brand : opts.knownBrand }, attempt.user, attempt.mode);
     model = r.model;
     discarded.push(...r.discarded.map((d) => `${attempt.label}: ${d}`));
     fetchFailed = fetchFailed || r.fetchFailed === true;
@@ -244,42 +280,51 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
   // The manufacturer's own page for what the first page did not show (or when only a retailer's listing says who it is for).
   const retailerOnly = found.sources.every((x) => x.sourceType !== 'manufacturer');
   const still = missingFields({ ...found.facts, ...(opts.knownIngredients?.length && !found.facts.ingredients ? { ingredients: { value: opts.knownIngredients, source: found.sources[0] } } : {}) });
-  const mName = found.facts.productName?.value ?? name;
+  // What the manufacturer's page must match: a name shown on the page proven to be this product, or the database's.
+  const trustedName = found.facts.productName?.value ?? found.pageTitle ?? opts.knownName;
+  const mName = trustedName ?? name;
   const mBrand = found.facts.brand?.value ?? brand;
   // Only after a retailer's page: a manufacturer's page that lacks a field is not searched for again.
   if (retailerOnly && mBrand && mName) {
-    try {
-      await opts.beforeAiCall?.();
-      calls++;
-      const species = speciesOf(found.facts) ?? opts.knownSpecies;
-      const size = found.facts.packageSize?.value.text;
-      const user = [
-        `Find the manufacturer’s own product page for this exact product: brand "${mBrand}", product "${mName}"${size ? `, package size ${size}` : ''}, barcode ${opts.barcode}.`,
-        'Catalogue titles abbreviate words (Trt = treat, Frz Dr = freeze dried, Wld = wild): search for the full product name on the brand’s website.',
-        `Report what that page shows${still.length ? `, especially the ${still.join(', ')}` : ''}. ${ask}`,
-      ].join(' ');
-      const r2 = await researchAttempt({ ...opts, knownName: mName, knownBrand: mBrand, knownSpecies: species ?? 'unknown', knownIngredients: found.facts.ingredients?.value ?? opts.knownIngredients }, user, 'manufacturer');
-      model = r2.model;
-      discarded.push(...r2.discarded.map((d) => `manufacturer page: ${d}`));
-      if (r2.facts) {
-        const sameSource = r2.sources.every((x) => found!.sources.some((y) => y.sourceId === x.sourceId));
-        if (!sameSource) {
-          // The manufacturer's own product name replaces a retailer's catalogue title ("Dog Trt Frz Dr …") on
-          // screen; the retailer's title stays among the product's statements.
-          const makerName = r2.sources[0]?.sourceType === 'manufacturer' ? r2.facts.productName : undefined;
-          found = {
-            ...found,
-            facts: { ...mergeResearch(found.facts, r2.facts), ...(makerName ? { productName: makerName } : {}) },
-            sources: [...found.sources, ...r2.sources.filter((x) => !found!.sources.some((y) => y.sourceId === x.sourceId))],
-            verified: [...(found.verified ?? []), ...(r2.verified ?? [])],
-            analysisNote: found.analysisNote ?? r2.analysisNote,
-          };
+    if (left(opts) < MODEL_CALL_MS + 15000) discarded.push('manufacturer page: not searched (the scan’s time limit)');
+    else {
+      try {
+        await opts.beforeAiCall?.();
+        calls++;
+        const species = speciesOf(found.facts) ?? opts.knownSpecies;
+        const size = found.facts.packageSize?.value.text;
+        const user = [
+          `Find the manufacturer’s own product page for this exact product: brand "${mBrand}", product "${mName}"${size ? `, package size ${size}` : ''}, barcode ${opts.barcode}.`,
+          'Catalogue titles abbreviate words (Trt = treat, Frz Dr = freeze dried, Wld = wild): search for the full product name on the brand’s website.',
+          `Report what that page shows${still.length ? `, especially the ${still.join(', ')}` : ''}. ${ask}`,
+        ].join(' ');
+        const r2 = await researchAttempt({ ...opts, knownName: trustedName, knownBrand: mBrand, knownSpecies: species ?? 'unknown', knownIngredients: found.facts.ingredients?.value ?? opts.knownIngredients }, user, 'manufacturer');
+        model = r2.model;
+        discarded.push(...r2.discarded.map((d) => `manufacturer page: ${d}`));
+        if (r2.facts) {
+          const sameSource = r2.sources.every((x) => found!.sources.some((y) => y.sourceId === x.sourceId));
+          if (!sameSource) {
+            // The manufacturer's own product name (as its page's heading prints it) replaces a retailer's
+            // catalogue title ("Dog Trt Frz Dr …") on screen; the retailer's title stays among the product's statements.
+            const makerName = r2.sources[0]?.sourceType === 'manufacturer' ? r2.facts.productName : undefined;
+            const strong = r2.identity === 'barcode' || r2.identity === 'recipe';
+            const notes: string[] = [];
+            found = {
+              ...found,
+              facts: { ...mergeResearch(found.facts, r2.facts, strong, notes), ...(makerName ? { productName: makerName } : {}) },
+              sources: [...found.sources, ...r2.sources.filter((x) => !found!.sources.some((y) => y.sourceId === x.sourceId))],
+              verified: [...(found.verified ?? []), ...(r2.verified ?? [])],
+              analysisNote: found.analysisNote ?? r2.analysisNote,
+            };
+            discarded.push(...notes.map((n) => `manufacturer page: ${n}`));
+          }
         }
+      } catch (err) {
+        // The follow-up is optional: what the first page verified is kept (it was paid for).
+        if (err instanceof SourceError) discarded.push(`manufacturer page: not searched (${err.kind === 'rate_limited' ? 'rate limited' : err.kind})`);
+        else if ((err as Error)?.name === 'QuotaError') discarded.push('manufacturer page: not searched (the AI budget is used up for today)');
+        else throw err;
       }
-    } catch (err) {
-      // The follow-up is optional: what the first page verified is kept.
-      if (!(err instanceof SourceError)) throw err;
-      discarded.push(`manufacturer page: not searched (${err.kind === 'rate_limited' ? 'rate limited' : err.kind})`);
     }
   }
   return { ...found, discarded, model, fetchFailed, calls };
@@ -297,39 +342,142 @@ interface FetchedPage {
   plain: string; // visible text + image alt text
   html: string;
   title: string;
+  /** The product's own heading as words (title, h1, og:title, structured-data Product, Shopify title and type): who it is for and its name are read here. */
+  heading: string;
+  /** The page is tied to this barcode: in its text, as the one barcode in its markup, or as the Shopify variant it shows. */
   barcode: 'text' | 'markup' | 'shopify' | null;
+  /** The barcode is one of this many in the page's data or product record (package sizes or variants), not tied to one of them; 0 otherwise. */
+  family: number;
+  /** The package size of the Shopify variant the barcode belongs to. */
+  variantSize: PackageSize | null;
 }
 
 async function fetchPage(url: string, opts: ResearchOptions): Promise<FetchedPage> {
-  const res = await httpRequest(url, { source: 'web page', headers: { 'User-Agent': opts.userAgent, Accept: 'text/html' }, timeoutMs: 8000, retries: 0 });
-  const html = res.text.slice(0, 3000000);
+  const res = await httpRequest(url, { source: 'web page', headers: { 'User-Agent': opts.userAgent, Accept: 'text/html' }, timeoutMs: 8000, retries: 0, maxBytes: 3000000 });
+  const html = res.text;
   let plain = pageText(html).slice(0, 400000);
   const title = (/<title[^>]*>([^<]*)<\/title>/i.exec(html)?.[1] ?? '').replace(/\s+/g, ' ').trim();
-  let barcode: FetchedPage['barcode'] = textContainsGtin(plain, opts.gtin14) ? 'text' : markupGtins(html).includes(opts.gtin14) ? 'markup' : null;
+  let heading = productHeading(html);
+  const gtins = markupGtins(html);
+  let barcode: FetchedPage['barcode'] = textContainsGtin(plain, opts.gtin14) ? 'text' : gtins.length === 1 && gtins[0] === opts.gtin14 ? 'markup' : null;
+  let family = !barcode && gtins.includes(opts.gtin14) ? gtins.length : 0;
+  let variantSize: PackageSize | null = null;
   // A Shopify product page: its product record lists each variant's barcode and the full description.
   const js = shopifyProductUrl(res.url || url);
   if (js) {
     try {
-      const { json } = await httpJson(js, { source: 'web page', headers: { 'User-Agent': opts.userAgent, Accept: 'application/json' }, timeoutMs: 6000, retries: 0, acceptStatuses: [404] });
+      const { json } = await httpJson(js, { source: 'web page', headers: { 'User-Agent': opts.userAgent, Accept: 'application/json' }, timeoutMs: 6000, retries: 0, acceptStatuses: [404], maxBytes: 1000000 });
       const shop = parseShopifyProduct(json);
       if (shop) {
         plain = `${plain} ${shop.title} ${shop.type} ${shop.description}`.slice(0, 400000);
-        if (!barcode && shop.barcodes.includes(opts.gtin14)) barcode = 'shopify';
+        heading = `${heading} | ${shop.title} | ${shop.type}`;
+        const coded = shop.variants.filter((v) => v.barcode);
+        const mine = coded.find((v) => v.barcode === opts.gtin14);
+        if (!barcode && mine) {
+          // One product with several sizes or flavours: the barcode belongs to one variant, which the page
+          // shows only when its address names it (?variant=…) or when the product has no other barcode.
+          const distinct = new Set(coded.map((v) => v.barcode)).size;
+          let chosen = '';
+          try {
+            chosen = new URL(res.url || url).searchParams.get('variant') ?? '';
+          } catch {
+            chosen = '';
+          }
+          if (distinct === 1 || (chosen && chosen === mine.id)) {
+            barcode = 'shopify';
+            family = 0;
+            variantSize = parsePackageSize(mine.title);
+          } else family = Math.max(family, distinct);
+        }
       }
     } catch {
       // no product record: the page itself is still read
     }
   }
-  return { url: res.url || url, text: ` ${wordsKey(plain)} `, raw: plain.toLowerCase(), plain, html, title, barcode };
+  return { url: res.url || url, text: ` ${wordsKey(plain)} `, raw: plain.toLowerCase(), plain, html, title, heading: ` ${wordsKey(heading)} `, barcode, family, variantSize };
 }
 
-async function readDocument(url: string, opts: ResearchOptions): Promise<string | null> {
-  const { bytes, contentType } = await httpBytes(url, { source: 'nutrition document', headers: { 'User-Agent': opts.userAgent, Accept: 'application/pdf' }, timeoutMs: 10000, maxBytes: 4 * 1024 * 1024 });
-  if (!(contentType.includes('pdf') || bytes.subarray(0, 5).toString('latin1') === '%PDF-')) return null;
+const PDF_PAGES = 4;
+const PDF_UNPACKED_MAX = 24 * 1024 * 1024;
+
+/** A linked nutrition document's text (its first pages), or why it was not read. */
+async function readDocument(url: string, opts: ResearchOptions): Promise<{ text: string | null; refused?: string }> {
+  const { bytes, contentType } = await httpBytes(url, { source: 'nutrition document', headers: { 'User-Agent': opts.userAgent, Accept: 'application/pdf' }, timeoutMs: Math.max(1000, Math.min(10000, left(opts) - 10000)), maxBytes: 4 * 1024 * 1024 });
+  if (!(contentType.includes('pdf') || bytes.subarray(0, 5).toString('latin1') === '%PDF-')) return { text: null };
+  const safe = pdfSafety(bytes, PDF_UNPACKED_MAX);
+  if (!safe.ok) return { text: null, refused: safe.reason };
   const doc = await getDocumentProxy(new Uint8Array(bytes));
-  const { text } = await extractText(doc, { mergePages: true });
-  return typeof text === 'string' ? text.slice(0, 200000) : null;
+  try {
+    const texts: string[] = [];
+    for (let i = 1; i <= Math.min(doc.numPages, PDF_PAGES); i++) {
+      const content = await (await doc.getPage(i)).getTextContent();
+      texts.push(content.items.map((item) => ('str' in item ? `${item.str}${item.hasEOL ? '\n' : ''}` : '')).join(''));
+    }
+    // As unpdf's merged text: line breaks kept, at most one blank line.
+    return { text: texts.join('\n').replace(/[^\S\n]+/g, ' ').replace(/ ?\n ?/g, '\n').replace(/\n{3,}/g, '\n\n').slice(0, 200000) };
+  } finally {
+    await doc.loadingTask.destroy().catch(() => undefined);
+  }
 }
+
+/** A calorie value printed as a calorie statement on the page ("3,520 kcal/kg", "kcal/cup: 352"), not a number found elsewhere. */
+function kcalOnPage(raw: string, kcal: number): boolean {
+  if (!Number.isFinite(kcal) || kcal <= 0) return false;
+  const forms = [...new Set([String(kcal), kcal.toLocaleString('en-US'), kcal.toLocaleString('en-US').replace(/,/g, '.'), kcal.toLocaleString('en-US').replace(/,/g, ' ')])].map((f) => f.replace(/[.]/g, '\\.'));
+  const num = `(?<![\\d.,])(?:${forms.join('|')})(?:[.,]0+)?(?![\\d]|[.,]\\d)`;
+  return new RegExp(`${num}[^\\d]{0,30}(?:kcal|kilocalories|calories)|(?:kcal|kilocalories|calories)[^\\d]{0,30}${num}`, 'i').test(raw);
+}
+
+/**
+ * Every item of the list is on this page in the same order (a list another fetched page shows, or a copy
+ * whose tail is not on the page, is not this page's). A list of one or two items must follow an
+ * "Ingredients" heading: a word that appears anywhere on the page is not a list.
+ */
+function listOnPage(items: ParsedIngredient[], p: FetchedPage): boolean {
+  const words = items.flatMap((i) => [i.name, ...i.children.map((c) => c.name)]).map(wordsKey).filter(Boolean);
+  if (!words.length) return false;
+  if (items.length <= 2) return /\bingredients?\b/.test(p.text) && new RegExp(` ingredients? (?:list )?${words.join(' ').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} `).test(p.text);
+  let at = 0;
+  for (const w of words) {
+    const i = p.text.indexOf(` ${w} `, at);
+    if (i < 0) return false;
+    at = i + w.length + 1;
+  }
+  return true;
+}
+
+// Words that are not the brand's own (a host holding "pet" or "food" is not a brand's site for that).
+const BRAND_STOP = new Set(['the', 'and', 'of', 'a', 'pet', 'pets', 'food', 'foods', 'petfood', 'natural', 'nutrition', 'company', 'co', 'inc', 'brand', 'brands', 'dog', 'dogs', 'cat', 'cats']);
+// Brands sold on a parent company's site.
+const PARENT_SITES: [RegExp, string][] = [
+  [/\b(purina|pro plan|fancy feast|friskies|beneful|cat chow|dog chow|tidy cats|beyond)\b/, 'purina'],
+  [/\b(hills|science diet|prescription diet)\b/, 'hillspet'],
+  [/\bziwi\b/, 'ziwipets'],
+  [/\btiki (cat|dog)\b/, 'tikipets'],
+  [/\b(diamond naturals|diamond pet)\b/, 'diamondpet'],
+  [/\broyal canin\b/, 'royalcanin'],
+  [/\b(iams|eukanuba)\b/, 'iams'],
+  [/\b(blue buffalo|blue wilderness)\b/, 'bluebuffalo'],
+  [/\bwellness\b/, 'wellnesspetfood'],
+];
+
+/**
+ * The page's site belongs to the brand: its host holds the brand's words run together ("abettertreat"),
+ * or starts with the brand's first word and holds another of them ("tasteofthewild…" for Taste of the Wild,
+ * "stellaandchewys" for Stella & Chewy's; a one-word brand's name alone), or is a parent company's site.
+ */
+export function brandOwnsHost(brand: string | null, host: string): boolean {
+  if (!brand || !host) return false;
+  const words = normalizeIngredientName(brand).replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/).filter(Boolean);
+  const hostKey = host.replace(/^www\./, '').replace(/[^a-z0-9]+/g, '');
+  const joined = words.filter((w) => w.length > 2).join('');
+  if (joined.length >= 4 && hostKey.includes(joined.slice(0, 12))) return true;
+  const own = words.filter((w) => w.length >= 3 && !BRAND_STOP.has(w));
+  if (own.length && hostKey.startsWith(own[0]) && (own.length === 1 || own.slice(1).some((w) => hostKey.includes(w.slice(0, 3))))) return true;
+  return PARENT_SITES.some(([re, site]) => re.test(words.join(' ')) && hostKey.startsWith(site));
+}
+
+const OTHER_ANIMAL_WORDS = /\b(birds?|parrots?|budgies?|rabbits?|hamsters?|guinea pigs?|rodents?|ferrets?|reptiles?|horses?|equine|poultry|chickens? feed|livestock|cattle|aquarium|koi|goldfish|pond fish)\b/;
 
 async function researchAttempt(opts: ResearchOptions, user: string, mode: Mode): Promise<ResearchOutcome> {
   const { data, citations, searches, model } = await researchJson<RawResearch>({
@@ -338,7 +486,7 @@ async function researchAttempt(opts: ResearchOptions, user: string, mode: Mode):
     system: SYSTEM,
     user,
     format: { name: 'pet_product_research', schema: SCHEMA },
-    timeoutMs: 60000,
+    timeoutMs: Math.max(5000, Math.min(MODEL_CALL_MS, left(opts) - 10000)),
   });
   const discarded: string[] = [];
   const searched = `${searches} search${searches === 1 ? '' : 'es'}, ${citations.length} citation${citations.length === 1 ? '' : 's'}`;
@@ -353,6 +501,10 @@ async function researchAttempt(opts: ResearchOptions, user: string, mode: Mode):
 
   const pages: FetchedPage[] = [];
   for (const url of urls) {
+    if (left(opts) < 12000) {
+      discarded.push(`${url.slice(0, 120)} not fetched (the scan’s time limit)`);
+      continue;
+    }
     try {
       pages.push(await fetchPage(url, opts));
     } catch (err) {
@@ -361,40 +513,55 @@ async function researchAttempt(opts: ResearchOptions, user: string, mode: Mode):
   }
   if (!pages.length) return { facts: null, sources: [], discarded, model, fetchFailed: true };
 
-  const onPage = (needle: string | null | undefined) => {
-    const n = wordsKey(needle ?? '');
-    return !!n && pages.some((p) => p.text.includes(` ${n} `));
-  };
-  const barcodeOnPage = pages.some((p) => p.barcode);
-  const brand = data.brand ?? opts.knownBrand ?? null;
-  const name = data.product_name ?? opts.knownName ?? null;
-  // Catalogue titles abbreviate ("Dog Trt Frz Dr Wld Salmn"): the known name matches when its words, written out, are all on the page.
-  const nameMatch = (p: FetchedPage, n: string | null) => !!n && (p.text.includes(` ${wordsKey(n)} `) || nameOnPage(n, p.text));
-  const identityOk = barcodeOnPage || (onPage(brand) && pages.some((p) => nameMatch(p, name) || nameMatch(p, opts.knownName ?? null)));
-  if (!identityOk) {
-    const sought = `brand "${(brand ?? '').slice(0, 40)}"${onPage(brand) ? ' found' : ' not found'}, name "${(name ?? '').slice(0, 60)}"${pages.some((p) => nameMatch(p, name)) ? ' found' : ' not found'}`;
-    return { facts: null, sources: [], discarded: [...discarded, `the cited page does not show this product’s barcode or its brand and name (${sought})`], model };
-  }
-
-  // The source is a page shown to be this product by itself: the one with the barcode, or else one with the
-  // brand and name. Only that page's own printed sections are read (another fetched page may be another variant).
-  const onThisPage = (p: FetchedPage, needle: string | null) => {
+  // Each page is judged on its own, and everything kept is checked on the one page it is taken from: another
+  // fetched page may be another variant (Morsels next to Gravies).
+  const has = (p: FetchedPage, needle: string | null | undefined) => {
     const n = wordsKey(needle ?? '');
     return !!n && p.text.includes(` ${n} `);
   };
-  const thisProduct = (p: FetchedPage) => !!p.barcode || (onThisPage(p, brand) && (nameMatch(p, name) || nameMatch(p, opts.knownName ?? null)));
-  const page = pages.find((p) => p.barcode) ?? pages.find(thisProduct) ?? pages[0];
+  const inHeading = (p: FetchedPage, needle: string | null | undefined) => {
+    const n = wordsKey(needle ?? '');
+    return !!n && p.heading.includes(` ${n} `);
+  };
+  const brand = data.brand ?? opts.knownBrand ?? null;
+  // Without the barcode, a page must name the product as Purrbi already knows it (from its database record or
+  // a page shown to be this product), in the page's own heading, who it is for included: never the answer's
+  // own name for the page, which would match any page it chose.
+  const trusted = opts.knownName ?? null;
+  const trustedNameOn = (p: FetchedPage) => !!trusted && (inHeading(p, trusted) || nameOnPage(trusted, p.heading, { species: true }));
+  // Each page's ingredient list: the answer's copy when all of it is on that page in order, else the list the
+  // page publishes as an image's alt text (read by Purrbi), when it shows exactly one.
+  const answerList = parseIngredientList(data.ingredients_verbatim);
+  const listOf = (p: FetchedPage): { text: string; items: ParsedIngredient[]; fromAlt: boolean } | null => {
+    if (answerList.length && listOnPage(answerList, p)) return { text: data.ingredients_verbatim!, items: answerList, fromAlt: false };
+    const alt = altTextIngredientLists(p.html);
+    return alt.length === 1 ? { text: alt[0], items: parseIngredientList(alt[0]), fromAlt: true } : null;
+  };
+  // The same recipe as the database record (five or more of the first ingredients compared, four in five the
+  // same, in order) with the brand on the page shows the product as well as its barcode would.
+  const sameRecipeOn = (p: FetchedPage) => {
+    const l = listOf(p);
+    const r = compareRecipes(opts.knownIngredients ?? [], l ? l.items.map((x) => x.name) : []);
+    return !!brand && has(p, brand) && r.compared >= 5 && r.same >= Math.ceil(r.compared * 0.8);
+  };
+  type Id = 'barcode' | 'recipe' | 'family' | 'name';
+  const identityOf = (p: FetchedPage): Id | null => (p.barcode ? 'barcode' : sameRecipeOn(p) ? 'recipe' : p.family ? 'family' : brand && has(p, brand) && trustedNameOn(p) ? 'name' : null);
+  const rank: Record<Id, number> = { barcode: 0, recipe: 1, family: 2, name: 3 };
+  const candidates = pages.map((p) => ({ p, id: identityOf(p) })).filter((x): x is { p: FetchedPage; id: Id } => !!x.id).sort((a, b) => rank[a.id] - rank[b.id]);
+  if (!candidates.length) {
+    const sought = `brand "${(brand ?? '').slice(0, 40)}"${pages.some((p) => has(p, brand)) ? ' found' : ' not found'}, ${trusted ? `name "${trusted.slice(0, 60)}"${pages.some(trustedNameOn) ? ' found' : ' not in the product’s heading'}` : 'no product name known to compare'}`;
+    return { facts: null, sources: [], discarded: [...discarded, `the cited page does not show this product’s barcode or its brand and name (${sought})`], model };
+  }
+  const { p: page, id } = candidates[0];
   let host = '';
   try {
     host = new URL(page.url).hostname.replace(/^www\./, '');
   } catch {
     host = '';
   }
-  const brandToken = normalizeIngredientName(brand ?? '').replace(/[^a-z0-9 ]+/g, ' ').split(' ').filter((w) => w.length > 2).join('');
-  const hostKey = host.replace(/[^a-z0-9]+/g, '');
   const source: SourceRef = {
     sourceId: `web:${host}:${opts.gtin14}`,
-    sourceType: brandToken && hostKey.includes(brandToken.slice(0, 12)) ? 'manufacturer' : 'retailer_or_web',
+    sourceType: brandOwnsHost(brand, host) ? 'manufacturer' : 'retailer_or_web',
     sourceName: host || 'Web page',
     url: page.url,
     retrievedAt: opts.now.toISOString(),
@@ -403,21 +570,16 @@ async function researchAttempt(opts: ResearchOptions, user: string, mode: Mode):
   };
 
   const facts: Partial<ProductFacts> = {};
-  if (name && onPage(name)) facts.productName = { value: name, source };
-  if (brand && onPage(brand)) facts.brand = { value: brand, source };
+  // The product's name as the page prints it: in its heading, or anywhere on a page tied to this barcode
+  // (the answer's copy, checked there).
+  const shownName = data.product_name && (inHeading(page, data.product_name) || (!!page.barcode && has(page, data.product_name))) ? data.product_name : null;
+  if (brand && has(page, brand)) facts.brand = { value: brand, source };
 
-  // The ingredient list: the model's copy when it is on the page; else the list the page publishes as an
-  // image's alt text (read by Purrbi), when the page shows exactly one.
-  let ingredientsText = data.ingredients_verbatim;
-  let parsed = parseIngredientList(ingredientsText);
-  let listedOnPage = parsed.length >= 3 && parsed.slice(0, 3).every((i) => onPage(i.name));
-  const altLists = page ? altTextIngredientLists(page.html) : [];
-  if (!listedOnPage && altLists.length === 1) {
-    ingredientsText = altLists[0];
-    parsed = parseIngredientList(ingredientsText);
-    listedOnPage = parsed.length >= 3;
-    if (data.ingredients_verbatim) discarded.push('ingredients: the answer’s list is not on the page; the list in the page’s image text was used');
-  }
+  const list = listOf(page);
+  const ingredientsText = list?.text ?? null;
+  const parsed = list?.items ?? [];
+  const listedOnPage = parsed.length > 0;
+  if (list?.fromAlt && data.ingredients_verbatim) discarded.push('ingredients: the answer’s list is not on the page as given; the list in the page’s image text was used');
   // Same recipe? The first ingredients (up to ten) on the page are compared, in order, with the
   // database record. Fewer than 60% the same: another recipe or formulation (a similarly named
   // variant), and nothing from the page is used.
@@ -428,42 +590,75 @@ async function researchAttempt(opts: ResearchOptions, user: string, mode: Mode):
   }
   if (compared >= 3) discarded.push(`recipe check: ${same} of the first ${compared} ingredients match the database record in order${recipe.unmatched.length ? ` (not matched: ${recipe.unmatched.slice(0, 3).join(', ')})` : ''}`);
   const sameRecipe = compared >= 5 && same >= Math.ceil(compared * 0.8);
-  // Strong identity: the page shows this barcode (in its text, markup or product record), or the same recipe.
-  // Brand and name alone are weak: a brand often sells cat and dog recipes under the same name.
-  const strongIdentity = !!page.barcode || sameRecipe;
+  // Strong identity: the page shows this barcode (in its text, as its markup's one barcode, or as the
+  // Shopify variant it shows), or the same recipe. A barcode among a page's several sizes or variants, or
+  // brand and name alone, are weak: a brand often sells cat and dog recipes, and sizes, under one name.
+  const strongIdentity = id === 'barcode' || sameRecipe;
+  const identity: ResearchOutcome['identity'] = id === 'barcode' ? 'barcode' : sameRecipe ? 'recipe' : id;
   const verified: string[] = [];
   if (page.barcode) verified.push(`${host || 'The page'} shows this product’s barcode${page.barcode === 'text' ? '' : page.barcode === 'markup' ? ' in its page data' : ' in its product record'}.`);
+  if (id === 'family') verified.push(`${host || 'The page'} lists this barcode among ${page.family} barcodes of the product’s sizes or variants, not as the one shown.`);
   if (sameRecipe) verified.push(`Same recipe on ${host || 'the page'}: ${same} of the first ${compared} ingredients match the database record in order (${parsed.slice(0, 4).map((x) => x.name).join(', ')} …).`);
-  const knownSpecies = opts.knownSpecies && opts.knownSpecies !== 'unknown' ? opts.knownSpecies : null;
+  const knownSpecies = opts.knownSpecies && opts.knownSpecies !== 'unknown' ? (opts.knownSpecies as ProductSpecies) : null;
   if (!strongIdentity && !knownSpecies) {
-    return { facts: null, sources: [], discarded: [...discarded, `${host || 'the page'} matches only by brand and name (no barcode, ${compared >= 3 ? 'too few matching ingredients' : 'no ingredient list to compare'}), and it is not yet known whether this product is for cats or dogs, so nothing from it was used`], model };
+    return { facts: null, sources: [], discarded: [...discarded, `${host || 'the page'} matches only ${id === 'family' ? 'as one of several sizes or variants' : 'by brand and name'} (${compared >= 3 ? 'too few matching ingredients' : 'no ingredient list to compare'}), and it is not yet known whether this product is for cats or dogs, so nothing from it was used`], model };
   }
-  // A manufacturer's page matched by brand and (written-out) name only: what does not vary between a
-  // product's package sizes is used — who it is for (only when it includes who the product is already known
-  // to be for), the feeding statement, and a single-ingredient list named in the product's name.
+  // A page matched only by brand and (written-out) name, or as one of several variants: what does not vary
+  // between a product's package sizes is used — who it is for (only when it includes who the product is
+  // already known to be for), the feeding statement, and a single-ingredient list named in the product's name.
   const nameLevel = !strongIdentity;
-  if (nameLevel) verified.push(`${host || 'The page'} matches this product by brand and name${source.sourceType === 'manufacturer' ? ' (the manufacturer’s page; the barcode isn’t shown on it)' : ''}.`);
+  if (nameLevel && id === 'name') verified.push(`${host || 'The page'} matches this product by brand and name${source.sourceType === 'manufacturer' ? ' (the manufacturer’s page; the barcode isn’t shown on it)' : ''}.`);
 
-  const singleIngredient = parsed.length >= 1 && parsed.length <= 2 && parsed.every((i) => ingredientWords(i.name).some((w) => nameTokens(`${opts.knownName ?? ''} ${name ?? ''}`).includes(w)));
-  if (listedOnPage || (nameLevel && singleIngredient && onPage(parsed[0]?.name))) {
+  const singleIngredient = parsed.length >= 1 && parsed.length <= 2 && !!trusted && parsed.every((i) => ingredientWords(i.name).some((w) => nameTokens(trusted).includes(w)));
+  if (listedOnPage) {
     if (!nameLevel || singleIngredient) {
       facts.ingredientsText = { value: ingredientsText!.trim(), source };
       facts.ingredients = { value: parsed.map((i) => i.labelText), source };
-    } else discarded.push('ingredients: not used from a page matched only by brand and name');
-  } else if (data.ingredients_verbatim) discarded.push('ingredients: not found verbatim on the cited page');
+    } else discarded.push(`ingredients: not used from a page matched only ${id === 'family' ? 'as one of several sizes or variants' : 'by brand and name'}`);
+  } else if (data.ingredients_verbatim) discarded.push('ingredients: the answer’s list is not on the cited page in full and in order');
 
-  if (data.adequacy_statement_verbatim && onPage(wordsKey(data.adequacy_statement_verbatim).split(' ').slice(0, 10).join(' '))) {
+  if (data.adequacy_statement_verbatim && has(page, wordsKey(data.adequacy_statement_verbatim).split(' ').slice(0, 10).join(' '))) {
     const adequacy = parseAdequacyStatement(data.adequacy_statement_verbatim);
-    // From a name-level match only the feeding purpose (intermittent or supplemental feeding) is taken.
+    // From a weak match only the feeding purpose (intermittent or supplemental feeding) is taken.
     if (adequacy && (!nameLevel || adequacy.type === 'intermittent')) facts.adequacy = { value: adequacy, source };
   } else if (data.adequacy_statement_verbatim) discarded.push('adequacy statement: not found on the cited page');
 
-  const sizeText = data.package_size_verbatim && onPage(data.package_size_verbatim) ? data.package_size_verbatim : page.barcode ? page.title : null;
-  const size = !nameLevel && sizeText ? parsePackageSize(sizeText) : null;
+  // Who it is for, as this page's own product heading says it (the site's menus and other products' tiles
+  // are not read): the answer's "intended for" is used only where the heading agrees with it.
+  // The feeding statement printed on this page names the species too ("Aliment complet pour chats adultes").
+  const statedOnPage = facts.adequacy?.source === source ? facts.adequacy.value.species : 'unknown';
+  const headingSpecies = detectSpecies(page.heading);
+  const pageSpecies = headingSpecies !== 'unknown' ? headingSpecies : statedOnPage;
+  const covers = (sp: ProductSpecies, known: ProductSpecies) => sp === 'cat_and_dog' || (sp !== 'unknown' && sp === known);
+  if (nameLevel && knownSpecies && pageSpecies !== 'unknown' && !covers(pageSpecies, knownSpecies)) {
+    return { facts: null, sources: [], discarded: [...discarded, `${host || 'the page'} is for ${pageSpecies === 'cat' ? 'cats' : 'dogs'}, but this product is for ${knownSpecies === 'cat_and_dog' ? 'cats and dogs' : `${knownSpecies}s`}: another variant, so nothing from it was used`], model };
+  }
+  const claimed = data.intended_for ?? 'not_stated';
+  let intendedFor: string | null = null;
+  if (pageSpecies !== 'unknown') {
+    const said = pageSpecies === 'cat_and_dog' ? 'cats_and_dogs' : `${pageSpecies}s`;
+    intendedFor = `intended for ${said.replace(/_/g, ' ')}`;
+    if (claimed !== 'not_stated' && claimed !== said) discarded.push(`intended for ${claimed.replace(/_/g, ' ')}: the product’s ${headingSpecies !== 'unknown' ? 'heading' : 'feeding statement'} says ${said.replace(/_/g, ' ')}, which was used`);
+  } else if (claimed === 'people') {
+    intendedFor = detectSpecies(page.text) === 'unknown' ? 'intended for people' : null;
+  } else if (claimed === 'other_animals') {
+    intendedFor = OTHER_ANIMAL_WORDS.test(page.heading) ? 'intended for other animals' : null;
+  }
+  if (!intendedFor && claimed !== 'not_stated') discarded.push(`intended for ${claimed.replace(/_/g, ' ')}: not stated in the product’s heading or feeding statement on the fetched page`);
+  // From a weak match, who it is for is taken only from the manufacturer's own page found for that purpose,
+  // and only as it includes the species already known (a "dog and cat treat" for a retailer's "dog treat").
+  if (intendedFor && nameLevel && !(knownSpecies && covers(pageSpecies, knownSpecies) && source.sourceType === 'manufacturer' && mode === 'manufacturer')) intendedFor = null;
+  // The page's name is shown only when it says no less about who the product is for.
+  const nameSpecies = shownName ? detectSpecies(` ${wordsKey(shownName)} `) : 'unknown';
+  if (shownName && (!nameLevel || nameSpecies === 'unknown' || (knownSpecies && covers(nameSpecies, knownSpecies)))) facts.productName = { value: shownName, source };
+
+  // The package size only from a page tied to this barcode (a page listing several sizes' barcodes doesn't say which this is).
+  const sizeText = data.package_size_verbatim && has(page, data.package_size_verbatim) ? data.package_size_verbatim : page.title;
+  const size = page.barcode === 'shopify' && page.variantSize ? page.variantSize : page.barcode ? parsePackageSize(sizeText) : null;
   if (size) facts.packageSize = { value: size, source };
 
   const offered = nameLevel ? [] : data.guaranteed_analysis ?? [];
-  const notOnPage = offered.filter((g) => !pages.some((p) => numberOnPage(p.raw, Number(g.value))));
+  const notOnPage = offered.filter((g) => !numberOnPage(page.raw, Number(g.value)));
   const checked = validateGuaranteedAnalysis(
     offered
       .filter((g) => !notOnPage.includes(g))
@@ -474,7 +669,7 @@ async function researchAttempt(opts: ResearchOptions, user: string, mode: Mode):
   // The analysis printed on the source page, read by Purrbi itself with the label rules, is the page's own
   // word: it is used when it gives more of the analysis than the model's answer, or when the answer's values
   // disagree with it (a value found elsewhere on the page, e.g. fibre's given as protein).
-  const printed = !nameLevel && thisProduct(page) ? pageAnalysis(page.plain) : [];
+  const printed = !nameLevel ? pageAnalysis(page.plain) : [];
   const differ = ga.filter((g) => g.nutrient !== 'other' && printed.some((p) => p.nutrient === g.nutrient && p.unit === g.unit && Math.abs(p.value - g.value) > 0.05));
   const usePrinted = printed.length > 0 && (differ.length > 0 || coreRows(printed) > coreRows(ga) || (coreRows(printed) === coreRows(ga) && printed.length > ga.length));
   const listed = (rows: { label: string; value: number }[]) => rows.slice(0, 3).map((g) => `${g.label} ${g.value}`).join(', ');
@@ -500,23 +695,32 @@ async function researchAttempt(opts: ResearchOptions, user: string, mode: Mode):
   const actives = nameLevel
     ? []
     : parseActiveIngredients(data.active_ingredients_verbatim?.match(/active ingredients?/i) ? data.active_ingredients_verbatim : data.active_ingredients_verbatim ? `Active ingredients: ${data.active_ingredients_verbatim}` : null).filter(
-        (a) => onPage(a.name) && (a.amount === null || pages.some((p) => numberOnPage(p.raw, Number(a.amount)))),
+        (a) => has(page, a.name) && (a.amount === null || numberOnPage(page.raw, Number(a.amount))),
       );
   if (actives.length) facts.activeIngredients = { value: actives, source };
   else if (data.active_ingredients_verbatim && !nameLevel) discarded.push('active ingredients: not found on the cited page');
 
-  const cals = nameLevel ? [] : parseCalorieText(data.calorie_statement_verbatim).filter((c) => pages.some((p) => numberOnPage(p.raw, c.kcal) || p.raw.includes(c.kcal.toLocaleString('en-US'))));
+  const offeredCals = nameLevel ? [] : parseCalorieText(data.calorie_statement_verbatim);
+  const cals = offeredCals.filter((c) => kcalOnPage(page.raw, c.kcal));
   if (cals.length) facts.calories = { value: cals, source };
+  if (offeredCals.length > cals.length) discarded.push(`calories: ${offeredCals.length - cals.length} of the answer’s values are not printed as a calorie statement on the cited page`);
 
-  // Linked nutrition documents of a page proven to be this product: the AAFCO claim and calories per package.
+  // Linked nutrition documents of a page proven to be this product: the AAFCO claim and calories per package,
+  // used only when the document names this product.
   let docSource: SourceRef | null = null;
   if (strongIdentity && (!facts.adequacy || !facts.calories?.value.some((c) => c.size))) {
     for (const docUrl of nutritionDocLinks(page.html, page.url)) {
+      if (left(opts) < 20000) {
+        discarded.push(`nutrition document ${docUrl.slice(0, 100)} not read (the scan’s time limit)`);
+        break;
+      }
       try {
-        const text = await readDocument(docUrl, opts);
+        const { text, refused } = await readDocument(docUrl, opts);
+        if (refused) discarded.push(`nutrition document ${docUrl.slice(0, 100)} not read (${refused})`);
         if (!text) continue;
-        const doc = documentFacts(text);
+        const doc = documentFacts(text, { gtin14: opts.gtin14, name: facts.productName?.value ?? trusted ?? page.heading });
         discarded.push(...doc.notes.map((n) => `nutrition document: ${n}`));
+        if (!doc.namesProduct) continue;
         docSource = { ...source, sourceId: `doc:${host}:${opts.gtin14}`, sourceName: `${host} nutrition document (PDF)`, url: docUrl };
         if (!facts.adequacy && doc.adequacyText) {
           const adequacy = parseAdequacyStatement(doc.adequacyText);
@@ -530,30 +734,14 @@ async function researchAttempt(opts: ResearchOptions, user: string, mode: Mode):
     }
   }
 
-  // Who it is for, kept only when the fetched page itself says so.
-  // (species words in the page's own language: dog, chien, Hund, perro …)
-  const pageSpecies = pages.map((p) => detectSpecies(p.text));
-  const says = (sp: 'cat' | 'dog') => pageSpecies.some((x) => x === sp || x === 'cat_and_dog');
-  let intendedFor: string | null = null;
-  data.intended_for = data.intended_for ?? 'not_stated';
-  if (data.intended_for === 'cats') intendedFor = says('cat') ? 'intended for cats' : null;
-  else if (data.intended_for === 'dogs') intendedFor = says('dog') ? 'intended for dogs' : null;
-  else if (data.intended_for === 'cats_and_dogs') intendedFor = says('cat') && says('dog') ? 'intended for cats and dogs' : null;
-  else if (data.intended_for === 'people') intendedFor = pageSpecies.every((x) => x === 'unknown') ? 'intended for people' : null;
-  else if (data.intended_for === 'other_animals') intendedFor = 'intended for other animals';
-  if (!intendedFor && data.intended_for !== 'not_stated') discarded.push(`intended for ${data.intended_for.replace(/_/g, ' ')}: not stated in those words on the fetched page`);
-  if (intendedFor && !strongIdentity) {
-    // Who it is for decides the whole assessment. From a page matched only by brand and name it is taken
-    // only when it includes the species already known (a "dog and cat treat" for a retailer's "dog treat").
-    const includesKnown = !!knownSpecies && (intendedFor === 'intended for cats and dogs' || intendedFor.includes(knownSpecies === 'cat_and_dog' ? 'cats and dogs' : `${knownSpecies}s`));
-    const conflicts = !!knownSpecies && !includesKnown;
-    if (conflicts) return { facts: null, sources: [], discarded: [...discarded, `${host || 'the page'} is ${intendedFor}, but this product is for ${knownSpecies}s: another variant, so nothing from it was used`], model };
-    if (!(includesKnown && source.sourceType === 'manufacturer' && mode === 'manufacturer')) intendedFor = null;
-  }
-
-  facts.classificationSignals = [name, data.product_type, intendedFor]
+  // Statements about the product, each as this page shows it: its name (from its heading), its product type
+  // (printed on the page, from a page shown to be this product) and who it is for (from its heading).
+  const productType = !nameLevel && data.product_type && has(page, data.product_type) ? data.product_type : null;
+  facts.classificationSignals = [facts.productName?.value, productType, intendedFor]
     .filter((t): t is string => !!t)
     .map((t) => ({ text: t, source: source.sourceId, kind: 'research' as const }));
   const sources = [source, ...(docSource ? [docSource] : [])];
-  return { facts, sources, discarded, model, verified, ...(analysisNote ? { analysisNote } : {}) };
+  const h1 = page.barcode ? (/<h1\b[^>]*>([\s\S]{0,400}?)<\/h1>/i.exec(page.html)?.[1] ?? '') : '';
+  const pageTitle = pageText(h1).trim().slice(0, 200);
+  return { facts, sources, discarded, model, verified, identity, ...(pageTitle ? { pageTitle } : {}), ...(analysisNote ? { analysisNote } : {}) };
 }

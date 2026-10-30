@@ -3,6 +3,7 @@
 // barcodes in the page's markup and structured data (a widget's `ps-sku`, JSON-LD `gtin12`, a Shopify
 // variant's `barcode`), and linked nutrition documents (a "Nutrient Profiles" PDF with the AAFCO claim and
 // the calories per package). Every value used is printed in the page or document it is taken from.
+import { constants as zlibConstants, inflateSync } from 'node:zlib';
 import { gs1CheckDigit } from '../domain/barcode';
 import { normalizeIngredientName, parseIngredientList } from '../domain/ingredients';
 import { parseCalorieText, parsePackageSize } from '../domain/nutrition';
@@ -35,6 +36,43 @@ export function pageText(html: string): string {
       .replace(ALT, (_, a?: string, b?: string) => ` ${a ?? b ?? ''} `)
       .replace(/<[^>]+>/g, ' '),
   ).replace(/\s+/g, ' ');
+}
+
+/**
+ * The product's own heading, as the page names it: the document title, the first headings (h1), the
+ * og:title and a structured-data Product's name and category. Menus, footers and other products' tiles are
+ * left out, so "Dog | Cat" in a site menu is not read as who the product is for.
+ */
+export function productHeading(html: string): string {
+  const parts: string[] = [];
+  const title = /<title[^>]*>([\s\S]{0,400}?)<\/title>/i.exec(html)?.[1];
+  if (title) parts.push(title);
+  for (const m of [...html.matchAll(/<h1\b[^>]*>([\s\S]{0,600}?)<\/h1>/gi)].slice(0, 2)) parts.push(m[1]);
+  const og = /<meta\b[^>]*?property\s*=\s*["']og:title["'][^>]*?content\s*=\s*["']([^"']{0,400})["']/i.exec(html) ?? /<meta\b[^>]*?content\s*=\s*["']([^"']{0,400})["'][^>]*?property\s*=\s*["']og:title["']/i.exec(html);
+  if (og) parts.push(og[1]);
+  for (const m of html.matchAll(/<script\b[^>]*application\/ld\+json[^>]*>([\s\S]{0,200000}?)<\/script>/gi)) {
+    try {
+      const nodes: unknown[] = [];
+      const walk = (x: unknown) => {
+        if (Array.isArray(x)) x.forEach(walk);
+        else if (x && typeof x === 'object') {
+          nodes.push(x);
+          const g = (x as Record<string, unknown>)['@graph'];
+          if (g) walk(g);
+        }
+      };
+      walk(JSON.parse(m[1]));
+      for (const n of nodes as Record<string, unknown>[]) {
+        const type = n['@type'];
+        if (!(type === 'Product' || (Array.isArray(type) && type.includes('Product')))) continue;
+        if (typeof n.name === 'string') parts.push(n.name.slice(0, 400));
+        if (typeof n.category === 'string') parts.push(n.category.slice(0, 200));
+      }
+    } catch {
+      // not JSON
+    }
+  }
+  return decodeEntities(parts.map((x) => x.replace(/<[^>]+>/g, ' ')).join(' | ')).replace(/\s+/g, ' ').trim();
 }
 
 /**
@@ -91,6 +129,7 @@ export interface ShopifyProduct {
   tags: string[];
   barcodes: string[]; // 14-digit keys of the variants' valid barcodes
   variantTitles: string[];
+  variants: { id: string; title: string; barcode: string }[]; // barcode: 14-digit key, '' when none or invalid
   description: string;
 }
 
@@ -98,13 +137,18 @@ export function parseShopifyProduct(json: unknown): ShopifyProduct | null {
   if (!json || typeof json !== 'object') return null;
   const p = json as { title?: unknown; type?: unknown; tags?: unknown; variants?: unknown; description?: unknown };
   if (typeof p.title !== 'string' || !Array.isArray(p.variants)) return null;
-  const variants = p.variants as { barcode?: unknown; title?: unknown }[];
+  const variants = p.variants as { id?: unknown; barcode?: unknown; title?: unknown }[];
+  const key = (b: unknown) => {
+    const d = String(b ?? '').replace(/\s+/g, '');
+    return validGtin(d) ? d.padStart(14, '0') : '';
+  };
   return {
     title: p.title,
     type: typeof p.type === 'string' ? p.type : '',
     tags: Array.isArray(p.tags) ? p.tags.filter((t): t is string => typeof t === 'string').slice(0, 30) : [],
     barcodes: variants.map((v) => String(v.barcode ?? '').replace(/\s+/g, '')).filter(validGtin).map((d) => d.padStart(14, '0')),
     variantTitles: variants.map((v) => String(v.title ?? '')).filter(Boolean).slice(0, 12),
+    variants: variants.slice(0, 100).map((v) => ({ id: String(v.id ?? ''), title: String(v.title ?? ''), barcode: key(v.barcode) })),
     description: typeof p.description === 'string' ? pageText(p.description).slice(0, 6000) : '',
   };
 }
@@ -129,14 +173,19 @@ export function nutritionDocLinks(html: string, pageUrl: string): string[] {
   return out;
 }
 
-// "FELINE MAINTENANCE AAFCO NUTRIENT PROFILE CLAIM SUBSTANTIATION", "AAFCO Dog Food Nutrient Profiles for All Life Stages".
+// Claim wording only: "FELINE MAINTENANCE AAFCO NUTRIENT PROFILE CLAIM SUBSTANTIATION", "… is formulated to meet the
+// nutritional levels established by the AAFCO Dog Food Nutrient Profiles for …". A bare reference to a profile
+// ("AAFCO Dog Food Nutrient Profiles for Growth and Reproduction Minimum", a comparison column) is not a claim.
 const DOC_CLAIM =
-  /(?:(?:feline|canine)\s+(?:adult\s+)?(?:maintenance|growth(?:\s+(?:and|&)\s+reproduction)?|all\s+life\s+stages|gestation\s*\/\s*lactation|reproduction)\s+aafco\s+nutrient\s+profiles?[^\n.]{0,60}|(?:formulated\s+to\s+meet|meets)[^\n.]{0,80}aafco\s+(?:cat|dog)\s+food\s+nutrient\s+profiles?[^\n.]{0,80}|aafco\s+(?:cat|dog)\s+food\s+nutrient\s+profiles?\s+for\s+[^\n.]{3,60})/i;
+  /(?:(?:feline|canine)\s+(?:adult\s+)?(?:maintenance|growth(?:\s+(?:and|&)\s+reproduction)?|all\s+life\s+stages|gestation\s*\/\s*lactation|reproduction)\s+aafco\s+nutrient\s+profiles?\s+claim(?:\s+substantiation)?|(?:is\s+|are\s+)?(?:formulated\s+to\s+meet|meets)[^\n.]{0,80}aafco\s+(?:cat|dog)\s+food\s+nutrient\s+profiles?[^\n.]{0,80}|(?:animal\s+feeding\s+tests[^\n.]{0,160}?)?complete\s+(?:and|&)\s+balanced\s+(?:nutrition\s+)?for\s+[^\n.]{3,80})/gi;
+const DOC_NEGATED = /\bnot\s+(?:formulated|intended)\s+to\s+meet|\bdoes\s+not\s+meet\b/i;
+const DOC_INTERMITTENT = /[^\n.]{0,80}\bintermittent\s+(?:or\s+supplemental\s+)?feeding(?:\s+only)?[^\n.]{0,40}|[^\n.]{0,80}\bsupplemental\s+feeding\s+only[^\n.]{0,40}/i;
 
 export interface DocumentFacts {
   adequacyText: string | null; // the claim as printed in the document
   calories: CalorieStatement[]; // per package, each with its size
   notes: string[];
+  namesProduct: boolean; // the document names this product (its barcode, or most of its name's words)
 }
 
 /**
@@ -146,10 +195,23 @@ export interface DocumentFacts {
  * energy density for its package (and, with several sizes, the same density across them): a table read in
  * the wrong order is left out rather than guessed.
  */
-export function documentFacts(text: string): DocumentFacts {
+export function documentFacts(text: string, product: { gtin14: string; name: string }): DocumentFacts {
   const notes: string[] = [];
   const t = text.replace(/[ \t]+/g, ' ');
-  const claim = DOC_CLAIM.exec(t)?.[0].replace(/\s+/g, ' ').trim() ?? null;
+  // A product line's document (several products' claims) or another product's is not this product's.
+  const tokens = [...new Set(nameTokens(product.name, { species: true }))];
+  const docWords = ` ${normalizeIngredientName(t).replace(/[^a-z0-9]+/g, ' ')} `;
+  const stem = (w: string) => (w.length > 3 && w.endsWith('s') ? w.slice(0, -1) : w);
+  const hits = tokens.filter((w) => docWords.includes(` ${w} `) || docWords.includes(` ${stem(w)} `) || docWords.includes(` ${w}s `)).length;
+  const namesProduct = t.replace(/\D+/g, ' ').split(' ').some((d) => d.length >= 8 && d.padStart(14, '0') === product.gtin14) || (tokens.length >= 2 && hits >= Math.max(2, Math.ceil(tokens.length * 0.6)));
+  if (!namesProduct) return { adequacyText: null, calories: [], notes: ['the document does not name this product, so nothing from it was used'], namesProduct };
+  const claims = [...new Set([...t.matchAll(DOC_CLAIM)].map((m) => m[0].replace(/\s+/g, ' ').trim()).filter((c) => !DOC_NEGATED.test(c)))];
+  const intermittent = DOC_INTERMITTENT.exec(t)?.[0].replace(/\s+/g, ' ').trim() ?? null;
+  let claim: string | null = null;
+  if (intermittent && claims.length) notes.push('the document has both a nutrient-profile claim and an intermittent-feeding statement, so neither was used');
+  else if (intermittent) claim = intermittent;
+  else if (claims.length > 1) notes.push(`the document has ${claims.length} different nutrient-profile claims, so none was used`);
+  else claim = claims[0] ?? null;
   const sizes = [...t.matchAll(/\bper\s+(\d+(?:\.\d+)?\s*-?\s*(?:fl\.?\s*oz|oz|ounces?|g|grams?)\s*(can|pouch|tray|cup|carton|tub)?)/gi)].map((m) => ({ size: parsePackageSize(m[1]), container: (m[2] ?? '').toLowerCase(), text: m[0] }));
   const calories: CalorieStatement[] = [];
   const me = /\bM\.?\s?E\.?\s+kcal\s*\/\s*kg\b([^\n]*)/i.exec(t);
@@ -167,7 +229,41 @@ export function documentFacts(text: string): DocumentFacts {
       });
     } else notes.push('the document’s calorie table could not be lined up with its package sizes, so it was not used');
   }
-  return { adequacyText: claim, calories, notes };
+  return { adequacyText: claim, calories, notes, namesProduct };
+}
+
+/**
+ * Whether a PDF is safe to extract text from: every compressed stream unpacks (Flate) to `cap` bytes in all,
+ * at most. A small file can unpack to hundreds of megabytes (a decompression bomb) and exhaust the function's
+ * memory while its text is read. Streams in other text encodings (LZW, run-length, ASCII armour) or damaged
+ * ones are refused rather than guessed at; image encodings are left alone (text extraction does not decode them).
+ */
+export function pdfSafety(bytes: Buffer, cap: number): { ok: true; unpacked: number } | { ok: false; reason: string } {
+  const s = bytes.toString('latin1');
+  const IMAGE = new Set(['DCTDecode', 'JPXDecode', 'JBIG2Decode', 'CCITTFaxDecode']);
+  let total = 0;
+  let streams = 0;
+  for (const m of s.matchAll(/stream\r?\n/g)) {
+    const at = m.index ?? 0;
+    if (s.slice(Math.max(0, at - 3), at) === 'end') continue;
+    const objAt = s.lastIndexOf('obj', at);
+    const dict = s.slice(objAt >= 0 && at - objAt < 20000 ? objAt : Math.max(0, at - 2000), at);
+    const filters = [...dict.matchAll(/\/([A-Za-z0-9]+Decode)\b/g)].map((f) => f[1]);
+    if (!filters.length) continue;
+    if (filters.some((f) => f !== 'FlateDecode' && !IMAGE.has(f))) return { ok: false, reason: 'it uses an encoding Purrbi does not read' };
+    if (!filters.includes('FlateDecode')) continue;
+    if (++streams > 2000) return { ok: false, reason: 'too many compressed parts' };
+    const end = s.indexOf('endstream', at + m[0].length);
+    if (end < 0) return { ok: false, reason: 'a damaged compressed part' };
+    try {
+      total += inflateSync(bytes.subarray(at + m[0].length, end), { maxOutputLength: Math.max(1, cap - total), finishFlush: zlibConstants.Z_SYNC_FLUSH }).length;
+    } catch (err) {
+      if ((err as { code?: string }).code === 'ERR_BUFFER_TOO_LARGE' || err instanceof RangeError) return { ok: false, reason: `it unpacks to more than ${Math.round(cap / 1048576)} MB` };
+      return { ok: false, reason: 'a damaged compressed part' };
+    }
+    if (total > cap) return { ok: false, reason: `it unpacks to more than ${Math.round(cap / 1048576)} MB` };
+  }
+  return { ok: true, unpacked: total };
 }
 
 // Abbreviations in retailer and distributor catalogue titles ("Dog Trt Frz Dr Wld Salmn").
@@ -181,19 +277,25 @@ const ABBREVIATIONS: Record<string, string> = {
 // Words that say nothing about which product it is (species and packaging words are checked separately).
 const STOP = new Set(['a', 'an', 'and', 'the', 'with', 'in', 'for', 'of', 'to', 'by', 'oz', 'lb', 'lbs', 'g', 'kg', 'ct', 'count', 'pack', 'pk', 'bag', 'can', 'pouch', 'case', 'x', 'dog', 'dogs', 'cat', 'cats', 'puppy', 'kitten', 'pet', 'pets', 'treat', 'treats', 'food', 'recipe', 'formula', 'new', 'size', 'standard', 'half', 'single', 'ingredient', 'natural', 'premium']);
 
-/** The words that identify a product in its name, with catalogue abbreviations written out. */
-export function nameTokens(name: string): string[] {
+const SPECIES_WORDS = new Set(['dog', 'dogs', 'cat', 'cats', 'puppy', 'kitten']);
+
+/**
+ * The words that identify a product in its name, with catalogue abbreviations written out. With
+ * `species`, who it is for counts too (a dog treat's name must not match the same brand's cat treat).
+ */
+export function nameTokens(name: string, o: { species?: boolean } = {}): string[] {
   return normalizeIngredientName(name)
     .replace(/[^a-z0-9 ]+/g, ' ')
     .split(/\s+/)
     .filter(Boolean)
     .map((w) => ABBREVIATIONS[w] ?? w)
-    .filter((w) => !STOP.has(w) && !/^\d/.test(w) && w.length > 1);
+    .map((w) => (w === 'dogs' ? 'dog' : w === 'cats' ? 'cat' : w))
+    .filter((w) => (!STOP.has(w) || (o.species && SPECIES_WORDS.has(w))) && !/^\d/.test(w) && w.length > 1);
 }
 
 /** Every identifying word of the name appears on the page (catalogue abbreviations written out), and at least two. */
-export function nameOnPage(name: string, pageWords: string): boolean {
-  const tokens = [...new Set(nameTokens(name))];
+export function nameOnPage(name: string, pageWords: string, o: { species?: boolean } = {}): boolean {
+  const tokens = [...new Set(nameTokens(name, o))];
   const words = ` ${pageWords} `;
   const stem = (w: string) => (w.length > 3 && w.endsWith('s') ? w.slice(0, -1) : w);
   return tokens.length >= 2 && tokens.every((w) => words.includes(` ${w} `) || words.includes(` ${stem(w)} `) || words.includes(` ${w}s `));

@@ -131,6 +131,8 @@ export interface SpeciesEvidence {
   basis: SpeciesBasis;
   /** Strong sources name different species (e.g. a cat-food label and a dog-food page): unresolved, never merged. */
   disputed: boolean;
+  /** Species a weaker confirming source names besides `set` (e.g. a database record naming cats and dogs under a manufacturer's dog page): never a confirmed mismatch for them. */
+  alsoNamed?: Species[];
   note: string;
 }
 

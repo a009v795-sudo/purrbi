@@ -25,6 +25,7 @@ export interface HttpOptions {
   timeoutMs?: number;
   retries?: number; // extra attempts for timeouts, network errors, 429 and 5xx
   acceptStatuses?: number[]; // non-2xx statuses returned to the caller instead of thrown (e.g. 404)
+  maxBytes?: number; // read at most this much of the body (the rest is not downloaded); unlimited when unset
 }
 
 export interface HttpResponse {
@@ -57,7 +58,7 @@ export async function httpRequest(url: string, opts: HttpOptions): Promise<HttpR
         redirect: 'follow',
       });
       status = res.status;
-      const text = await res.text();
+      const text = opts.maxBytes ? new TextDecoder('utf-8').decode(await readBody(res, opts.maxBytes, 'truncate', opts.source)) : await res.text();
       outcome = res.ok ? 'ok' : res.status === 404 ? 'not_found' : res.status === 429 ? 'rate_limited' : 'http_error';
       if (res.ok || opts.acceptStatuses?.includes(res.status)) return { status: res.status, text, headers: res.headers, url: res.url || url };
       detail = errorDetail(text);
@@ -94,6 +95,30 @@ export async function httpJson<T = unknown>(url: string, opts: HttpOptions): Pro
   }
 }
 
+/**
+ * The body, counted as it arrives: past `maxBytes` the download stops (a declared Content-Length is not
+ * trusted), and the first `maxBytes` are kept ('truncate') or the file is refused ('throw').
+ */
+async function readBody(res: Response, maxBytes: number, over: 'truncate' | 'throw', source: string): Promise<Buffer> {
+  const reader = res.body?.getReader();
+  if (!reader) return Buffer.alloc(0);
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      if (over === 'throw') throw new SourceError(source, 'parse', 'file too large');
+      chunks.push(value.subarray(0, value.byteLength - (total - maxBytes)));
+      break;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks);
+}
+
 /** Binary download (images) with the same timeout, diagnostics and typed failures; refuses large bodies. */
 export async function httpBytes(url: string, opts: HttpOptions & { maxBytes: number }): Promise<{ status: number; bytes: Buffer; contentType: string }> {
   const { host, path } = sanitizeUrl(url);
@@ -109,8 +134,7 @@ export async function httpBytes(url: string, opts: HttpOptions & { maxBytes: num
     if (!res.ok) throw new SourceError(opts.source, res.status === 429 ? 'rate_limited' : 'http', `HTTP ${res.status}`, res.status);
     const declared = Number(res.headers.get('content-length') ?? 0);
     if (declared > opts.maxBytes) throw new SourceError(opts.source, 'parse', 'file too large');
-    const bytes = Buffer.from(await res.arrayBuffer());
-    if (bytes.length > opts.maxBytes) throw new SourceError(opts.source, 'parse', 'file too large');
+    const bytes = await readBody(res, opts.maxBytes, 'throw', opts.source);
     return { status: res.status, bytes, contentType: (res.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase() };
   } catch (err) {
     if (err instanceof SourceError) throw err;

@@ -30,7 +30,7 @@ import { RESEARCH_RESULTS_IN_USE, RESEARCH_VERSION, researchProduct as researchI
 import { currentCalls, errorDetail, runWithCallLog } from '../util/diagnostics';
 import { SourceError } from '../util/http';
 import { rematchAnalysis } from '../domain/nutrition';
-import { ASSESSMENT_VERSION, SCAN_STATUS, STUCK_AFTER_MS, WORKING_STATUSES, type ErrorCode, type RuntimeConfig } from './config';
+import { ASSESSMENT_VERSION, RESEARCH_TIME_LIMIT_MS, SCAN_STATUS, STUCK_AFTER_MS, WORKING_STATUSES, type ErrorCode, type RuntimeConfig } from './config';
 import { corroborateLabel } from './corroborate';
 import { dropStaleImageReads, enrichmentFacts, fillMissing, labelToFacts, missingInfo, type PhotoRequest } from './facts';
 import { explanationFields, highlightFields, ingredientRowFields, jobFields, resultFields, type JobInfo } from './serialize';
@@ -116,7 +116,7 @@ function isStuck(d: Record<string, unknown>, now: Date): boolean {
 }
 
 function newJob(kind: JobInfo['kind'], traceId: string, now: Date): JobInfo {
-  return { kind, traceId, runId: randomUUID().slice(0, 12), startedAt: now, productCache: 'none', recallCache: 'skipped', explanationsCached: 0, explanationsNew: 0, evidenceNotes: [], diagnosticNotes: [] };
+  return { kind, traceId, runId: randomUUID().slice(0, 12), startedAt: now, clockStart: Date.now(), productCache: 'none', recallCache: 'skipped', explanationsCached: 0, explanationsNew: 0, evidenceNotes: [], diagnosticNotes: [] };
 }
 
 async function setStatus(deps: Deps, uid: string, scanId: string, status: string, message: string, progress: number) {
@@ -522,7 +522,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
           job.diagnosticNotes.push(`Barcode database not checked: ${err instanceof SourceError ? (err.kind === 'rate_limited' ? 'it is limiting requests' : err.kind === 'timeout' ? 'it didn’t answer in time' : `it failed (${err.status ? `HTTP ${err.status}` : err.kind})`) : errorDetail((err as Error).message)}`);
         }
       }
-      const r = await deps.sources.research({ apiKey: config.openaiApiKey(), model: config.researchModel, gtin14: gtin, barcode: o.barcode.expanded ?? o.barcode.digits, knownName: facts.productName?.value, knownBrand: facts.brand?.value, knownIngredients: facts.ingredients?.value, knownSpecies: scope.species, hint, userAgent: config.userAgent, now, beforeAiCall: () => consumeAiBudget(db, config.limits, now) });
+      const r = await deps.sources.research({ apiKey: config.openaiApiKey(), model: config.researchModel, gtin14: gtin, barcode: o.barcode.expanded ?? o.barcode.digits, knownName: facts.productName?.value, knownBrand: facts.brand?.value, knownIngredients: facts.ingredients?.value, knownSpecies: scope.species, hint, userAgent: config.userAgent, now, beforeAiCall: () => consumeAiBudget(db, config.limits, now), deadline: (job.clockStart ?? Date.now()) + RESEARCH_TIME_LIMIT_MS });
       let filled: string[] = [];
       if (r.facts) {
         // "Active ingredients" are a supplement's; a food page's additive list is not used as such.

@@ -69,6 +69,8 @@ export const SCAN_STATUS = {
 export const WORKING_STATUSES: readonly string[] = [SCAN_STATUS.queued, SCAN_STATUS.identifying, SCAN_STATUS.researching, SCAN_STATUS.checkingAlerts, SCAN_STATUS.assessing, SCAN_STATUS.processingPhoto];
 /** A working scan with no update for this long has stopped without a result (jobs time out after 5 minutes); the owner may retry it. */
 export const STUCK_AFTER_MS = 6 * 60 * 1000;
+/** Research must finish this long after the job starts (functions stop at 300 s; the result is written after it). */
+export const RESEARCH_TIME_LIMIT_MS = 200 * 1000;
 
 export type ErrorCode =
   | 'invalid_barcode'

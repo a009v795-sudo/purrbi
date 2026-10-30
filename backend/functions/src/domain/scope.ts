@@ -18,6 +18,8 @@ export type DatabaseOrigin = 'opff' | 'off' | 'obf' | 'opf' | 'web' | 'label';
 export interface SpeciesClaim {
   text: string;
   basis: SpeciesBasis;
+  /** Where it was found (a source id): one record's names and category tags are one source, whatever species each names. */
+  source?: string;
 }
 
 export interface ScopeInput {
@@ -48,31 +50,46 @@ const speciesOfSet = (set: Species[]): ProductSpecies => (set.includes('cat') &&
 
 /**
  * Who the product is for, from the strongest evidence that names a species: the species named at the
- * strongest basis (all of them: a dog-and-cat treat is ["cat", "dog"]). A weaker source naming fewer
- * species is consistent with it, not a conflict; a confirming source naming a species the strongest does
- * not is noted. Two sources at the strongest basis that name different species dispute it.
+ * strongest basis (all of them: a dog-and-cat treat is ["cat", "dog"]). One source's statements count
+ * together (a record tagged both "cat food" and "dog food" is for both, not a dispute). A weaker source
+ * naming fewer species is consistent with it; a confirming source naming another species is noted
+ * (`alsoNamed`), so that species is never told the product is not for it. Two sources at the strongest
+ * basis that name different species dispute it.
  */
 export function speciesEvidence(claims: SpeciesClaim[], adequacy?: AdequacyStatement | null): SpeciesEvidence {
   const named = [
-    ...(adequacy && adequacy.species !== 'unknown' ? [{ set: setOf(adequacy.species), basis: 'adequacy_statement' as SpeciesBasis }] : []),
+    ...(adequacy && adequacy.species !== 'unknown' ? [{ set: setOf(adequacy.species), basis: 'adequacy_statement' as SpeciesBasis, source: 'adequacy statement' }] : []),
     ...claims
       // The pet database's generic parent categories ("en:dog-and-cat-food") say nothing about the species.
       .filter((c) => c.basis !== 'database_category' || !GENERIC_TAGS.test(stripLang(c.text)))
-      .map((c) => ({ set: setOf(detectSpecies(notSpecies(norm(c.text)))), basis: c.basis }))
+      .map((c, i) => ({ set: setOf(detectSpecies(notSpecies(norm(c.text)))), basis: c.basis, source: c.source ?? `${c.basis}#${i}` }))
       .filter((c) => c.set.length),
   ];
-  if (!named.length) return { set: [], confirmed: false, basis: 'none', disputed: false, note: 'Nothing found yet says whether it is for cats or dogs.' };
-  const basis = BASIS_ORDER.find((b) => named.some((c) => c.basis === b)) ?? 'retailer_listing';
-  const top = named.filter((c) => c.basis === basis);
+  if (!named.length) return { set: [], confirmed: false, basis: 'none', disputed: false, alsoNamed: [], note: 'Nothing found yet says whether it is for cats or dogs.' };
+  const rankOf = (b: SpeciesBasis) => BASIS_ORDER.indexOf(b);
+  // One entry per source: its strongest basis, and every species it names.
+  const bySource = new Map<string, { set: Species[]; basis: SpeciesBasis }>();
+  for (const c of named) {
+    const e = bySource.get(c.source);
+    if (!e) bySource.set(c.source, { set: [...c.set], basis: c.basis });
+    else {
+      e.set = (['cat', 'dog'] as Species[]).filter((sp) => e.set.includes(sp) || c.set.includes(sp));
+      if (rankOf(c.basis) < rankOf(e.basis)) e.basis = c.basis;
+    }
+  }
+  const sources = [...bySource.values()];
+  const basis = BASIS_ORDER.find((b) => sources.some((c) => c.basis === b)) ?? 'retailer_listing';
+  const top = sources.filter((c) => c.basis === basis);
   const set = (['cat', 'dog'] as Species[]).filter((sp) => top.some((c) => c.set.includes(sp)));
   // Disputed: at the strongest basis, one source names only cats and another only dogs.
   const disputed = top.some((a) => top.some((b) => !a.set.some((x) => b.set.includes(x))));
-  const others = named.filter((c) => c.basis !== basis && CONFIRMING.has(c.basis) && c.set.some((x) => !set.includes(x)));
+  const others = sources.filter((c) => c.basis !== basis && CONFIRMING.has(c.basis) && c.set.some((x) => !set.includes(x)));
+  const alsoNamed = disputed ? [] : (['cat', 'dog'] as Species[]).filter((sp) => !set.includes(sp) && others.some((c) => c.set.includes(sp)));
   const say = (s: Species[]) => (s.length === 2 ? 'cats and dogs' : `${s[0]}s`);
   const note = disputed
     ? `Sources disagree on who it is for (${top.map((c) => say(c.set)).join(' vs ')}); a photo of the package settles it.`
     : `For ${say(set)}, according to ${BASIS_WORDS[basis]}${others.length ? ` (${BASIS_WORDS[others[0].basis]} says ${say(others[0].set)})` : ''}.`;
-  return { set: disputed ? [] : set, confirmed: !disputed && CONFIRMING.has(basis), basis, disputed, note };
+  return { set: disputed ? [] : set, confirmed: !disputed && CONFIRMING.has(basis), basis, disputed, alsoNamed, note };
 }
 
 const norm = (s: string) =>
@@ -95,6 +112,10 @@ const NON_FOOD = /\b(litter|toy|toys|collar|leash|harness|bowl|bed|scratcher|car
 
 const SUPPLEMENT =
   /\b(supplements?|multivitamins?|vitamins?|probiotics?|prebiotics?|glucosamine|chondroitin|joint (support|health|care|chews?)|hip (and|&) joint|fish oil|salmon oil|krill oil|pollock oil|calming (chews?|aid|supplement)|digestive (aid|support|chews?)|immune (support|chews?)|skin (and|&) coat (chews?|supplement|oil)|urinary (support|health) chews?|l lysine|lysine)\b/;
+// A product named a supplement or multivitamin (or filed as one): only this outranks a complete-and-balanced statement.
+const SUPPLEMENT_NAME = /\b(supplements?|multivitamins?|nutraceuticals?)\b/;
+// "… Formula with Probiotics", "Chicken Recipe with Fish Oil": an added ingredient, not what the product is.
+const withAdded = (t: string) => t.replace(/\b(with|plus|added|enriched with|fortified with|contains)\b[^|,;()]{0,60}/g, ' ');
 const TREAT =
   /\b(treats?|snacks?|dental (chews?|sticks?)|chews?|biscuits?|jerky|cookies|bully stick|rawhide|lickable|puree tubes?|creamy treats?|training bites|crunchies|nibbles)\b/;
 // Named as a topper or complementary feed. "Broth" and "gravy" are textures, not a feeding purpose.
@@ -159,8 +180,11 @@ function speciesFrom(text: string, adequacy?: AdequacyStatement | null): Product
   return fromAdequacy;
 }
 
-// "Hot dog" and "corn dog" are foods for people, not dog products.
-const notSpecies = (t: string) => t.replace(/\b(hot|corn) ?dogs?\b/g, ' ');
+// "Hot dog", "corn dog", "hush puppies" and "langues de chat" are foods for people, not dog or cat products.
+const notSpecies = (t: string) => t.replace(/\b(hot|corn|chili|chilli|chile|salty) ?dogs?\b|\bhush ?pupp(y|ies)\b|\blangues? de chats?\b|\bcat ?s claw\b|\bcat'?s claw\b|\bdog ?wood\b|\bcat ?nip tea\b/g, ' ');
+// A record filed only under foods for people (biscuits, snacks) names a species only with pet context.
+const PET_CONTEXT =
+  /\b(for|pour|fur|para|per|voor) (my |your |the |all |adult |senior |small |large |indoor )?(dogs?|cats?|pupp(y|ies)|kittens?|chiens?|chats?|hunde?n?|katzen|perros?|gatos?|cani|gatti|honden|katten)\b|\b(dogs?|cats?|pupp(y|ies)|kittens?|canine|feline) (food|foods|treats?|chews?|snacks?|biscuits?|supplements?|kibble|dinner|meals?|formula|recipe)\b|\b(croquettes|patee|friandises|nourriture|aliment) (pour )?(chiens?|chats?)\b|\b(adult|senior|indoor|mature|junior) (cats?|dogs?)\b|\b(cats?|dogs?) (pouches|cans?|wet|dry|jelly|gravy|pate|chunks)\b/;
 const isPetTag = (tag: string) => {
   const t = stripLang(tag);
   return GENERIC_TAGS.test(t) || PET_TAG.test(notSpecies(t.replace(/-/g, ' ')).trim().replace(/\s+/g, '-'));
@@ -172,7 +196,9 @@ export function classifyScope(input: ScopeInput): ScopeResult {
   const all = `${tags} | ${texts}`;
   const signals: string[] = [];
   if (input.recordType) signals.push(`record-type:${input.recordType}`); // recorded as provenance; not used to decide
-  const evidence = input.speciesClaims ? speciesEvidence(input.speciesClaims, input.adequacy) : undefined;
+  const humanRecord = input.categoriesTags.length > 0 && !input.categoriesTags.some(isPetTag);
+  const claims = humanRecord ? input.speciesClaims?.filter((c) => c.basis !== 'database_name' || PET_CONTEXT.test(norm(c.text))) : input.speciesClaims;
+  const evidence = claims ? speciesEvidence(claims, input.adequacy) : undefined;
   const species = evidence ? speciesOfSet(evidence.set) : speciesFrom(all, input.adequacy);
   // Disputed sources are unresolved, never merged into "cats and dogs".
   const isPet = species !== 'unknown' || !!evidence?.disputed;
@@ -238,8 +264,10 @@ export function classifyScope(input: ScopeInput): ScopeResult {
   let category: ProductCategory = 'unknown';
   let categoryBasis: CategoryBasis = 'none';
   const adequacyType = input.adequacy?.type;
-  // A product named a supplement is one, whatever else its label says (supplements are their own category).
-  if (SUPPLEMENT.test(all) && adequacyType !== 'intermittent') {
+  // A product named a supplement is one (supplements are their own category); a food "with probiotics" or
+  // "with glucosamine" is not, and against a complete-and-balanced statement only the word supplement counts.
+  const supplementNamed = adequacyType === 'complete' ? SUPPLEMENT_NAME.test(all) : SUPPLEMENT.test(withAdded(all));
+  if (supplementNamed && adequacyType !== 'intermittent') {
     category = 'supplement';
     categoryBasis = 'feeding_purpose_name';
     signals.push('category:supplement-terms');
@@ -249,7 +277,7 @@ export function classifyScope(input: ScopeInput): ScopeResult {
     signals.push('category:adequacy-complete');
   } else if (adequacyType === 'intermittent') {
     // "As with all treats, give as part of a balanced diet": the statement itself may name a treat.
-    category = SUPPLEMENT.test(texts) ? 'supplement' : TREAT.test(all) || TREAT.test(norm(input.adequacy?.text ?? '')) ? 'treat' : 'complementary';
+    category = SUPPLEMENT.test(withAdded(texts)) ? 'supplement' : TREAT.test(all) || TREAT.test(norm(input.adequacy?.text ?? '')) ? 'treat' : 'complementary';
     categoryBasis = 'adequacy_statement';
     signals.push('category:adequacy-intermittent');
   } else if (TREAT.test(all)) {

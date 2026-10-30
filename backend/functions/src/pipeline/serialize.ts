@@ -19,6 +19,8 @@ export interface JobInfo {
   traceId: string;
   runId: string; // this run only (a refresh shares the scan's trace id)
   startedAt: Date;
+  /** Wall-clock start (ms), for the function's time limit (startedAt follows the job's clock, which tests fix). */
+  clockStart?: number;
   productCache: 'hit' | 'miss' | 'stale_used' | 'none';
   recallCache: 'hit' | 'miss' | 'skipped';
   explanationsCached: number;

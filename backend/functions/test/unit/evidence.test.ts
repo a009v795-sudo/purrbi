@@ -448,9 +448,13 @@ describe('manufacturer research', () => {
   it('takes who it is for only from a page proven to be this product (barcode or same recipe), never from brand and name alone', async () => {
     // Real case 099482480882: a brand sells cat and dog recipes under the same name.
     stub(answer());
-    const nameOnly = await run({ knownSpecies: 'unknown' });
+    const nameOnly = await run({ knownSpecies: 'unknown', knownName: 'PURINA ONE® Stérilisé Croquettes au Saumon' });
     expect(nameOnly.facts).toBeNull();
     expect(nameOnly.discarded.join(' ')).toMatch(/matches only by brand and name .* it is not yet known whether this product is for cats or dogs/);
+    // The answer's own name for the page is not what the page is checked against (it would match any page it chose).
+    const noName = await run({ knownSpecies: 'unknown' });
+    expect(noName.facts).toBeNull();
+    expect(noName.discarded[0]).toBe('barcode search: the cited page does not show this product’s barcode or its brand and name (brand "Purina" found, no product name known to compare)');
     const sameRecipe = await run({ knownSpecies: 'unknown', knownIngredients: ['Saumon (17%)', 'protéines de volaille déshydratées', 'blé', 'maïs'] });
     expect(sameRecipe.facts).toBeNull(); // four ingredients compared is too few to call it the same recipe
     const page5 = PAGE.replace('ma&iuml;s</p>', 'ma&iuml;s, graisses animales</p>');
@@ -466,7 +470,11 @@ describe('manufacturer research', () => {
     const r = await run();
     expect(r.facts).toBeNull();
     // The barcode search and then the search by brand and name each found only this page.
-    expect(r.discarded).toEqual(['barcode search', 'name search'].map((a) => `${a}: the cited page does not show this product’s barcode or its brand and name (brand "Purina" found, name "Purina Gourmet Gold Mousse au Thon" not found)`));
+    expect(r.discarded).toEqual(['barcode search', 'name search'].map((a) => `${a}: the cited page does not show this product’s barcode or its brand and name (brand "Purina" found, no product name known to compare)`));
+    // With the database's name for the product, the page must show that name in its heading.
+    const known = await run({ knownName: 'Purina Gourmet Gold Mousse au Thon' });
+    expect(known.facts).toBeNull();
+    expect(known.discarded[0]).toBe('barcode search: the cited page does not show this product’s barcode or its brand and name (brand "Purina" found, name "Purina Gourmet Gold Mousse au Thon" not in the product’s heading)');
   });
 });
 

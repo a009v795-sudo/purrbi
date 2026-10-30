@@ -15,6 +15,8 @@ const EU_COMPLETE = /\b(aliment complet|alleinfutter(mittel)?|(alimento|pienso|m
 const EU_COMPLEMENTARY = /\b(aliment complementaire|erganzungsfutter(mittel)?|(alimento|pienso) complementario|(alimento|mangime) complementare|alimento complementar|aanvullend(e)? (dier)?voe(der|ding))\b/;
 const INTERMITTENT =
   /\b(intermittent|supplemental feeding|for supplemental|complementary (pet )?(food|feed)|complementary feedingstuff|not (a )?complete (and balanced )?(diet|food|meal)|not (a )?substitute for (a )?complete (pet )?(food|feed|diet)|as with all treats)\b/;
+// A negated claim says the product is not complete: "not formulated to meet …", "does not meet …".
+const NEGATED = /\b(not (formulated|intended|designed) to meet|(does|do) not meet|not complete and balanced|not nutritionally complete)\b/;
 const COMPLETE =
   /\b(complete and balanced|formulated to meet the nutritional levels|nutrient profiles?|nutritional levels established|animal feeding tests|feeding (trials?|protocols)|complete (pet |dry |wet )?(food|feed)|complete feedingstuff)\b/;
 // Life-stage words in the same languages.
@@ -26,8 +28,9 @@ const FEEDING_TRIAL = /\b(animal feeding tests|feeding (trials?|tests|protocols)
 const FORMULATION = /\b(formulated to meet|nutrient profiles?|nutritional levels established)\b/;
 
 // English plus the label languages most common in Open Pet Food Facts (fr, de, es, it, nl, pt).
-const DOG_WORDS = /\b(dogs?|canine|pupp(y|ies)|chiens?|chiots?|hunde?|welpen?|perros?|cachorros?|hond(en)?|cani)\b/;
-const CAT_WORDS = /\b(cats?|feline|kittens?|chats?|chatons?|katzen?|katzchen|gatos?|gatitos?|gatti|gatto|katten)\b/;
+// Words that are also common words in English (Italian "cane", Dutch "kat", Portuguese "cão") count only after "for".
+const DOG_WORDS = /\b(dogs?|canines?|pupp(y|ies)|chiens?|chiots?|hunde?|welpen?|perros?|cachorros?|hond(en)?|cani)\b|\b(per (il )?cane|para (o |os )?(cao|caes))\b/;
+const CAT_WORDS = /\b(cats?|felines?|kittens?|chats?|chatons?|katzen?|katzchen|gatos?|gatitos?|gatti|gatto|katten)\b|\bvoor (de )?kat\b/;
 
 export function detectSpecies(t: string): ProductSpecies {
   const dog = DOG_WORDS.test(t);
@@ -44,11 +47,12 @@ export function parseAdequacyStatement(raw: string | null | undefined): Adequacy
   const t = norm(text);
 
   let type: AdequacyStatement['type'] = 'unclear';
-  if (INTERMITTENT.test(t) || EU_COMPLEMENTARY.test(t)) type = 'intermittent';
+  if (INTERMITTENT.test(t) || EU_COMPLEMENTARY.test(t) || NEGATED.test(t)) type = 'intermittent';
   else if (COMPLETE.test(t) || EU_COMPLETE.test(t)) type = 'complete';
   // Marketing copy ("complete and balanced nutrition for everyday feeding") is not an adequacy statement:
-  // a real one names the species or the life stage, or the standard it was substantiated against.
-  if (type === 'complete' && detectSpecies(t) === 'unknown' && !ALL_STAGES.test(t) && !GROWTH.test(t) && !REPRODUCTION.test(t) && !ADULT.test(t) && !FORMULATION.test(t) && !FEEDING_TRIAL.test(t) && !/\b(aafco|fediaf)\b/.test(t)) type = 'unclear';
+  // a real one names the species or the life stage, or the standard it was substantiated against. An EU
+  // label's feed-type declaration ("Alimento completo para cães") is the regulated statement itself.
+  if (type === 'complete' && !EU_COMPLETE.test(t) && detectSpecies(t) === 'unknown' && !ALL_STAGES.test(t) && !GROWTH.test(t) && !REPRODUCTION.test(t) && !ADULT.test(t) && !FORMULATION.test(t) && !FEEDING_TRIAL.test(t) && !/\b(aafco|fediaf)\b/.test(t)) type = 'unclear';
 
   let method: AdequacyStatement['method'] = 'unknown';
   if (type === 'complete') {

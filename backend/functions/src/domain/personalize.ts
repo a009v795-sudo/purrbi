@@ -7,8 +7,16 @@ import { lifeStageLabel } from './adequacy';
 import { allergenLabel, matchAllergen } from './allergens';
 import { petLifeStage } from './lifeStage';
 import { describeCalories, findNutrient } from './nutrition';
+import { ingredientNotes } from './kb';
 import { productIngredients } from './score';
 import type { Finding, GeneralAssessment, PersonalAssessment, PersonalState, PetProfile, ProductFacts, RecallCheck, ScopeResult, TraceItem } from './types';
+
+const LANGUAGES: Record<string, string> = { fr: 'French', de: 'German', es: 'Spanish', it: 'Italian', nl: 'Dutch', pt: 'Portuguese', pl: 'Polish', sv: 'Swedish', da: 'Danish', fi: 'Finnish', cs: 'Czech', hu: 'Hungarian', ro: 'Romanian', ja: 'Japanese', zh: 'Chinese' };
+/** The ingredient list's language when it is not English: Purrbi matches allergens by English names, so "not on the list" can't be said of it. */
+export const foreignList = (facts: ProductFacts): string | null => {
+  const lang = (facts.ingredientsLanguage ?? '').toLowerCase().slice(0, 2);
+  return lang && lang !== 'en' ? (LANGUAGES[lang] ?? 'another language') : null;
+};
 
 const ORDER: PersonalState[] = ['alert', 'not_for_species', 'mismatch', 'incomplete', 'review', 'fits'];
 const worse = (a: PersonalState, b: PersonalState) => (ORDER.indexOf(a) <= ORDER.indexOf(b) ? a : b);
@@ -51,25 +59,45 @@ export function personalize(
   const productSpecies = scope.species;
   const ev = scope.speciesEvidence;
   const confirmed = ev ? ev.confirmed : true;
-  const basisText = ev?.basis === 'retailer_listing' ? 'a retailer’s listing' : ev?.basis === 'manufacturer_page' ? 'the manufacturer' : ev?.basis === 'adequacy_statement' ? 'the label’s feeding statement' : 'the product label';
+  const BASIS_TEXT: Record<string, [string, string]> = {
+    retailer_listing: ['a retailer’s listing', 'Retailer listing'],
+    manufacturer_page: ['the manufacturer', 'Manufacturer’s page'],
+    adequacy_statement: ['the label’s feeding statement', 'Feeding statement'],
+    database_category: ['the pet database’s record', 'Pet database record'],
+    database_name: ['the pet database’s record', 'Pet database record'],
+    label: ['the product label', 'Product label'],
+  };
+  const [basisText, basisLabel] = BASIS_TEXT[ev?.basis ?? 'label'] ?? BASIS_TEXT.label;
+  const alsoFor = ev?.alsoNamed ?? [];
   trace.push({ input: 'species', value: pet.species, rule: 'P-SPECIES', effect: `Compared with who the product is for (${productSpecies}${ev ? `, from ${ev.basis.replace(/_/g, ' ')}` : ''})` });
   if (productSpecies === 'unknown') {
     unresolved.push(ev?.disputed ? ev.note : 'We couldn’t confirm which species this product is for.');
     state = worse(state, 'incomplete');
   } else if (productSpecies !== 'cat_and_dog' && productSpecies !== pet.species) {
-    if (confirmed) {
+    if (confirmed && alsoFor.includes(pet.species)) {
+      // Sources disagree on whether it is also for this pet's species: not stated as a mismatch.
+      state = worse(state, 'review');
+      add('review', `${basisText[0].toUpperCase()}${basisText.slice(1)} says it is for ${productSpecies}s, but another source also lists it for ${pet.species}s; check the package before feeding it to ${name}.`, basisLabel, 'P-SPECIES');
+    } else if (confirmed) {
       state = worse(state, 'not_for_species');
-      add('alert', `This product is made for ${productSpecies}s (${basisText}), and ${name} is a ${pet.species}.`, 'Product label', 'P-SPECIES');
+      add('alert', `This product is made for ${productSpecies}s (${basisText}), and ${name} is a ${pet.species}.`, basisLabel, 'P-SPECIES');
     } else {
       state = worse(state, 'review');
       add('review', `Only ${basisText} says who it is for (${productSpecies}s); Purrbi couldn’t confirm whether it is also for ${pet.species}s.`, 'Retailer listing', 'P-SPECIES');
     }
   } else {
-    add('positive', productSpecies === 'cat_and_dog' ? `Made for cats and dogs (${basisText}).` : `Made for ${pet.species}s.`, confirmed ? 'Product label' : 'Retailer listing', 'P-SPECIES');
+    add('positive', productSpecies === 'cat_and_dog' ? `Made for cats and dogs (${basisText}).` : `Made for ${pet.species}s.`, basisLabel, 'P-SPECIES');
   }
 
   // P-HAZARD: an entry of Purrbi's reviewed list, judged for this pet's species (one finding per entry).
-  const flagged = general.ingredientNotes.filter((n) => n.status === 'concern' || n.status === 'caution');
+  // When who the product is for is unconfirmed and does not include this pet's species, the general notes
+  // (judged for the listed species) are complemented by the entries for this pet's own species.
+  const listed = productSpecies === 'cat_and_dog' ? ['cat', 'dog'] : productSpecies === 'unknown' ? ['cat', 'dog'] : [productSpecies];
+  const ownNotes = !confirmed && !listed.includes(pet.species) ? ingredientNotes(productIngredients(facts), [pet.species]).filter((n) => n.status === 'concern' || n.status === 'caution') : [];
+  const flagged = [
+    ...general.ingredientNotes.filter((n) => (n.status === 'concern' || n.status === 'caution') && !ownNotes.some((o) => (o.kbId ?? o.name) === (n.kbId ?? n.name))),
+    ...ownNotes,
+  ];
   for (const id of [...new Set(flagged.map((n) => n.kbId ?? n.name))]) {
     const group = flagged.filter((n) => (n.kbId ?? n.name) === id);
     const n = group[0];
@@ -149,6 +177,7 @@ export function personalize(
 
   // P-ALLERGEN / P-SENSITIVITY / P-AVOID
   const ingredients = productIngredients(facts);
+  const foreign = foreignList(facts);
   const absent: { label: string; rule: string }[] = [];
   const checkList = (status: PetProfile['allergiesStatus'], keys: string[] | undefined, field: string, rule: string, severity: 'mismatch' | 'review') => {
     if (status === 'not_sure') {
@@ -174,6 +203,11 @@ export function personalize(
       } else if (m.status === 'unknown') {
         state = worse(state, 'incomplete');
         unresolved.push(`The ingredient list isn’t available, so ${allergenLabel(key)} couldn’t be checked.`);
+      } else if (foreign) {
+        // Not found by its English name in a list written in another language: not checked, never "absent".
+        state = worse(state, 'incomplete');
+        unresolved.push(`The ingredient list is in ${foreign}, so Purrbi couldn’t check it for ${allergenLabel(key)}; compare the package with ${name}’s recorded ${rule === 'P-ALLERGEN' ? 'allergies' : 'sensitivities'}.`);
+        trace.push({ input: field, value: allergenLabel(key), rule, effect: `Not checked: the ingredient list is in ${foreign}` });
       } else {
         absent.push({ label: allergenLabel(key), rule });
       }
@@ -294,7 +328,10 @@ export function ingredientRelevance(pet: PetProfile | null, facts: ProductFacts,
       text: forSpecies.includes(pet.species) ? `A documented ${n.status} for ${pet.species}s like ${name}.` : `Documented for ${forSpecies.map((x) => `${x}s`).join(' and ')}, not for ${pet.species}s like ${name}.`,
     });
   }
-  const none = recorded.length
+  const foreign = foreignList(facts);
+  const none = recorded.length && foreign
+    ? `Not checked against ${name}’s recorded allergies or sensitivities: the ingredient list is in ${foreign}.`
+    : recorded.length
     ? `Doesn’t match ${name}’s recorded ${recorded.length === 1 ? allergenLabel(recorded[0].key) : `${recorded.slice(0, -1).map((r) => allergenLabel(r.key)).join(', ')} or ${allergenLabel(recorded[recorded.length - 1].key)}`} (labels don’t cover cross-contact).`
     : `No allergies or sensitivities are recorded for ${name}.`;
   for (const ing of ingredients) if (!out.has(ing.name)) out.set(ing.name, { flag: '', text: none });
