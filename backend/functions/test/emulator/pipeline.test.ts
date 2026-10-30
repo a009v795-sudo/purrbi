@@ -420,7 +420,7 @@ describe('path B: missing label information', () => {
     expect(s.status).toBe('complete');
     expect(s.missingInfo).toEqual([]); // no photo is asked for any more…
     expect(s.photoRequests).toEqual([]);
-    expect(s.missingForScore).toEqual(['guaranteed analysis (protein, fat, fiber)']); // …and what the score still needs is its own field
+    expect(s.missingForScore).toEqual(['nutritional adequacy ("complete and balanced") statement', 'guaranteed analysis (protein and fat)']); // …and what the score still needs is its own field
     expect(s.scoreAvailable).toBe(false);
   });
   it('treats an unknown barcode as "not found, add photos" — not as a failure', async () => {
@@ -681,7 +681,7 @@ describe('concise result: highlights and verdict', () => {
     const s = await read(ref);
     expect(s).toMatchObject({ verdictSource: 'rules', verdictStatus: 'ready' });
     expect(s.verdict).not.toMatch(/safest/);
-    expect(s.verdict).toMatch(/Purrbi could assess \d+ of 100 points’ worth of TEST FIXTURE Salmon Cat Treats’s label, a partial assessment/);
+    expect(s.verdict).toMatch(/^Purrbi scores TEST FIXTURE Salmon Cat Treats \d+\/100 \(\w+\)\. Good to know: /);
     expect(s.diagnosticNotes.join(' ')).toMatch(/Verdict \(mock\) not used: (length|claim Purrbi does not make)/);
   });
   it('keeps the rule-based verdict when the model is unavailable, and tries again next time', async () => {
@@ -1021,31 +1021,24 @@ describe('fallbacks before asking the owner for photos', () => {
     expect(product.facts.guaranteedAnalysis.source.readerVersion).toBe(LABEL_EXTRACTION_VERSION);
     expect(product.facts.adequacy.source.readerVersion).toBe('label-extract-2.1.0'); // what 2.1.0 read is kept
   });
-  it('after a new research method, searches again only while something is missing, keeping what the earlier method found', async () => {
+  it('results of an earlier research method are read again (they could take who a product is for from a retailer’s title); a current one is not', async () => {
     const ref = await newScan('u1', BC.webOnly);
     await processScan(deps({ researchEnabled: true }), 'u1', ref.id);
     expect(calls.research).toBe(1);
     const gtin = (await read(ref)).gtin;
-    const v16 = <T extends Record<string, unknown>>(x: T) => ({ ...x, readerVersion: 'research-1.6.0' });
+    const v17 = <T extends Record<string, unknown>>(x: T) => ({ ...x, readerVersion: 'research-1.7.0' });
     const facts = (await db.doc(`products/${gtin}`).get()).data()!.facts;
-    facts.sources = facts.sources.map((x: Record<string, unknown>) => (x.sourceType === 'manufacturer' ? v16(x) : x));
-    for (const k of ['ingredientsText', 'ingredients', 'guaranteedAnalysis', 'adequacy']) facts[k].source = v16(facts[k].source);
+    facts.sources = facts.sources.map((x: Record<string, unknown>) => (x.sourceType === 'manufacturer' ? v17(x) : x));
+    for (const k of ['ingredientsText', 'ingredients', 'guaranteedAnalysis', 'adequacy']) facts[k].source = v17(facts[k].source);
     await db.doc(`products/${gtin}`).update({ facts });
-    await db.doc(`productMeta/${gtin}`).update({ 'enrichment.research.version': 'research-1.6.0' });
-    // Everything found by 1.6.0, nothing missing: no new search.
-    const complete = await newScan('u1', BC.webOnly);
-    await processScan(deps({ researchEnabled: true }), 'u1', complete.id);
-    expect(calls.research).toBe(1);
-    expect((await read(complete)).status).toBe('complete');
-    // 1.6.0 found one row of the analysis: the new method searches once more, and its fuller analysis is used.
-    facts.guaranteedAnalysis.value = facts.guaranteedAnalysis.value.slice(0, 1);
-    await db.doc(`products/${gtin}`).update({ facts });
-    const partial = await newScan('u1', BC.webOnly);
-    await processScan(deps({ researchEnabled: true }), 'u1', partial.id);
+    await db.doc(`productMeta/${gtin}`).update({ 'enrichment.research.version': 'research-1.7.0' });
+    const again = await newScan('u1', BC.webOnly);
+    await processScan(deps({ researchEnabled: true }), 'u1', again.id);
     expect(calls.research).toBe(2);
+    expect((await read(again)).diagnosticNotes.join(' ')).toMatch(/Dropped .* under older rules/);
     const product = (await db.doc(`products/${gtin}`).get()).data()!;
-    expect(product.facts.guaranteedAnalysis.value).toHaveLength(4);
-    expect(product.facts.adequacy.source.readerVersion).toBe('research-1.6.0'); // what 1.6.0 found is kept
+    expect(product.facts.guaranteedAnalysis.source.readerVersion).toBe(RESEARCH_VERSION);
+    expect(product.facts.adequacy.source.readerVersion).toBe(RESEARCH_VERSION);
     const after = await newScan('u1', BC.webOnly);
     await processScan(deps({ researchEnabled: true }), 'u1', after.id);
     expect(calls.research).toBe(2); // nothing missing and the method is current
