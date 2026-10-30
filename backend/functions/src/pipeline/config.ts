@@ -34,6 +34,8 @@ export interface RuntimeConfig {
   /** Development only: barcodes whose first attempt fails like a source outage, to check the owner
    *  retry path on a deployed backend. Empty unless deploy-config.json sets RETRY_TEST_BARCODES. */
   retryTestBarcodes?: string[];
+  /** The deployed commit (set by the deploy workflow), recorded on every job with the provider configuration. */
+  backendRevision?: string;
 }
 
 export const DEFAULT_LIMITS: Limits = {

@@ -283,3 +283,95 @@ describe('a page that could not be read is told apart from pages read and found 
     expect(blockedAndWeak).toMatchObject({ status: 'source_unavailable', detail: 'A page the search found couldn’t be read, and the others it could read didn’t show this product; Purrbi tries again later.' });
   });
 });
+
+// Tests A/B/C of 2026-10-30 (099482481087, 076344886570, 099482517243), first barcode-only lookups through the app:
+// the barcode database answered HTTP 429 (its daily allowance, shared by Cloud Functions' addresses) and the one
+// barcode search found nothing (A, C) or only a distributor's price list that was rejected (B, traces a0d081e1-d1b
+// and f9274421-5dd). The price list itself could not be read from the test sandbox (its network policy blocks the
+// host), so the row below is synthetic, laid out as such lists print a UPC between other numbers.
+describe('barcode-only research (tests A/B/C, 2026-10-30)', () => {
+  const GRAVIES = '00076344886570';
+  it('finds a barcode printed between other numbers, never inside a longer number', async () => {
+    const { textContainsGtin } = await import('../../src/domain/barcode');
+    expect(textContainsGtin('Item UPC Description Pack Price 89133 076344886570 WEL HI GRVY CHKN TRKY 24 3OZ 1.79', GRAVIES)).toBe(true);
+    expect(textContainsGtin('UPC: 076344886570 24 x 3 oz', GRAVIES)).toBe(true);
+    expect(textContainsGtin('UPC 0 76344 88657 0', GRAVIES)).toBe(true);
+    expect(textContainsGtin('EAN 0076344886570', GRAVIES)).toBe(true);
+    expect(textContainsGtin('UPC 076344886571 24', GRAVIES)).toBe(false); // the next product's barcode
+    expect(textContainsGtin('Order 1076344886570 24', GRAVIES)).toBe(false); // part of a longer number
+    expect(textContainsGtin('76344 88657', GRAVIES)).toBe(false); // without its check digit
+  });
+  it('searches the barcode in the forms pages print it', async () => {
+    const { printedForms } = await import('../../src/domain/barcode');
+    expect(printedForms(GRAVIES)).toEqual(['076344886570', '0076344886570', '0 76344 88657 0']);
+    expect(printedForms('04006381333931')).toEqual(['4006381333931']);
+    const bodies: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: { body?: string }) => {
+      bodies.push(String(init?.body ?? ''));
+      return openAi({ ...modelAnswer({}), found: false });
+    }));
+    const r = await researchProduct({ apiKey: 'k', model: 'm', gtin14: '00099482481087', barcode: '099482481087', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-10-30T00:00:00Z') });
+    expect(r.facts).toBeNull();
+    expect(bodies).toHaveLength(1); // nothing named: no second search
+    expect(bodies[0]).toContain('Pages print it as \\"099482481087\\", \\"0099482481087\\", \\"0 99482 48108 7\\"');
+    expect(bodies[0]).toContain('A catalogue, price list or search-results page is not the product’s page');
+  });
+  it('B: a price list showing the barcode ends no search; the name its answer gave is searched for, and only a page showing the barcode is used', async () => {
+    const priceList = '<html><head><title>2024 North Complete Price List</title></head><body><p>Item UPC Description Pack Size Price</p><p>89133 076344886570 WEL HI GRVY CHKN TRKY 24 3OZ 1.79</p><p>89134 076344886587 WEL HI MRSL CHKN TRKY 24 3OZ 1.79</p></body></html>';
+    const maker = `<html><head><title>Complete Health Healthy Indulgence Gravies Chicken &amp; Turkey</title></head><body><h1>Wellness Complete Health Healthy Indulgence Gravies Chicken &amp; Turkey</h1>
+      <img alt="Chicken Broth, Water Sufficient For Processing, Chicken, Potato Starch, Turkey, Eggs, Chicken Liver, Carrots, Natural Flavor, Salt, Guar Gum, Tricalcium Phosphate, Potassium Chloride, Taurine">
+      <p>Guaranteed Analysis</p><p>Crude Protein (min.) 4% Crude Fat (min.) 2% Crude Fiber (max.) 1% Moisture (max.) 85% Ash (max.) 2.5%</p><div class="ps-widget" ps-sku=" 076344886570 "></div><p>Available Sizes: 3 Ounce Retort Pouch</p></body></html>`;
+    const answers = [
+      modelAnswer({ product_name: 'Wellness Healthy Indulgence Gravies Chicken & Turkey', brand: 'Wellness', intended_for: 'cats', source_urls: ['https://www.admc.us/wp-content/uploads/2022/02/price-list.htm'] }),
+      modelAnswer({ product_name: 'Complete Health Healthy Indulgence Gravies Chicken & Turkey', brand: 'Wellness', intended_for: 'cats', source_urls: ['https://www.wellnesspetfood.com/product-catalog/healthy-indulgence-gravies-chicken-turkey/'] }),
+    ];
+    const bodies: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: { body?: string }) => {
+      if (url.startsWith('https://api.openai.com/')) {
+        bodies.push(String(init?.body ?? ''));
+        return openAi(answers[bodies.length - 1]);
+      }
+      return new Response(url.includes('admc') ? priceList : maker, { status: 200 });
+    }));
+    const r = await researchProduct({ apiKey: 'k', model: 'm', gtin14: GRAVIES, barcode: '076344886570', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-10-30T00:00:00Z') });
+    expect(r.calls).toBe(2);
+    expect(r.discarded).toContain('barcode search: admc.us shows this barcode but nothing else about the product (no name, ingredients, analysis or feeding statement), so the search went on');
+    expect(bodies[1]).toContain('Search by product identity: brand \\"Wellness\\", product \\"Wellness Healthy Indulgence Gravies Chicken & Turkey\\" (as an earlier search answer named it; unverified).');
+    expect(bodies[1]).toContain('use only a page that shows this barcode');
+    expect(r.sources[0]).toMatchObject({ sourceName: 'wellnesspetfood.com', sourceType: 'manufacturer', matchConfidence: 'exact_barcode' });
+    expect(r.facts?.ingredients?.value.slice(0, 3)).toEqual(['Chicken Broth', 'Water Sufficient For Processing', 'Chicken']);
+    expect(r.facts?.guaranteedAnalysis?.value.find((g) => g.nutrient === 'crude_protein')?.value).toBe(4);
+    expect(r.facts?.productName?.value).toBe('Complete Health Healthy Indulgence Gravies Chicken & Turkey');
+    // The page's heading doesn't say who it is for, so the answer's "cats" is not taken from it.
+    expect((r.facts?.classificationSignals ?? []).map((c) => c.text)).not.toContain('intended for cats');
+  });
+  it('a page found by the answer’s name that does not show the barcode is not used (the name is not trusted)', async () => {
+    const lookalike = '<html><head><title>Wellness Healthy Indulgence Gravies Chicken &amp; Turkey</title></head><body><h1>Wellness Healthy Indulgence Gravies Chicken &amp; Turkey</h1><p>Ingredients Chicken Broth, Chicken, Turkey</p></body></html>';
+    let n = 0;
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.startsWith('https://api.openai.com/')) {
+        n++;
+        return openAi(modelAnswer({ product_name: 'Wellness Healthy Indulgence Gravies Chicken & Turkey', brand: 'Wellness', intended_for: 'cats', ingredients_verbatim: 'Chicken Broth, Chicken, Turkey', source_urls: ['https://shop.example/gravies'] }));
+      }
+      return new Response(lookalike, { status: 200 });
+    }));
+    const r = await researchProduct({ apiKey: 'k', model: 'm', gtin14: GRAVIES, barcode: '076344886570', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-10-30T00:00:00Z') });
+    expect(n).toBe(2); // the barcode search, then one search by the answer's name; no more
+    expect(r.facts).toBeNull();
+    expect(r.discarded.filter((d) => d.includes('does not show this product’s barcode'))).toHaveLength(2);
+  });
+});
+
+describe('barcode database allowance (2026-10-30: HTTP 429 on every scan, X-RateLimit-Limit 100 a day)', () => {
+  it('says when the used-up allowance resets', async () => {
+    const { allowanceResetAt, lookupBarcodeHint } = await import('../../src/sources/barcodeLookup');
+    const now = new Date('2026-10-30T15:00:00Z');
+    expect(allowanceResetAt(new Headers({ 'x-ratelimit-reset': String(Date.parse('2026-10-31T00:28:00Z') / 1000) }), now).toISOString()).toBe('2026-10-31T00:28:00.000Z');
+    expect(allowanceResetAt(new Headers({ 'x-ratelimit-reset': 'soon' }), now).toISOString()).toBe('2026-10-30T16:00:00.000Z'); // unreadable: an hour
+    expect(allowanceResetAt(new Headers({ 'x-ratelimit-reset': String(Date.parse('2026-11-05T00:00:00Z') / 1000) }), now).toISOString()).toBe('2026-10-30T16:00:00.000Z'); // over a day ahead: an hour
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{"code":"TOO_FAST","message":"Rate limit exceeded"}', { status: 429, headers: { 'x-ratelimit-limit': '100', 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(Date.parse('2026-10-31T00:28:00Z') / 1000) } })));
+    const err = await lookupBarcodeHint('00099482481087', 'test', now).catch((e) => e);
+    expect(err).toMatchObject({ kind: 'rate_limited', status: 429 });
+    expect(err.retryAt.toISOString()).toBe('2026-10-31T00:28:00.000Z');
+  });
+});

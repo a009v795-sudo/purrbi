@@ -84,13 +84,41 @@ export function sameGtin(a: string, b: string): boolean {
   return da.padStart(14, '0') === db.padStart(14, '0');
 }
 
-/** Finds a GTIN inside free text such as "UPC 0 12345 67890 5" (spaces/dashes allowed). */
+/**
+ * Finds a GTIN inside free text such as "UPC 0 12345 67890 5" (spaces/dashes allowed): one number, or
+ * consecutive groups as barcodes are printed, also when other numbers stand next to it with only spaces
+ * between (a price list's or specification table's item number, pack count or price: "89133 076344886570
+ * 24 1.79"). Never part of a longer number.
+ */
 export function textContainsGtin(text: string, gtin14: string): boolean {
   const core = gtin14.replace(/^0+/, '');
   if (core.length < 7) return false;
-  const runs = text.match(/\d[\d\s-]{6,20}\d/g) ?? [];
+  const runs = text.match(/\d[\d\s-]*\d/g) ?? [];
   return runs.some((run) => {
-    const digits = run.replace(/[\s-]/g, '');
-    return digits.replace(/^0+/, '') === core;
+    const groups = run.split(/[\s-]+/).filter(Boolean);
+    for (let i = 0; i < groups.length; i++) {
+      let digits = '';
+      for (let j = i; j < groups.length; j++) {
+        digits += groups[j];
+        const significant = digits.replace(/^0+/, '');
+        if (significant === core) return true;
+        if (significant.length >= core.length) break;
+      }
+    }
+    return false;
   });
+}
+
+/**
+ * How pages print this GTIN, for search words: a UPC-A as its 12 digits, its 13-digit EAN form and spaced as
+ * under the bars ("0 76344 88657 0"); an EAN-13 or EAN-8 as itself. Checks on a page ignore spacing anyway.
+ */
+export function printedForms(gtin14: string): string[] {
+  const g = gtin14.replace(/\D/g, '').padStart(14, '0');
+  if (g.startsWith('000000')) return [g.slice(6), g.slice(2)];
+  if (g.startsWith('00')) {
+    const upc = g.slice(2);
+    return [upc, `0${upc}`, `${upc[0]} ${upc.slice(1, 6)} ${upc.slice(6, 11)} ${upc[11]}`];
+  }
+  return [g.startsWith('0') ? g.slice(1) : g];
 }

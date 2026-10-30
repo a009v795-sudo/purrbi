@@ -41,6 +41,8 @@ const USER_AGENT = defineString('SOURCE_USER_AGENT', { default: 'Purrbi/0.1 (dev
 const STORAGE_BUCKET = defineString('STORAGE_BUCKET', { default: '' });
 // Development only: comma-separated barcodes whose first attempt fails like a source outage (retry test).
 const RETRY_TEST_BARCODES = defineString('RETRY_TEST_BARCODES', { default: '' });
+// The deployed commit, written into functions/.env.<project> by the deploy workflow ("local" elsewhere).
+const BACKEND_REVISION = defineString('BACKEND_REVISION', { default: 'local' });
 const storageBucket = () => getStorage().bucket(STORAGE_BUCKET.value() || undefined);
 
 function config(): RuntimeConfig {
@@ -62,6 +64,7 @@ function config(): RuntimeConfig {
     recallFreshHours: 24, // openFDA enforcement data is updated weekly
     limits: DEFAULT_LIMITS,
     retryTestBarcodes: RETRY_TEST_BARCODES.value().split(',').map((s) => s.trim()).filter(Boolean),
+    backendRevision: BACKEND_REVISION.value(),
   };
 }
 

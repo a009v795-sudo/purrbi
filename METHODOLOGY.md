@@ -1,7 +1,7 @@
 # Purrbi assessment methodology
 
 Version: `assessment-3.0.0` overall, made of `purrbi-score-3.0.0` (score), `scope-3.0.0` (classification), `verdict-2.1.0` (verdict),
-`kb-2026-10-28-draft` (ingredient notes), `label-extract-2.3.0` (label reader), `research-2.1.0` (web research), `explain-2.0.0` (claim-checked explanations).
+`kb-2026-10-28-draft` (ingredient notes), `label-extract-2.3.0` (label reader), `research-2.2.0` (web research), `explain-2.0.0` (claim-checked explanations).
 A saved result records `assessmentVersion` and its parts (`scoreVersion`, `kbVersion`, `scopeVersion`); the shared product record its
 classification version; each fact read from a label, page or document its reader's version; each explanation its own. When the app opens
 a result saved under an older `assessmentVersion` it asks for a re-check (section 10), so a known bad classification is corrected without
@@ -283,10 +283,18 @@ A result that uses the owner's photo before it is tied to the barcode says "Labe
 
 ## 10. Retrieval before photos, and keeping results current
 
-**Research `research-2.1.0`** (`sources/research.ts`, `pageEvidence.ts`). When the pet databases lack something, research looks for it before
+**Research `research-2.2.0`** (`sources/research.ts`, `pageEvidence.ts`). When the pet databases lack something, research looks for it before
 any photo is asked for:
 - With no name or brand from any database, a public barcode database (UPCitemdb's free lookup, `BARCODE_LOOKUP_ENABLED`) is asked for the
   product's title, only to tell research what to search for; nothing from it is shown or used as a fact. Its failure is recorded as such.
+  Its free allowance (100 requests a day) is shared by every Cloud Functions instance: after HTTP 429 it is not asked again until the reset
+  time it gives, so the same failing request is not repeated on every scan.
+- The barcode search names the forms pages print the barcode in (a UPC-A as its 12 digits, its 13-digit EAN form, and spaced as under the
+  bars, "0 76344 88657 0"). A catalogue, price list or search-results page is not the product's page: one that shows the barcode but nothing
+  else about the product ends no search. With no name or brand from any source, the brand and name the barcode search's answer gave are
+  searched for once more; they are search words only, so a page found that way is used only when it shows the barcode itself. A barcode on a
+  page is found as its own number, also when other numbers stand beside it with only spaces between (a table's item number, pack count or
+  price), never as part of a longer number.
 - Purrbi fetches each candidate page itself and reads its visible text, **image alternative text** (manufacturers publish ingredient lists
   as an image's alt text), barcodes in its **markup** (a shop widget's `ps-sku`, `data-upc`, JSON-LD `gtin`) or its **Shopify product
   record**, and **linked nutrition documents** (a "Nutrient Profiles" PDF: the AAFCO claim and calories per package).
@@ -300,7 +308,7 @@ any photo is asked for:
   (by barcode or recipe) when that heading names the brand. A web page's sentence that names no species, life stage or standard ("complete
   and balanced nutrition … for everyday feeding") is not its feeding statement, so the manufacturer's statement or nutrition document is still
   sought; a clear statement from any source replaces an unclear one.
-- When the barcode database (search words for research) does not answer and nothing is found, that is an outage: research is tried again
+- When the barcode database (search words for research) is not available and nothing is found, that is an outage: research is tried again
   after 12 hours and the result says so. After a retailer's page,
   the manufacturer's own page is sought for what is missing; it may be matched by brand and the product name with catalogue abbreviations
   written out ("Dog Trt Frz Dr Wld Salmn" = "freeze dried wild salmon … treat"). From such a name-level match only what does not vary between

@@ -38,6 +38,8 @@ import { dropStaleImageReads, enrichmentFacts, fillMissing, labelToFacts, missin
 import { explanationFields, highlightFields, ingredientRowFields, jobFields, resultFields, type JobInfo } from './serialize';
 import {
   consumeAiBudget,
+  pauseProvider,
+  providerPausedUntil,
   consumeQuota,
   FieldValue,
   QuotaError,
@@ -241,7 +243,7 @@ async function failScan(deps: Deps, uid: string, scanId: string, job: JobInfo, e
       errorRetryable: e.retryable,
       progress: 100,
       updatedAt: Timestamp.fromDate(deps.now()),
-      ...jobFields(job, calls, deps.now()),
+      ...jobFields(job, calls, deps.now(), deps.config),
     });
   } catch (writeErr) {
     deps.log.error('could not record scan failure', { traceId: job.traceId, uid, scanId, error: (writeErr as Error).message });
@@ -545,12 +547,23 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       let hint: BarcodeHint | null = null;
       let hintFailed = false;
       if (!facts.productName && !facts.brand && !keptIdentity.productName && !keptIdentity.brand && config.barcodeLookupEnabled !== false && deps.sources.barcodeHint) {
-        try {
-          hint = await deps.sources.barcodeHint(gtin, config.userAgent);
-          if (hint) job.evidenceNotes.push(`${hint.source} lists this barcode as “${hint.title}”${hint.brand ? ` (${hint.brand})` : ''}; Purrbi searched for that product and used only what a page proved.`);
-        } catch (err) {
+        // A used-up daily allowance is not asked again before it resets (the same request would fail again).
+        const paused = await providerPausedUntil(db, 'upcitemdb', now);
+        if (paused) {
           hintFailed = true;
-          job.diagnosticNotes.push(`Barcode database not checked: ${err instanceof SourceError ? (err.kind === 'rate_limited' ? 'it is limiting requests' : err.kind === 'timeout' ? 'it didn’t answer in time' : `it failed (${err.status ? `HTTP ${err.status}` : err.kind})`) : errorDetail((err as Error).message)}`);
+          job.diagnosticNotes.push(`Barcode database not checked: its daily allowance is used up until ${paused.toISOString().slice(11, 16)} UTC, so it isn’t asked before then`);
+        } else {
+          try {
+            hint = await deps.sources.barcodeHint(gtin, config.userAgent);
+            if (hint) job.evidenceNotes.push(`${hint.source} lists this barcode as “${hint.title}”${hint.brand ? ` (${hint.brand})` : ''}; Purrbi searched for that product and used only what a page proved.`);
+          } catch (err) {
+            hintFailed = true;
+            const limited = err instanceof SourceError && err.kind === 'rate_limited';
+            if (limited && err.retryAt) await pauseProvider(db, 'upcitemdb', err.retryAt, now).catch(() => undefined);
+            job.diagnosticNotes.push(
+              `Barcode database not checked: ${err instanceof SourceError ? (limited ? `it is limiting requests${err.retryAt ? ` until ${err.retryAt.toISOString().slice(11, 16)} UTC` : ''}` : err.kind === 'timeout' ? 'it didn’t answer in time' : `it failed (${err.status ? `HTTP ${err.status}` : err.kind})`) : errorDetail((err as Error).message)}`,
+            );
+          }
         }
       }
       const r = await deps.sources.research({ apiKey: config.openaiApiKey(), model: config.researchModel, gtin14: gtin, barcode: o.barcode.expanded ?? o.barcode.digits, knownName: facts.productName?.value ?? keptIdentity.productName?.value, knownBrand: facts.brand?.value ?? keptIdentity.brand?.value, knownIngredients: facts.ingredients?.value, knownSpecies: scope.species, hint, userAgent: config.userAgent, now, beforeAiCall: () => consumeAiBudget(db, config.limits, now), deadline: (job.clockStart ?? Date.now()) + RESEARCH_TIME_LIMIT_MS });
@@ -596,7 +609,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
             : unreachable
               ? 'The manufacturer’s or retailers’ pages couldn’t be reached to check them, so nothing was added; Purrbi tries again later.'
               : hintOutage
-                ? 'The barcode database didn’t answer, so the search had only the barcode to go on and found nothing; Purrbi tries again later.'
+                ? 'The barcode database wasn’t available, so the search had only the barcode to go on and found nothing; Purrbi tries again later.'
                 : 'Searched the manufacturer’s and retailers’ pages; nothing could be verified against a page, so nothing was added.',
       );
       job.diagnosticNotes.push(...r.discarded.slice(0, 4).map((d) => `Research (${r.model}): ${d}`));
@@ -713,7 +726,8 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
     ...(meta.enrichment.databaseImages ? { images: meta.enrichment.databaseImages } : {}),
   };
   const fieldStatus = requests.map((r) => retrievalStatus(r.purpose, retrieval));
-  const shownRequests = requests.map((r, i) => ({ ...r, reason: `${fieldStatus[i].detail} ${r.reason}` }));
+  // The same reason is said once, on the first card it applies to; the others say only what their photo adds.
+  const shownRequests = requests.map((r, i) => ({ ...r, reason: fieldStatus.slice(0, i).some((f) => f.detail === fieldStatus[i].detail) ? r.reason : `${fieldStatus[i].detail} ${r.reason}` }));
 
   // The concise result: up to two positives and two cautions, and the verdict for the selected pet.
   // Supported products get a model-written verdict, checked against this assessment and cached; until it
@@ -780,7 +794,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       ...explanationFields(general, pending ? 'pending' : explain.status),
       ...rowFields(),
       ...highlightFields(highlights, verdict),
-      ...jobFields(job, currentCalls(), deps.now()),
+      ...jobFields(job, currentCalls(), deps.now(), config),
       assessmentRunId: job.runId,
       assessmentInputsAt: Timestamp.fromDate(inputsAt),
       status,
@@ -881,7 +895,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
         if (job.explanationsNew && snap.get('explanationsStatus') !== 'ready' && snap.get('explanationsQueued') !== true) tx.update(ref, { explanationsQueued: true });
         return;
       }
-      tx.update(ref, { ...explanationFields(general, finalStatus), ...rowFields(), ...highlightFields(highlights, verdict), ...jobFields(job, currentCalls(), deps.now()), updatedAt: Timestamp.fromDate(deps.now()) });
+      tx.update(ref, { ...explanationFields(general, finalStatus), ...rowFields(), ...highlightFields(highlights, verdict), ...jobFields(job, currentCalls(), deps.now(), config), updatedAt: Timestamp.fromDate(deps.now()) });
     })
     .catch((err) => {
       deps.log.error('explanation save failed', { traceId: job.traceId, error: (err as Error).message });

@@ -11,6 +11,8 @@ export class SourceError extends Error {
     readonly kind: SourceErrorKind,
     message: string,
     readonly status?: number,
+    /** When a rate-limited provider says its allowance resets. */
+    readonly retryAt?: Date,
   ) {
     super(`${source}: ${message}`);
     this.name = 'SourceError';

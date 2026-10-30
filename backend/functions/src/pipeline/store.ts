@@ -40,6 +40,16 @@ export async function consumeAiBudget(db: Firestore, limits: Limits, now: Date):
   });
 }
 
+/** Until when a provider's used-up daily allowance is not asked again (shared by all instances), or null. */
+export async function providerPausedUntil(db: Firestore, provider: string, now: Date): Promise<Date | null> {
+  const until = toDate((await db.doc(`system/pause_${provider}`).get()).get('until'));
+  return until && until > now ? until : null;
+}
+
+export async function pauseProvider(db: Firestore, provider: string, until: Date, now: Date): Promise<void> {
+  await db.doc(`system/pause_${provider}`).set({ until: Timestamp.fromDate(until), setAt: Timestamp.fromDate(now) });
+}
+
 // ---- products ----------------------------------------------------------------
 
 /** When optional AI enrichment was last attempted for a product, and what it found (public facts only). */

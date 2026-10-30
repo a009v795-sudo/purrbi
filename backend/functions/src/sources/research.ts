@@ -8,7 +8,7 @@ import { getDocumentProxy } from 'unpdf';
 import { analysisRows } from '../ai/labelExtract';
 import { researchJson } from '../ai/openai';
 import { detectSpecies, parseAdequacyStatement } from '../domain/adequacy';
-import { textContainsGtin } from '../domain/barcode';
+import { printedForms, textContainsGtin } from '../domain/barcode';
 import { normalizeIngredientName, parseIngredientList, type ParsedIngredient } from '../domain/ingredients';
 import { CORE_GA, hasCoreGuaranteedAnalysis, normalizeUnit, nutrientKeyFromLabel, parseCalorieText, parsePackageSize, qualifierFrom, validateGuaranteedAnalysis } from '../domain/nutrition';
 import { parseActiveIngredients } from '../domain/supplements';
@@ -17,9 +17,9 @@ import { httpBytes, httpJson, httpRequest, SourceError } from '../util/http';
 import type { BarcodeHint } from './barcodeLookup';
 import { altTextIngredientLists, documentFacts, markupGtins, nameOnPage, nameTokens, nutritionDocLinks, pageText, parseShopifyProduct, pdfSafety, productHeading, shopifyProductUrl } from './pageEvidence';
 
-export const RESEARCH_VERSION = 'research-2.1.0'; // 2.1.0: a page tied to the product names it by its own heading; a web page's sentence that names no species, life stage or standard is not a feeding statement. 2.0.0: alt text, markup and Shopify barcodes, linked nutrition documents, a manufacturer follow-up, catalogue abbreviations, package sizes
+export const RESEARCH_VERSION = 'research-2.2.0'; // 2.2.0: the barcode is searched in the forms pages print it; a page tied to the barcode that shows nothing about the product (a price list) ends no search, and what such an answer named is searched for next; a barcode with other numbers beside it is still found. 2.1.0: a page tied to the product names it by its own heading; a web page's sentence that names no species, life stage or standard is not a feeding statement. 2.0.0: alt text, markup and Shopify barcodes, linked nutrition documents, a manufacturer follow-up, catalogue abbreviations, package sizes
 /** Research results still used as they were saved (older ones are read again: they could take who a product is for from a retailer's title). */
-export const RESEARCH_RESULTS_IN_USE: ReadonlySet<string> = new Set([RESEARCH_VERSION, 'research-2.0.0']);
+export const RESEARCH_RESULTS_IN_USE: ReadonlySet<string> = new Set([RESEARCH_VERSION, 'research-2.1.0', 'research-2.0.0']);
 
 const nullableString = { type: ['string', 'null'] };
 const SCHEMA = {
@@ -76,6 +76,7 @@ const SYSTEM = [
   'Copy text verbatim from the page. Never infer, estimate or fill gaps; use null when the page does not show a field.',
   'Only report a product if the page clearly shows the same product (same brand, recipe and package variant). If unsure, set found=false.',
   'source_urls must list the exact pages that show the information.',
+  'A catalogue, price list or search-results page is not the product’s page: use it only to learn the brand and name, then find the product’s own page.',
 ].join(' ');
 
 /** Words only: case, accents, punctuation, symbols (®, ™) and markup gaps do not matter. */
@@ -175,6 +176,8 @@ export interface ResearchOutcome {
   identity?: 'barcode' | 'recipe' | 'family' | 'name';
   /** The heading (h1) of the page tied to this barcode: what the manufacturer's page is searched for and must match when no name was verified. */
   pageTitle?: string;
+  /** The brand and name an answer gave, unverified: only words for another search, never a fact. */
+  lead?: { name: string | null; brand: string | null };
 }
 
 interface ResearchOptions {
@@ -210,6 +213,10 @@ const missingFields = (f: Partial<ProductFacts>) =>
     (x): x is string => !!x,
   );
 
+/** Whether a page's facts say anything about the product itself, beyond its brand and package size. */
+const aboutProduct = (f: Partial<ProductFacts>) =>
+  !!(f.productName || f.ingredients?.value.length || f.guaranteedAnalysis?.value.length || f.adequacy || f.calories?.value.length || f.activeIngredients?.value.length || f.classificationSignals?.length);
+
 /**
  * Facts of `extra` for the keys `base` lacks; statements and sources of both. When `extra` comes from a page
  * shown to be this product (barcode or same recipe), its analysis replaces a partial one from the first page,
@@ -241,10 +248,12 @@ function mergeResearch(base: Partial<ProductFacts>, extra: Partial<ProductFacts>
 }
 
 /**
- * A barcode search first (with a barcode database's title as a search hint when there is one); when it
- * finds nothing and a name, brand or hint is known, a search by identity. When the page found is a
- * retailer's, or label fields are still missing, the manufacturer's own page is sought for them. Each
- * candidate page is verified the same way; at most three model calls, all within the job's time limit.
+ * A barcode search first, in the forms pages print the barcode (with a barcode database's title as a search
+ * hint when there is one); when it finds nothing and a name, brand or hint is known, a search by identity.
+ * With nothing known, the brand and name the barcode search's answer gave are searched for instead (search
+ * words only: a page found that way must show the barcode). When the page found is a retailer's, or label
+ * fields are still missing, the manufacturer's own page is sought for them. Each candidate page is verified
+ * the same way; at most three model calls, all within the job's time limit.
  */
 export async function researchProduct(opts: ResearchOptions): Promise<ResearchOutcome> {
   const ask = 'Find who it is for and its ingredient list, guaranteed analysis, calorie content, package size and nutritional adequacy (feeding) statement; for a supplement, its active ingredients with amounts (start that text with "Active ingredients").';
@@ -252,8 +261,11 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
   // Search words only: a barcode database's title is never what a page is checked against.
   const name = opts.knownName ?? opts.hint?.title;
   const brand = opts.knownBrand ?? opts.hint?.brand;
+  // Shops and distributors list a UPC-A as 12 or 13 digits; the package prints it spaced under the bars.
+  const forms = printedForms(opts.gtin14);
+  const printed = forms.length > 1 ? `Pages print it as ${forms.map((f) => `"${f}"`).join(', ')}: search for each form (shops list it as UPC, EAN or GTIN).` : '';
   const attempts: { label: string; mode: Mode; user: string }[] = [
-    { label: 'barcode search', mode: 'barcode', user: [`Barcode (GTIN/UPC/EAN): ${opts.barcode}.`, opts.knownBrand ? `Brand (from a database record): ${opts.knownBrand}.` : '', opts.knownName ? `Product name (from a database record): ${opts.knownName}.` : '', hint, ask].filter(Boolean).join(' ') },
+    { label: 'barcode search', mode: 'barcode', user: [`Barcode (GTIN/UPC/EAN): ${opts.barcode}.`, printed, opts.knownBrand ? `Brand (from a database record): ${opts.knownBrand}.` : '', opts.knownName ? `Product name (from a database record): ${opts.knownName}.` : '', hint, ask].filter(Boolean).join(' ') },
     ...(name || brand
       ? [{ label: 'name search', mode: 'name' as Mode, user: [`Search by product identity rather than barcode: brand "${brand ?? ''}", product "${name ?? ''}". Its barcode is ${opts.barcode}; the page must show the same brand and product (recipe and variant).`, ask].join(' ') }]
       : []),
@@ -263,7 +275,8 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
   let fetchFailed = false;
   let calls = 0;
   let found: ResearchOutcome | null = null;
-  for (const attempt of attempts) {
+  for (let i = 0; i < attempts.length; i++) {
+    const attempt = attempts[i];
     if (left(opts) < MODEL_CALL_MS + 15000) {
       discarded.push(`${attempt.label}: not run (the scan’s time limit)`);
       break;
@@ -274,9 +287,26 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
     model = r.model;
     discarded.push(...r.discarded.map((d) => `${attempt.label}: ${d}`));
     fetchFailed = fetchFailed || r.fetchFailed === true;
-    if (r.facts) {
+    if (r.facts && aboutProduct(r.facts)) {
       found = r;
       break;
+    }
+    // A page tied to the barcode that shows nothing else about the product (a price list) ends no search.
+    if (r.facts) discarded.push(`${attempt.label}: ${r.sources[0]?.sourceName ?? 'the page'} shows this barcode but nothing else about the product (no name, ingredients, analysis or feeding statement), so the search went on`);
+    // With nothing known to search by, the brand and name the barcode search's answer gave (unverified, from a
+    // page that could not be checked or did not prove them) are searched for next. Only a page that shows
+    // this barcode can then be used: no name is trusted to match a page by.
+    const lead = { name: r.lead?.name ?? r.pageTitle ?? null, brand: r.lead?.brand ?? null };
+    if (attempt.mode === 'barcode' && !name && !brand && (lead.name || lead.brand)) {
+      attempts.push({
+        label: 'search by the answer’s name',
+        mode: 'name',
+        user: [
+          `Search by product identity: brand "${lead.brand ?? ''}", product "${lead.name ?? ''}" (as an earlier search answer named it; unverified).`,
+          `Its barcode is ${opts.barcode}${forms.length > 1 ? ` (also printed ${forms.slice(1).map((f) => `"${f}"`).join(', ')})` : ''}; use only a page that shows this barcode (in its text or product details), such as the manufacturer’s product page or a shop’s product page.`,
+          ask,
+        ].join(' '),
+      });
     }
   }
   if (!found?.facts) return { facts: null, sources: [], discarded, model, fetchFailed, calls };
@@ -503,13 +533,14 @@ async function researchAttempt(opts: ResearchOptions, user: string, mode: Mode):
   const discarded: string[] = [];
   const searched = `${searches} search${searches === 1 ? '' : 'es'}, ${citations.length} citation${citations.length === 1 ? '' : 's'}`;
   if (!data.found) return { facts: null, sources: [], discarded: [`model reported no matching product (${searched})`], model };
+  const lead = { name: data.product_name ?? null, brand: data.brand ?? null };
 
   // Pages the search cited come first. A page the model names without a citation (models often attach
   // none to JSON output) is used only the same way: Purrbi fetches it and every kept field must be on it.
   const cited = new Set(citations.map((c) => canonical(c.url)));
   const named = [...new Set((data.source_urls ?? []).map(canonical).filter((u) => /^https:\/\//.test(u)))];
   const urls = [...named.filter((u) => cited.has(u)), ...named.filter((u) => !cited.has(u))].slice(0, 2);
-  if (!urls.length) return { facts: null, sources: [], discarded: [`no source page was named (${searched})`], model };
+  if (!urls.length) return { facts: null, sources: [], discarded: [`no source page was named (${searched})`], model, lead };
 
   const pages: FetchedPage[] = [];
   for (const url of urls) {
@@ -523,7 +554,7 @@ async function researchAttempt(opts: ResearchOptions, user: string, mode: Mode):
       discarded.push(`could not fetch ${url.slice(0, 120)} to verify it${err instanceof SourceError ? ` (${err.status ? `HTTP ${err.status}` : err.kind})` : ''}`);
     }
   }
-  if (!pages.length) return { facts: null, sources: [], discarded, model, fetchFailed: true };
+  if (!pages.length) return { facts: null, sources: [], discarded, model, fetchFailed: true, lead };
 
   // Each page is judged on its own, and everything kept is checked on the one page it is taken from: another
   // fetched page may be another variant (Morsels next to Gravies).
@@ -562,7 +593,7 @@ async function researchAttempt(opts: ResearchOptions, user: string, mode: Mode):
   const candidates = pages.map((p) => ({ p, id: identityOf(p) })).filter((x): x is { p: FetchedPage; id: Id } => !!x.id).sort((a, b) => rank[a.id] - rank[b.id]);
   if (!candidates.length) {
     const sought = `brand "${(brand ?? '').slice(0, 40)}"${pages.some((p) => has(p, brand)) ? ' found' : ' not found'}, ${trusted ? `name "${trusted.slice(0, 60)}"${pages.some(trustedNameOn) ? ' found' : ' not in the product’s heading'}` : 'no product name known to compare'}`;
-    return { facts: null, sources: [], discarded: [...discarded, `the cited page does not show this product’s barcode or its brand and name (${sought})`], model };
+    return { facts: null, sources: [], discarded: [...discarded, `the cited page does not show this product’s barcode or its brand and name (${sought})`], model, lead };
   }
   const { p: page, id } = candidates[0];
   let host = '';
@@ -765,5 +796,5 @@ async function researchAttempt(opts: ResearchOptions, user: string, mode: Mode):
     .map((t) => ({ text: t, source: source.sourceId, kind: 'research' as const }));
   const sources = [source, ...(docSource ? [docSource] : [])];
   const pageTitle = page.barcode ? ownHeading(page) : '';
-  return { facts, sources, discarded, model, verified, identity, ...(pageTitle ? { pageTitle } : {}), ...(analysisNote ? { analysisNote } : {}) };
+  return { facts, sources, discarded, model, verified, identity, lead, ...(pageTitle ? { pageTitle } : {}), ...(analysisNote ? { analysisNote } : {}) };
 }

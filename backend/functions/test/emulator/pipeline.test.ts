@@ -45,6 +45,7 @@ let pagesDown = false; // research names pages that cannot be reached
 let researchThrows = false; // the research model call fails (provider error)
 let explainUnverified: string | null = null; // every explanation comes back unverified, with this reason
 let hintDown = false; // the barcode database (search words for research) is rate-limiting
+let hintResetAt: Date | undefined; // when the rate-limited barcode database says its daily allowance resets
 let identityPage = false; // research finds a retailer page showing BC.unknown's barcode (name and brand only)
 let researchOpts: { knownName?: string; knownBrand?: string }[] = [];
 let verdictInputs: string[] = [];
@@ -133,7 +134,7 @@ const sources: Sources = {
   },
   async barcodeHint() {
     calls.hint = (calls.hint ?? 0) + 1;
-    if (hintDown) throw new SourceError('UPCitemdb', 'rate_limited', 'HTTP 429 (mocked)', 429);
+    if (hintDown) throw new SourceError('UPCitemdb', 'rate_limited', 'HTTP 429 (mocked)', 429, hintResetAt);
     return null;
   },
   async research(o) {
@@ -279,6 +280,7 @@ beforeEach(async () => {
   researchThrows = false;
   explainUnverified = null;
   hintDown = false;
+  hintResetAt = undefined;
   identityPage = false;
   researchOpts = [];
   await fetch(`http://${process.env.FIRESTORE_EMULATOR_HOST}/emulator/v1/projects/demo-purrbi/databases/(default)/documents`, { method: 'DELETE' });
@@ -1113,8 +1115,11 @@ describe('fallbacks before asking the owner for photos', () => {
     const s = await read(ref);
     expect(calls.hint).toBe(1);
     expect(s.fieldStatus.map((x: { status: string }) => x.status)).toEqual(s.photoRequests.map(() => 'source_unavailable'));
-    expect(s.photoRequests[0].reason).toMatch(/^The barcode database didn’t answer, so the search had only the barcode to go on and found nothing; Purrbi tries again later\. /);
-    expect(s.evidenceNotes.join(' ')).toMatch(/barcode database didn’t answer/);
+    expect(s.photoRequests[0].reason).toMatch(/^The barcode database wasn’t available, so the search had only the barcode to go on and found nothing; Purrbi tries again later\. /);
+    // Said once: the other cards say only what their photo adds (test A, 2026-10-30: the sentence was repeated on each card).
+    expect(s.photoRequests.length).toBeGreaterThan(1);
+    expect(s.photoRequests.slice(1).every((p: { reason: string }) => !p.reason.includes('barcode database'))).toBe(true);
+    expect(s.evidenceNotes.join(' ')).toMatch(/barcode database wasn’t available/);
     const again = await newScan('u1', BC.unknown);
     await processScan(deps({ researchEnabled: true }), 'u1', again.id);
     expect(calls.research).toBe(1); // not repeated at once
@@ -1123,6 +1128,27 @@ describe('fallbacks before asking the owner for photos', () => {
     await processScan({ ...deps({ researchEnabled: true }), now: () => new Date(NOW.getTime() + 13 * 3600 * 1000) }, 'u1', later.id);
     expect(calls.research).toBe(2); // tried again after 12 hours
     expect((await read(later)).fieldStatus.every((x: { status: string }) => x.status === 'not_found')).toBe(true);
+  });
+  it('a used-up daily allowance of the barcode database is not asked again before it resets (2026-10-30: HTTP 429 on every scan)', async () => {
+    hintDown = true;
+    hintResetAt = new Date(NOW.getTime() + 2 * 3600 * 1000);
+    const first = await newScan('u1', BC.unknown);
+    await processScan(deps({ researchEnabled: true }), 'u1', first.id);
+    expect(calls.hint).toBe(1);
+    expect((await read(first)).diagnosticNotes).toContain('Barcode database not checked: it is limiting requests until 14:00 UTC');
+    // Another product without a name an hour later: the barcode database is not asked, and research still runs.
+    const other = await newScan('u1', withCheck('761234567891'));
+    await processScan({ ...deps({ researchEnabled: true }), now: () => new Date(NOW.getTime() + 3600 * 1000) }, 'u1', other.id);
+    expect(calls.hint).toBe(1);
+    expect(calls.research).toBe(2);
+    const o = await read(other);
+    expect(o.diagnosticNotes).toContain('Barcode database not checked: its daily allowance is used up until 14:00 UTC, so it isn’t asked before then');
+    expect(o.fieldStatus.every((x: { status: string }) => x.status === 'source_unavailable')).toBe(true);
+    // After the reset it is asked again.
+    hintDown = false;
+    const third = await newScan('u1', withCheck('761234567892'));
+    await processScan({ ...deps({ researchEnabled: true }), now: () => new Date(NOW.getTime() + 3 * 3600 * 1000) }, 'u1', third.id);
+    expect(calls.hint).toBe(2);
   });
   it('the name and brand an earlier method took from a page showing the barcode guide research and stay when it finds nothing', async () => {
     identityPage = true;

@@ -5,7 +5,7 @@ import { categoryLabel, speciesLabel } from '../domain/scope';
 import { evidenceLabel } from '../domain/score';
 import { caloriesForPackage, describeCalories, describeEntry, dryMatterPercent, findNutrient } from '../domain/nutrition';
 import { SCOPE_VERSION } from '../domain/scope';
-import { ASSESSMENT_VERSION } from './config';
+import { ASSESSMENT_VERSION, type RuntimeConfig } from './config';
 import type { RowRelevance } from '../domain/personalize';
 import type { ClaimSource, EvidenceKind, GeneralAssessment, IngredientRow, IngredientStatuses, PersonalAssessment, ProductFacts, RecallCheck, ScopeResult, SpeciesBasis, SpeciesScope } from '../domain/types';
 import type { ResultState } from '../domain/summary';
@@ -29,10 +29,21 @@ export interface JobInfo {
   diagnosticNotes: string[]; // why AI-found information was or was not used (sanitized, for tracing)
 }
 
-export function jobFields(job: JobInfo, calls: SourceCall[], finishedAt: Date): Record<string, unknown> {
+/** The backend that ran a job: its deployed commit and the provider configuration in force (no secrets). */
+export function backendInfo(c: RuntimeConfig): Record<string, unknown> {
+  return {
+    revision: c.backendRevision ?? 'local',
+    ai: c.aiEnabled, research: c.researchEnabled, barcodeLookup: c.barcodeLookupEnabled !== false, databaseImages: c.databaseImagesEnabled,
+    explanations: c.explanationsEnabled, verdicts: c.verdictsEnabled !== false,
+    models: { research: c.researchModel, explain: c.explainModel, verdict: c.verdictModel, vision: c.visionModel },
+  };
+}
+
+export function jobFields(job: JobInfo, calls: SourceCall[], finishedAt: Date, config?: RuntimeConfig): Record<string, unknown> {
   const counts = summarizeCalls(calls);
   return {
     lastJob: {
+      ...(config ? { backend: backendInfo(config) } : {}),
       kind: job.kind,
       traceId: job.traceId,
       startedAt: job.startedAt,
