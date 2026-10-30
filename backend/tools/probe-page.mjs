@@ -1,6 +1,7 @@
 // Fetches product pages from GitHub's network (this sandbox cannot reach most retailers) and reports
-// what Purrbi's research would verify on them: title, barcodes printed, the ingredient list, species
-// words. Read-only; no credentials. Published as the "Page probe" report.
+// what Purrbi's research would verify on them: title, barcodes printed or in the page's structured data,
+// the label sections (ingredients, guaranteed analysis, calories, feeding statement) as short text
+// windows, and species words. Read-only; no credentials. Published as the "Page probe" report.
 //   node probe-page.mjs <url> [url...] [--barcode <digits>]
 import { publish } from './report.mjs';
 
@@ -17,10 +18,39 @@ const text = (html) =>
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;|&#160;/g, ' ')
     .replace(/&amp;/g, '&')
-    .replace(/&#39;|&apos;|&rsquo;/g, "'")
+    .replace(/&#39;|&apos;|&rsquo;|&#8217;/g, "'")
     .replace(/&quot;/g, '"')
+    .replace(/&reg;|&trade;|&#174;|&#8482;/g, '')
     .replace(/\s+/g, ' ');
 
+// Short windows of page text after each label-section word (first two occurrences each).
+const SECTIONS = [
+  ['ingredients', /\bingredients?\b/gi],
+  ['guaranteed analysis', /guaranteed analysis/gi],
+  ['calories', /calori(e|c) content|\bkcal\b/gi],
+  ['adequacy', /formulated to meet|complete and balanced|intermittent|supplemental feeding|aafco/gi],
+  ['species', /\bfor (dogs?|cats?)\b|\bdogs? (and|&) cats?\b|\bcats? (and|&) dogs?\b/gi],
+  ['size', /\b\d+(\.\d+)?\s?(oz|ounce|g|lb)\b[^.]{0,20}(can|pouch|bag)?/gi],
+];
+const windows = (t) =>
+  Object.fromEntries(
+    SECTIONS.map(([name, re]) => [
+      name,
+      [...t.matchAll(re)]
+        .slice(0, name === 'calories' || name === 'adequacy' ? 3 : 2)
+        .map((m) => t.slice(Math.max(0, m.index - (name === 'species' || name === 'size' ? 60 : 0)), m.index + (name === 'ingredients' ? 700 : 260)).trim()),
+    ]),
+  );
+
+/** GTINs named in JSON-LD / microdata / a Shopify product object in the raw HTML. */
+function structuredGtins(html) {
+  const out = new Set();
+  for (const m of html.matchAll(/"(?:gtin(?:8|12|13|14)?|barcode|upc|ean)"\s*:\s*"?(\d{8,14})"?/gi)) out.add(m[1]);
+  for (const m of html.matchAll(/itemprop=["'](?:gtin(?:8|12|13|14)?)["'][^>]*content=["'](\d{8,14})["']/gi)) out.add(m[1]);
+  return [...out].slice(0, 20);
+}
+
+const strip = (d) => (d ?? '').replace(/^0+/, '');
 const report = { kind: 'page-probe', at: new Date().toISOString(), barcode, pages: [] };
 for (const url of urls) {
   const entry = { url };
@@ -32,21 +62,26 @@ for (const url of urls) {
     const t = text(html);
     entry.title = (/<title[^>]*>([^<]*)<\/title>/i.exec(html)?.[1] ?? '').trim().slice(0, 200);
     entry.length = t.length;
-    const ing = /ingredients?\s*[:：]?\s*(.{20,900}?)(guaranteed analysis|calorie content|feeding|nutrition|$)/i.exec(t);
-    entry.ingredients = ing ? ing[1].trim().slice(0, 700) : null;
-    entry.digitRuns = [...new Set(t.match(/\b\d{11,14}\b/g) ?? [])].slice(0, 15);
-    if (barcode) entry.barcodeOnPage = t.replace(/\D+/g, ' ').includes(barcode.replace(/^0+/, ''));
+    entry.structuredGtins = structuredGtins(html);
+    if (barcode) {
+      entry.barcodeInText = t.replace(/\D+/g, ' ').split(' ').some((d) => d && strip(d) === strip(barcode));
+      entry.barcodeInHtml = html.replace(/\D+/g, ' ').split(' ').some((d) => d && strip(d) === strip(barcode));
+      entry.barcodeInStructured = entry.structuredGtins.some((g) => strip(g) === strip(barcode));
+    }
     entry.speciesWords = { cat: (t.match(/\bcats?\b|\bkittens?\b|\bfeline\b/gi) ?? []).length, dog: (t.match(/\bdogs?\b|\bpupp(y|ies)\b|\bcanine\b/gi) ?? []).length };
-    const ga = /guaranteed analysis\s*[:：]?\s*(.{10,400}?)(ingredients|calorie|feeding|$)/i.exec(t);
-    entry.guaranteedAnalysis = ga ? ga[1].trim().slice(0, 300) : null;
-    // EU labels: "Constituants analytiques", "Analytische Bestandteile", "Componentes analíticos", … (every occurrence).
-    entry.analyticalConstituents = [...t.matchAll(/(constituants analytiques|composants analytiques|analytical constituents|analytische bestandteile|componentes anal[ií]ticos|componenti analitici|analytische bestanddelen|constituintes anal[ií]ticos)\s*[:：]?\s*(.{10,400})/gi)]
-      .map((m) => `${m[1]}: ${m[2]}`.slice(0, 420))
-      .slice(0, 4);
-    // Where protein is mentioned with a number (marketing copy often gives protein alone).
-    entry.proteinMentions = [...t.matchAll(/.{0,80}prot[eé]in[a-z]*.{0,80}/gi)].map((m) => m[0]).filter((x) => /\d/.test(x)).slice(0, 6);
-    const aafco = /(formulated to meet[^.]{10,200}\.|complete and balanced[^.]{0,200}\.)/i.exec(t);
-    entry.adequacy = aafco ? aafco[1].slice(0, 250) : null;
+    entry.windows = windows(t);
+    // Shopify stores publish the product (variants with barcodes, description) at <product url>.js.
+    if (/\/products\/[^/?#]+\/?$/.test(new URL(res.url).pathname)) {
+      try {
+        const js = await fetch(`${res.url.replace(/\/$/, '').replace(/[?#].*$/, '')}.js`, { headers: { 'User-Agent': UA, Accept: 'application/json' }, signal: AbortSignal.timeout(15000) });
+        if (js.ok) {
+          const p = await js.json();
+          entry.shopify = { title: p.title, type: p.type, tags: (p.tags ?? []).slice(0, 12), variants: (p.variants ?? []).slice(0, 6).map((v) => ({ title: v.title, barcode: v.barcode ?? null, sku: v.sku ?? null })), description: text(p.description ?? '').slice(0, 900) };
+        } else entry.shopify = { status: js.status };
+      } catch (e) {
+        entry.shopify = { error: String(e?.name ?? e) };
+      }
+    }
   } catch (e) {
     entry.error = String(e?.name ?? e);
   }
