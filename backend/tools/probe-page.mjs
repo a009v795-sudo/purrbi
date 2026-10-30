@@ -88,4 +88,24 @@ for (const url of urls) {
   report.pages.push(entry);
   console.log(JSON.stringify(entry, null, 1));
 }
+// A Shopify store's catalogue (public /products.json): which product sells this barcode.
+for (const origin of [...new Set(urls.map((u) => new URL(u).origin))]) {
+  if (!barcode) break;
+  const found = [];
+  try {
+    for (let page = 1; page <= 4; page++) {
+      const res = await fetch(`${origin}/products.json?limit=250&page=${page}`, { headers: { 'User-Agent': UA, Accept: 'application/json' }, signal: AbortSignal.timeout(15000) });
+      if (!res.ok) break;
+      const { products = [] } = await res.json();
+      for (const p of products) {
+        const v = (p.variants ?? []).find((x) => strip(x.barcode) === strip(barcode));
+        if (v) found.push({ handle: p.handle, title: p.title, type: p.product_type, tags: (p.tags ?? []).slice(0, 12), variant: v.title, barcode: v.barcode, description: text(p.body_html ?? '').slice(0, 1200) });
+      }
+      if (products.length < 250) break;
+    }
+  } catch (e) {
+    found.push({ error: String(e?.name ?? e) });
+  }
+  if (found.length) report.pages.push({ shopifyCatalogue: origin, found });
+}
 publish('Page probe', report);
