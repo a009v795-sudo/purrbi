@@ -106,6 +106,31 @@ References (read-only): Moxis FlutterFlow `moxis-one-x51584` (pulled and export,
   - **Found by the live acceptance run and fixed the same day:** names not kept from a tied page's heading; the retailer's marketing sentence taken as the feeding statement; an earlier identity dropped after a search miss; the outage stored as "not found"; false yellows; drug-use claims; one page credited with every field; the earlier product type dropped with the identity.
   - **Still open:** the Gravies pouch and 099482080754 are not identified live while the barcode database rate-limits the functions (it is a keyless trial); A Better Treat's manufacturer page was not reached live (a retailer's bot check) and its shared record lost the earlier "treat" statement during the acceptance run; the app's re-check compares with the constant `assessment-3.0.0`, so a later assessment version needs an app update (or a published version document).
 
+- 2026-10-30 (phase 4, three-product tests; research `research-2.6.0`; backend `1021e47`; app `638eb45`):
+  - **Research:**
+    - The barcode is searched in its printed forms, the digits alone first.
+    - The search's result pages are recorded and checked by Purrbi site by site, and a page showing the
+      barcode is read from Purrbi's own copy.
+    - A listing page (several barcodes) is weak identity, and an analysis value must follow its nutrient's
+      name.
+    - The barcode database is paused until its reset after HTTP 429.
+    - Each job records the deployed revision and provider configuration.
+    - Research 2.3.0 took another variant's analysis for B; its results are not used.
+  - **FlutterFlow (scan-journey audit):**
+    - Scan requests and label photos go through custom actions that never lock the page and say what went
+      wrong.
+    - Camera: the scanner has a Cancel button, the permission is asked first, and it can't open twice.
+    - Home and Scan require sign-in.
+    - Re-check: only for results assessed by older rules; pet chips only where a re-check runs; a failed
+      re-check is shown.
+    - Splash and account-deletion states are checked; name length limits.
+    - Details: `docs/THREE_PRODUCT_TESTS.md`.
+  - **Still open:**
+    - A and C have no public page that ties the barcode and can be read automatically; B has one, in
+      Japanese.
+    - The stuck-job "Try again" is re-checked only when the result is reopened.
+    - Scanner layout on Android 15+, camera scanning and label-photo upload: device checks NOT RUN.
+
 ## Environment limits found in this session
 - This Claude session's network policy blocks Open Pet Food Facts, Open Food Facts, openFDA, fda.gov, OpenAI and `dl.google.com`. Google APIs, npm, pub.dev, GitHub and FlutterFlow are reachable. The environment supports an allow-list (**environment settings → Network access → Allowed domains**, applies to new sessions); nothing was bypassed.
 - Live data checks therefore run on GitHub Actions, where every provider was verified reachable (2026-10-28): Open Pet Food Facts 200, its image host reachable, Open Food Facts 200, Open Beauty Facts 200, Open Products Facts 200, openFDA 200, OpenAI reachable (401 without a key), Firebase APIs reachable.
