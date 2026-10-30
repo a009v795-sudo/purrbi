@@ -41,7 +41,7 @@ export function buildSummary(
   else {
     out.push(
       general.scoreProvisional
-        ? `Its Purrbi label score so far is ${general.score}/100, a lower bound: ${general.scoreBasis.charAt(0).toLowerCase()}${general.scoreBasis.slice(1)}`
+        ? `Its Purrbi label score is not final: ${general.scoreBasis.charAt(0).toLowerCase()}${general.scoreBasis.slice(1)}`
         : `Its Purrbi label score is ${general.score}/100 (${general.scoreLabel.toLowerCase()}).`,
     );
   }

@@ -201,4 +201,13 @@ describe('summary', () => {
     expect(s.length).toBeLessThanOrEqual(5);
     expect(s[s.length - 1]).toMatch(/not veterinary advice/);
   });
+  it('tells a partial assessment by its range, never as a score or a lower bound', () => {
+    const f = facts({ adequacyText: '' });
+    const scope = scopeOf(f);
+    const g = assessGeneral(f, scope);
+    expect(g.scoreLabel).toBe('Partial assessment');
+    const line = buildSummary(f, scope, g, personalize(pet(), f, scope, g, noRecall, NOW), noRecall).find((x) => /label score/.test(x))!;
+    expect(line).toMatch(/^Its Purrbi label score is not final: based on \d+ of 100 points’ worth .* between \d+ and 100/);
+    expect(line).not.toMatch(/lower bound|\d+\/100/);
+  });
 });
