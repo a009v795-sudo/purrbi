@@ -470,8 +470,8 @@ describe('manufacturer research', () => {
     stub(answer({ product_name: 'Purina Gourmet Gold Mousse au Thon' }));
     const r = await run();
     expect(r.facts).toBeNull();
-    // The barcode search and then the search by brand and name each found only this page.
-    expect(r.discarded).toEqual(['barcode search', 'name search'].map((a) => `${a}: the cited page does not show this product’s barcode or its brand and name (brand "Purina" found, no product name known to compare)`));
+    // The barcode search and then the search by the name its answer gave (a brand alone is no search) each found only this page.
+    expect(r.discarded).toEqual(['barcode search', 'search by the answer’s name'].map((a) => `${a}: the cited page does not show this product’s barcode or its brand and name (brand "Purina" found, no product name known to compare)`));
     // With the database's name for the product, the page must show that name in its heading.
     const known = await run({ knownName: 'Purina Gourmet Gold Mousse au Thon' });
     expect(known.facts).toBeNull();

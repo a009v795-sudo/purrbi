@@ -483,3 +483,39 @@ describe('another variant’s analysis is not taken from a page that shows the b
     expect(right.facts?.guaranteedAnalysis?.value.map((g) => `${g.nutrient}:${g.value}`)).toEqual(['crude_protein:4', 'crude_fat:2']);
   });
 });
+
+// Rerun of test B on research 2.4.0 (2026-10-30 16:51Z, trace 56bd298f-a6a, backend b9fbec4): the search returned
+// 12 pages; Purrbi's four checks went to the manufacturer's pages for other products, and the shops further down
+// were never opened. Then a search by the brand alone ("Wellness 076344886570") found other businesses.
+describe('result pages checked site by site; no search by a brand alone (test B, trace 56bd298f-a6a)', () => {
+  const GRAVIES = '00076344886570';
+  const results = [
+    'https://www.wellnesspetfood.com/product-catalog/wellness-complete-health-grained-beef-barley/',
+    'https://www.wellnesspetfood.com/product-catalog/wellness-complete-health-plus-whitefish-sweet-potato/',
+    'https://www.wellnesspetfood.com/product-catalog/wellness-complete-health-grain-sensitive-skin-stomach-salmon-rice/',
+    'https://www.wellnesspetfood.com/product-catalog/wellness-core-digestive-health-large-breed-chicken-brown-rice/',
+    'https://www.petsupermarket.com/brands/w/wellness/wellness-healthly-indulgence-gravy-adult-wet-cat-food-chicken-turkey-recipe-natural-protein-rich-grain-free-3-ounce-pouch/7634488657.html',
+  ];
+  const shop = '<html><head><title>Wellness Healthy Indulgence Gravy Adult Wet Cat Food Chicken &amp; Turkey 3 oz</title></head><body><h1>Wellness Healthy Indulgence Gravy Adult Wet Cat Food, Chicken &amp; Turkey Recipe, 3-oz pouch</h1><p>Ingredients: Chicken Broth, Water Sufficient For Processing, Chicken, Potato Starch, Turkey</p><p>Guaranteed Analysis: Crude Protein (min) 4.00%, Crude Fat (min) 2.00%, Crude Fiber (max) 1.00%, Moisture (max) 85.00%</p><p>UPC: 076344886570</p></body></html>';
+  const other = '<html><head><title>Wellness dog food</title></head><body><h1>Wellness Complete Health Dog Food</h1><p>UPC: 076344000000</p></body></html>';
+  it('checks each site’s first result before a second page of the same site', async () => {
+    const opened: string[] = [];
+    const bodies: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: { body?: string }) => {
+      if (url === 'https://api.openai.com/v1/responses') {
+        bodies.push(String(init?.body ?? ''));
+        return new Response(JSON.stringify({ output: [{ type: 'web_search_call', action: { type: 'search', query: 'Wellness pet product 076344886570', sources: results.map((u) => ({ type: 'url', url: u })) } }, { type: 'message', content: [{ type: 'output_text', text: JSON.stringify({ ...modelAnswer({}), found: false }), annotations: [] }] }] }), { status: 200 });
+      }
+      if (url.includes('chat/completions')) return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(modelAnswer({ product_name: 'Wellness Healthy Indulgence Gravy Adult Wet Cat Food, Chicken & Turkey Recipe, 3-oz pouch', brand: 'Wellness', intended_for: 'cats', guaranteed_analysis: [{ label: 'Crude Protein', qualifier: 'min', value: 4, unit: '%' }] })) }, finish_reason: 'stop' }] }), { status: 200 });
+      opened.push(url);
+      return new Response(url.includes('petsupermarket') ? shop : other, { status: 200 });
+    }));
+    // Brand known (kept from a page that showed the barcode), no name: no search by the brand alone.
+    const r = await researchProduct({ apiKey: 'k', model: 'm', gtin14: GRAVIES, barcode: '076344886570', knownBrand: 'Wellness', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-10-30T00:00:00Z') });
+    expect(opened.slice(0, 2).map((u) => new URL(u).hostname)).toEqual(['www.wellnesspetfood.com', 'www.petsupermarket.com']);
+    expect(r.discarded).toContain('barcode search: petsupermarket.com (a search result) shows this barcode, so Purrbi read it');
+    expect(r.sources[0]).toMatchObject({ sourceName: 'petsupermarket.com', matchConfidence: 'exact_barcode' });
+    expect(r.facts?.guaranteedAnalysis?.value.map((g) => `${g.nutrient}:${g.value}`)).toEqual(['crude_protein:4', 'crude_fat:2', 'crude_fiber:1', 'moisture:85']);
+    expect(bodies.some((b) => b.includes('Search by product identity rather than barcode: brand \\"Wellness\\", product \\"\\"'))).toBe(false);
+  });
+});

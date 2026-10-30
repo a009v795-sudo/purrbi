@@ -17,9 +17,9 @@ import { httpBytes, httpJson, httpRequest, SourceError } from '../util/http';
 import type { BarcodeHint } from './barcodeLookup';
 import { altTextIngredientLists, documentFacts, markupGtins, nameOnPage, nameTokens, nutritionDocLinks, pageText, parseShopifyProduct, pdfSafety, productHeading, shopifyProductUrl, textGtins } from './pageEvidence';
 
-export const RESEARCH_VERSION = 'research-2.4.0'; // 2.4.0: a page printing other barcodes besides this one is a listing, not the product's page; each analysis value must be printed after its nutrient's name; the manufacturer's page is sought by the answer's name when no other is known. Results of 2.3.0 are not used (one took another variant's analysis). 2.3.0: the search's own result pages are recorded and checked by Purrbi for the barcode; the first that shows it is read from Purrbi's copy. 2.2.0: the barcode is searched in the forms pages print it; a page tied to the barcode that shows nothing about the product (a price list) ends no search, and what such an answer named is searched for next; a barcode with other numbers beside it is still found. 2.1.0: a page tied to the product names it by its own heading; a web page's sentence that names no species, life stage or standard is not a feeding statement. 2.0.0: alt text, markup and Shopify barcodes, linked nutrition documents, a manufacturer follow-up, catalogue abbreviations, package sizes
+export const RESEARCH_VERSION = 'research-2.5.0'; // 2.5.0: the search's result pages are checked site by site (each site's first result, then its second), after every search of the run, at most eight. 2.4.0: a page printing other barcodes besides this one is a listing, not the product's page; each analysis value must be printed after its nutrient's name; the manufacturer's page is sought by the answer's name when no other is known. Results of 2.3.0 are not used (one took another variant's analysis). 2.3.0: the search's own result pages are recorded and checked by Purrbi for the barcode; the first that shows it is read from Purrbi's copy. 2.2.0: the barcode is searched in the forms pages print it; a page tied to the barcode that shows nothing about the product (a price list) ends no search, and what such an answer named is searched for next; a barcode with other numbers beside it is still found. 2.1.0: a page tied to the product names it by its own heading; a web page's sentence that names no species, life stage or standard is not a feeding statement. 2.0.0: alt text, markup and Shopify barcodes, linked nutrition documents, a manufacturer follow-up, catalogue abbreviations, package sizes
 /** Research results still used as they were saved (older ones are read again: they could take who a product is for from a retailer's title). */
-export const RESEARCH_RESULTS_IN_USE: ReadonlySet<string> = new Set([RESEARCH_VERSION, 'research-2.2.0', 'research-2.1.0', 'research-2.0.0']); // not 2.3.0
+export const RESEARCH_RESULTS_IN_USE: ReadonlySet<string> = new Set([RESEARCH_VERSION, 'research-2.4.0', 'research-2.2.0', 'research-2.1.0', 'research-2.0.0']); // not 2.3.0
 
 const nullableString = { type: ['string', 'null'] };
 const SCHEMA = {
@@ -286,12 +286,13 @@ function mergeResearch(base: Partial<ProductFacts>, extra: Partial<ProductFacts>
 
 /**
  * A barcode search first, in the forms pages print the barcode (with a barcode database's title as a search
- * hint when there is one); when it finds nothing and a name, brand or hint is known, a search by identity.
- * With nothing known, the brand and name the barcode search's answer gave are searched for instead (search
- * words only: a page found that way must show the barcode). When the page found is a retailer's, or label
+ * hint when there is one); when it finds nothing and a name (or hint) is known, a search by identity. With no
+ * name known, the name the barcode search's answer gave is searched for instead (search words only: a page
+ * found that way must show the barcode). When the page found is a retailer's, or label
  * fields are still missing, the manufacturer's own page is sought for them. The barcode search's own result
- * pages are checked by Purrbi for the barcode, and the first that shows it is read from Purrbi's copy. Each
- * candidate page is verified the same way; at most four model calls, all within the job's time limit.
+ * pages are checked by Purrbi for the barcode (sites taking turns, at most eight pages a run), and the first
+ * that shows it is read from Purrbi's copy (at most two reads). Each candidate page is verified the same way;
+ * at most six model calls, all within the job's time limit.
  */
 export async function researchProduct(opts: ResearchOptions): Promise<ResearchOutcome> {
   const ask = 'Find who it is for and its ingredient list, guaranteed analysis, calorie content, package size and nutritional adequacy (feeding) statement; for a supplement, its active ingredients with amounts (start that text with "Active ingredients").';
@@ -304,8 +305,9 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
   const printed = forms.length > 1 ? `Pages print it as ${forms.map((f) => `"${f}"`).join(', ')}: search for each form (shops list it as UPC, EAN or GTIN).` : '';
   const attempts: { label: string; mode: Mode; user: string }[] = [
     { label: 'barcode search', mode: 'barcode', user: [`Barcode (GTIN/UPC/EAN): ${opts.barcode}.`, printed, opts.knownBrand ? `Brand (from a database record): ${opts.knownBrand}.` : '', opts.knownName ? `Product name (from a database record): ${opts.knownName}.` : '', hint, ask].filter(Boolean).join(' ') },
-    ...(name || brand
-      ? [{ label: 'name search', mode: 'name' as Mode, user: [`Search by product identity rather than barcode: brand "${brand ?? ''}", product "${name ?? ''}". Its barcode is ${opts.barcode}; the page must show the same brand and product (recipe and variant).`, ask].join(' ') }]
+    // A brand alone is no search ("Wellness 076344886570" finds other businesses, trace 56bd298f-a6a): a name is needed.
+    ...(name
+      ? [{ label: 'name search', mode: 'name' as Mode, user: [`Search by product identity rather than barcode: brand "${brand ?? ''}", product "${name}". Its barcode is ${opts.barcode}; the page must show the same brand and product (recipe and variant).`, ask].join(' ') }]
       : []),
   ];
   const discarded: string[] = [];
@@ -313,6 +315,10 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
   let fetchFailed = false;
   let calls = 0;
   let found: ResearchOutcome | null = null;
+  // Result pages Purrbi checks itself, over all searches of this run, and the pages it has fetched.
+  let pageChecks = 0;
+  let pageReads = 0;
+  const seenPages = new Set<string>();
   for (let i = 0; i < attempts.length; i++) {
     const attempt = attempts[i];
     if (left(opts) < MODEL_CALL_MS + 15000) {
@@ -333,12 +339,15 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
     if (r.facts) discarded.push(`${attempt.label}: ${r.sources[0]?.sourceName ?? 'the page'} shows this barcode but nothing else about the product (no name, ingredients, analysis or feeding statement), so the search went on`);
     // The search's own result pages, checked by Purrbi: the model may not recognise a page that shows the barcode
     // (2026-10-30: "no matching product" for barcodes that many shops list). The first page that shows it is read.
-    if (attempt.mode === 'barcode' && r.results?.length) {
-      const checked = await pageShowingBarcode(opts, r.results, new Set([...(r.fetched ?? []), ...(r.sources.map((x) => x.url ?? '').map(canonical))]));
+    for (const u of [...(r.fetched ?? []), ...r.sources.map((x) => canonical(x.url ?? ''))]) seenPages.add(u);
+    if (r.results?.length && pageChecks < PAGE_CHECKS + 2 && pageReads < 2) {
+      const checked = await pageShowingBarcode(opts, r.results, seenPages, PAGE_CHECKS + 2 - pageChecks);
+      pageChecks += checked.checked;
       discarded.push(...checked.notes.map((n) => `${attempt.label}: ${n}`));
       if (checked.page && left(opts) >= MODEL_CALL_MS + 15000) {
         await opts.beforeAiCall?.();
         calls++;
+        pageReads++;
         const read = await readPageAttempt(opts, checked.page, ask);
         model = read.model;
         discarded.push(...read.discarded.map((d) => `reading ${checked.host}: ${d}`));
@@ -351,8 +360,8 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
     // With nothing known to search by, the brand and name the barcode search's answer gave (unverified, from a
     // page that could not be checked or did not prove them) are searched for next. Only a page that shows
     // this barcode can then be used: no name is trusted to match a page by.
-    const lead = { name: r.lead?.name ?? r.pageTitle ?? null, brand: r.lead?.brand ?? null };
-    if (attempt.mode === 'barcode' && !name && !brand && (lead.name || lead.brand)) {
+    const lead = { name: r.lead?.name ?? r.pageTitle ?? null, brand: brand ?? r.lead?.brand ?? null };
+    if (attempt.mode === 'barcode' && !name && (lead.name || (!brand && lead.brand))) {
       attempts.push({
         label: 'search by the answer’s name',
         mode: 'name',
@@ -600,13 +609,16 @@ export function describeSearches(log: WebSearchLog[]): string[] {
     });
 }
 
-const PAGE_CHECKS = 4;
+const PAGE_CHECKS = 6;
 
 /**
- * The first of a search's result pages (at most four, documents left out) that shows this barcode, fetched and
- * checked by Purrbi itself (text, markup, Shopify record). Pages already fetched are not fetched again.
+ * The first of a search's result pages that shows this barcode, fetched and checked by Purrbi itself (text,
+ * markup, Shopify record). Sites take turns (each site's first result, then each site's second), so one site's
+ * pages for other products do not use up the checks (2026-10-30, trace 56bd298f-a6a: four checks went to the
+ * manufacturer's other products while shops in the results were never opened). At most `limit` pages,
+ * documents left out; a page already fetched is not fetched again (`seen` is updated).
  */
-async function pageShowingBarcode(opts: ResearchOptions, results: string[], seen: Set<string>): Promise<{ page: FetchedPage | null; host: string; notes: string[] }> {
+async function pageShowingBarcode(opts: ResearchOptions, results: string[], seen: Set<string>, limit: number): Promise<{ page: FetchedPage | null; host: string; notes: string[]; checked: number }> {
   const hostOf = (u: string) => {
     try {
       return new URL(u).hostname.replace(/^www\./, '');
@@ -614,15 +626,29 @@ async function pageShowingBarcode(opts: ResearchOptions, results: string[], seen
       return u.slice(0, 60);
     }
   };
-  const candidates = [...new Set(results.map(canonical))].filter((u) => /^https:\/\//.test(u) && !seen.has(u) && !/\.pdf$/i.test(u)).slice(0, PAGE_CHECKS);
+  const fresh = [...new Set(results.map(canonical))].filter((u) => /^https:\/\//.test(u) && !seen.has(u) && !/\.pdf$/i.test(u));
+  const turn = new Map<string, number>();
+  const ranked = fresh.map((u, rank) => {
+    const h = hostOf(u);
+    turn.set(h, (turn.get(h) ?? 0) + 1);
+    return { u, rank, turn: turn.get(h)! };
+  });
+  const candidates = ranked
+    .filter((x) => x.turn <= 2)
+    .sort((a, b) => a.turn - b.turn || a.rank - b.rank)
+    .slice(0, Math.max(0, limit))
+    .map((x) => x.u);
   const without: string[] = [];
   const unread: string[] = [];
+  let checked = 0;
   for (const url of candidates) {
     if (left(opts) < MODEL_CALL_MS + 25000) break;
+    seen.add(url);
+    checked++;
     try {
       const page = await fetchPage(url, opts);
-      if (page.barcode) return { page, host: hostOf(url), notes: [...(without.length ? [`result pages without this barcode: ${without.join(', ')}`] : []), `${hostOf(url)} (a search result) shows this barcode${page.barcode === 'text' ? '' : page.barcode === 'markup' ? ' in its page data' : ' in its product record'}, so Purrbi read it`] };
-      without.push(hostOf(url));
+      if (page.barcode) return { page, host: hostOf(url), checked, notes: [...(without.length ? [`result pages without this barcode: ${without.join(', ')}`] : []), `${hostOf(url)} (a search result) shows this barcode${page.barcode === 'text' ? '' : page.barcode === 'markup' ? ' in its page data' : ' in its product record'}, so Purrbi read it`] };
+      without.push(page.family ? `${hostOf(url)} (lists it among ${page.family} barcodes)` : hostOf(url));
     } catch (err) {
       unread.push(`${hostOf(url)}${err instanceof SourceError ? ` (${err.status ? `HTTP ${err.status}` : err.kind})` : ''}`);
     }
@@ -631,7 +657,7 @@ async function pageShowingBarcode(opts: ResearchOptions, results: string[], seen
     ...(without.length ? [`result pages without this barcode: ${without.join(', ')}`] : []),
     ...(unread.length ? [`result pages that could not be read: ${unread.join(', ')}`] : []),
   ];
-  return { page: null, host: '', notes: candidates.length ? notes : ['no result page to check'] };
+  return { page: null, host: '', checked, notes: candidates.length ? notes : ['no result page to check'] };
 }
 
 const READ_SYSTEM = [
