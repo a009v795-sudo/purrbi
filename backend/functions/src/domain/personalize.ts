@@ -287,7 +287,7 @@ export function personalize(
 }
 
 export interface RowRelevance {
-  flag: 'conflict' | 'unconfirmed' | '';
+  flag: 'conflict' | 'sensitivity' | 'unconfirmed' | ''; // conflict: a recorded allergy; sensitivity: a recorded sensitivity
   text: string;
 }
 
@@ -308,8 +308,9 @@ export function ingredientRelevance(pet: PetProfile | null, facts: ProductFacts,
   for (const { key, what } of recorded) {
     const m = matchAllergen(key, ingredients);
     for (const ing of m.matches) {
-      if (m.status === 'contains') out.set(ing, { flag: 'conflict', text: `Contains ${allergenLabel(key)} — you recorded ${allergenLabel(key)} as ${what === 'allergy' ? 'an allergy' : 'a sensitivity'} for ${name}.` });
-      else if (m.status === 'possible' && out.get(ing)?.flag !== 'conflict')
+      if (m.status === 'contains' && (what === 'allergy' || out.get(ing)?.flag !== 'conflict'))
+        out.set(ing, { flag: what === 'allergy' ? 'conflict' : 'sensitivity', text: `Contains ${allergenLabel(key)} — you recorded ${allergenLabel(key)} as ${what === 'allergy' ? 'an allergy' : 'a sensitivity'} for ${name}.` });
+      else if (m.status === 'possible' && !out.get(ing)?.flag)
         out.set(ing, { flag: 'unconfirmed', text: `Compatibility with ${name}’s recorded ${allergenLabel(key)} ${what} is unconfirmed: the label doesn’t say what this is made from.` });
     }
   }

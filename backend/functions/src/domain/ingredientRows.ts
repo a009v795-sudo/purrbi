@@ -22,8 +22,11 @@ type Risk = IngredientStatuses['risk'];
 const CONCERN_RANK: Record<IngredientColor, number> = { red: 3, yellow: 2, gray: 1, green: 0 };
 const RISK_RANK: Record<Risk, number> = { documented_concern: 4, documented_caution: 3, consideration: 2, none_in_reviewed_list: 1, not_assessed: 0 };
 const KB_SEVERITY = { concern: 3, caution: 2, info: 1, positive: 1 } as const;
-/** A claim about these supports a role in pet food; one about people or other animals does not. */
-const PET_SCOPES = new Set<SpeciesScope>(['cat', 'dog', 'cat_and_dog', 'pets', 'animal_feed']);
+/**
+ * A claim about these supports a role in this product: cats and dogs, pets, animal feed, or the product's
+ * own species. One about the other species (a dog page for a cat food), people or other animals does not.
+ */
+const fitsProduct = (scope: SpeciesScope, species: Species[]) => scope === 'cat_and_dog' || scope === 'pets' || scope === 'animal_feed' || (species.length === 1 && scope === species[0]);
 
 // A source the label names: an animal species (or eggs) or a plant. "Fish oil", "poultry fat", "meat",
 // "bone broth" and "natural flavor" name none.
@@ -33,7 +36,7 @@ const POULTRY = ['chicken', 'turkey', 'duck', 'goose', 'quail', 'pheasant', 'pou
 const MEAT = ['beef', 'veal', 'bison', 'buffalo', 'lamb', 'mutton', 'goat', 'pork', 'venison', 'deer', 'elk', 'rabbit', 'kangaroo', 'boar', 'lard', 'boeuf', 'veau', 'agneau', 'porc', 'lapin', 'lamm', 'schwein', 'ternera', 'vacuno', 'cordero', 'cerdo', 'conejo', 'manzo', 'agnello', 'maiale', 'coniglio'];
 const EGG = ['egg', 'oeuf', 'huevo', 'uovo'];
 const ORGAN = ['liver', 'heart', 'kidney', 'gizzard', 'tripe', 'lung', 'spleen', 'foie'];
-const PLANTS = ['sunflower', 'safflower', 'canola', 'rapeseed', 'flaxseed', 'flax', 'linseed', 'coconut', 'soybean', 'soy', 'soya', 'olive', 'corn', 'maize', 'palm', 'hemp', 'rice', 'barley', 'oat', 'oatmeal', 'wheat', 'sorghum', 'millet', 'quinoa', 'buckwheat', 'rye', 'spelt', 'amaranth', 'potato', 'sweet potato', 'tapioca', 'cassava', 'arrowroot', 'yam', 'pea', 'chickpea', 'garbanzo', 'lentil', 'bean', 'fava', 'beet', 'beetroot', 'pumpkin', 'squash', 'carrot', 'cranberry', 'cranberries', 'blueberry', 'blueberries', 'raspberries', 'strawberries', 'apple', 'banana', 'pear', 'spinach', 'kale', 'broccoli', 'parsley', 'tomato', 'celery', 'zucchini', 'cucumber', 'cellulose', 'psyllium', 'inulin', 'chicory', 'fructooligosaccharides', 'ble', 'mais', 'riz', 'orge', 'avoine', 'pommes de terre', 'pomme de terre', 'pois', 'lentilles', 'betterave', 'carotte', 'weizen', 'reis', 'gerste', 'hafer', 'kartoffel', 'kartoffeln', 'erbsen', 'trigo', 'arroz', 'maiz', 'cebada', 'avena', 'patata', 'patate', 'guisantes', 'lentejas', 'riso', 'orzo', 'piselli'];
+const PLANTS = ['alfalfa', 'lucerne', 'algae', 'algal', 'colza', 'tournesol', 'soja', 'lin', 'girasol', 'girasole', 'raps', 'sonnenblume', 'sonnenblumen', 'leinsamen', 'lino', 'sunflower', 'safflower', 'canola', 'rapeseed', 'flaxseed', 'flax', 'linseed', 'coconut', 'soybean', 'soy', 'soya', 'olive', 'corn', 'maize', 'palm', 'hemp', 'rice', 'barley', 'oat', 'oatmeal', 'wheat', 'sorghum', 'millet', 'quinoa', 'buckwheat', 'rye', 'spelt', 'amaranth', 'potato', 'sweet potato', 'tapioca', 'cassava', 'arrowroot', 'yam', 'pea', 'chickpea', 'garbanzo', 'lentil', 'bean', 'fava', 'beet', 'beetroot', 'pumpkin', 'squash', 'carrot', 'cranberry', 'cranberries', 'blueberry', 'blueberries', 'raspberries', 'strawberries', 'apple', 'banana', 'pear', 'spinach', 'kale', 'broccoli', 'parsley', 'tomato', 'celery', 'zucchini', 'cucumber', 'cellulose', 'psyllium', 'inulin', 'chicory', 'fructooligosaccharides', 'ble', 'mais', 'riz', 'orge', 'avoine', 'pommes de terre', 'pomme de terre', 'pois', 'lentilles', 'betterave', 'carotte', 'weizen', 'reis', 'gerste', 'hafer', 'kartoffel', 'kartoffeln', 'erbsen', 'trigo', 'arroz', 'maiz', 'cebada', 'avena', 'patata', 'patate', 'guisantes', 'lentejas', 'riso', 'orzo', 'piselli'];
 const STANDARD_PRESERVATIVES = new Set(['mixed tocopherols', 'tocopherols', 'rosemary extract']);
 const UNNAMED_FLAVOURS = new Set(['natural flavor', 'natural flavour', 'flavor', 'flavour', 'animal digest', 'digest', 'palatant', 'aromes']);
 const VITAMIN = /vitamin|biotin|folic|niacin|riboflavin|thiamin|pyridoxine|menadione|pantothen|cobalamin|ascorb|tocopheryl|cholecalciferol|retinyl|inositol|carotene|phylloquinone/;
@@ -42,13 +45,20 @@ const VITAMIN = /vitamin|biotin|folic|niacin|riboflavin|thiamin|pyridoxine|menad
 // ingredients (listed within the first 10, before the vitamins and minerals); no causal link was established.
 const PULSES = ['pea', 'lentil', 'chickpea', 'garbanzo', 'bean', 'fava', 'faba', 'legume', 'pulse', 'pois', 'lentilles', 'erbsen', 'linsen', 'guisantes', 'lentejas', 'piselli', 'lenticchie'];
 const POTATOES = ['potato', 'pommes de terre', 'pomme de terre', 'kartoffel', 'kartoffeln', 'patata', 'patate'];
-const NOT_DCM = /\bsweet potato(?:es)?\b|\bgreen beans?\b|\bsoy ?beans?\b|\blocust bean\b|\bcarob bean\b/g;
+// Sweet potatoes in every label language (French "patate douce", Italian "patata dolce", German "Süßkartoffel"), and beans that are not pulses.
+const NOT_DCM = /\bsweet potato(?:es)?\b|\bpatates? douces?\b|\bpatat[ae] dolc[ei]\b|\bsu(?:ß|ss)kartoffel(?:n)?\b|\bbatatas?\b|\bboniatos?\b|\bcamotes?\b|\bgreen beans?\b|\bsoy ?beans?\b|\blocust bean\b|\bcarob bean\b/g;
 const DCM_NOTE =
   'The FDA investigated reports of heart disease (DCM) in dogs eating diets with peas, lentils, other pulses or potatoes among their main ingredients; no causal link was established. Ask your veterinarian if this concerns you.';
 const DCM_NOT_MAIN = 'Here it is not among the main ingredients (the first 10, before the vitamins and minerals).';
 const NONE_IN_LIST = 'Purrbi’s reviewed list has no species-specific concern for this ingredient; effects at the amount used aren’t assessed.';
 
-type Kind = 'animal_protein' | 'fat' | 'vitamin' | 'mineral' | 'choline' | 'amino_acid' | 'preservative' | 'water' | 'broth' | 'carbohydrate' | 'fibre' | 'fruit_vegetable';
+type Kind = 'animal_protein' | 'fat' | 'vitamin' | 'optional_nutrient' | 'mineral' | 'choline' | 'amino_acid' | 'preservative' | 'water' | 'broth' | 'carbohydrate' | 'fibre' | 'fruit_vegetable';
+// Vitamins dogs and cats make themselves, or (beta-carotene, for cats) cannot use: not "an essential vitamin".
+const OPTIONAL: { re: RegExp; what: string }[] = [
+  { re: /ascorb|vitamin c\b/, what: 'A form of vitamin C, which dogs and cats make themselves.' },
+  { re: /inositol/, what: 'Inositol, which dogs and cats make themselves.' },
+  { re: /carotene/, what: 'Beta-carotene, an antioxidant; dogs can make vitamin A from it, cats cannot.' },
+];
 type RoleClass = Kind | 'unspecified' | 'unassessed' | 'unknown';
 
 const has = (text: string, words: string[]) => words.some((w) => containsTerm(text, w));
@@ -69,9 +79,10 @@ const KINDS: Record<Kind, { what: (own: string) => string; why: string; reason: 
     reason: 'Named fat source',
   },
   vitamin: { what: () => 'A vitamin source.', why: 'Added so the food supplies an essential vitamin.', reason: 'Vitamin source, added as a nutrient' },
+  optional_nutrient: { what: (own) => OPTIONAL.find((o) => o.re.test(own))?.what ?? 'An optional nutrient.', why: 'Added as an antioxidant or an optional nutrient.', reason: 'Added as an antioxidant or optional nutrient' },
   mineral: { what: () => 'A mineral source.', why: 'Added so the food supplies essential minerals.', reason: 'Mineral source, added as a nutrient' },
   choline: { what: () => 'A source of choline.', why: 'Added so the food supplies choline, an essential nutrient.', reason: 'Choline source, added as a nutrient' },
-  amino_acid: { what: () => 'An amino acid.', why: 'Added as a nutrient.', reason: 'Amino acid, added as a nutrient' },
+  amino_acid: { what: (own) => (/carnitine/.test(own) ? 'A compound the body makes from amino acids (not an essential amino acid).' : 'An amino acid.'), why: 'Added as a nutrient.', reason: 'Amino acid, added as a nutrient' },
   preservative: { what: () => 'A preservative.', why: 'Keeps fats from going rancid.', reason: 'Common preservative that keeps fats fresh' },
   water: { what: () => 'Water.', why: 'Added for processing; it also adds moisture.', reason: 'Water used in processing' },
   broth: { what: () => 'A broth made from a named ingredient.', why: 'Adds moisture and flavour.', reason: 'Named broth: adds moisture and flavour' },
@@ -98,6 +109,8 @@ const ROLE_WORDS: Record<string, { what: string; why: string }> = {
   'Protein source': { what: 'A protein ingredient', why: 'A source of protein.' },
   'Carbohydrate source': { what: 'A carbohydrate ingredient', why: 'Supplies carbohydrate, a source of energy.' },
   'Fruit or vegetable': { what: 'A fruit or vegetable', why: '' },
+  Emulsifier: { what: 'An emulsifier', why: 'Helps fat and water stay mixed.' },
+  'Processing aid': { what: 'A processing aid', why: 'Helps the product flow or keep its shape during manufacturing.' },
 };
 
 // Where a curated note that is not a concern or caution belongs in the details.
@@ -135,7 +148,7 @@ function roleClass(match: RoleMatch | null, own: string): RoleClass {
     case 'Water (processing)':
       return 'water';
     case 'Vitamin or mineral':
-      return /choline/.test(own) ? 'choline' : VITAMIN.test(own) ? 'vitamin' : 'mineral';
+      return /choline/.test(own) ? 'choline' : OPTIONAL.some((o) => o.re.test(own)) ? 'optional_nutrient' : VITAMIN.test(own) ? 'vitamin' : 'mineral';
     case 'Amino acid (nutrient)':
       return 'amino_acid';
     case 'Preservative':
@@ -246,8 +259,10 @@ function assess(s: Subject, species: Species[], claimsFor: ClaimsFor): Assessed 
   const claims = [...claimsFor(s.name)].sort(scopeOrder(species));
   const identity = claims.find((c) => c.claimType === 'identity');
   const fn = claims.find((c) => c.claimType === 'function');
-  const supporting = claims.find((c) => (c.claimType === 'function' || c.claimType === 'identity') && PET_SCOPES.has(c.speciesScope));
+  const supporting = claims.find((c) => (c.claimType === 'function' || c.claimType === 'identity') && fitsProduct(c.speciesScope, species));
   const findings = claims.filter((c) => c.claimType === 'benefit' || c.claimType === 'risk');
+  // A checked risk for this product's species is a consideration: the row says so in its colour too.
+  const checkedRisk = claims.find((c) => c.claimType === 'risk' && fitsProduct(c.speciesScope, species));
 
   // The reviewed list: the most severe entry anywhere in the name decides the colour; the entry for the
   // ingredient itself (not a qualifier) decides whether Purrbi's list covers it at all.
@@ -265,7 +280,7 @@ function assess(s: Subject, species: Species[], claimsFor: ClaimsFor): Assessed 
   const statuses: IngredientStatuses = {
     identity: match || own || identity ? 'established' : 'not_established',
     role: match || fn ? 'explained' : 'not_explained',
-    risk: concern ? 'documented_concern' : caution ? 'documented_caution' : dcm ? 'consideration' : ownCovers ? 'none_in_reviewed_list' : 'not_assessed',
+    risk: concern ? 'documented_concern' : caution ? 'documented_caution' : dcm || checkedRisk ? 'consideration' : ownCovers ? 'none_in_reviewed_list' : 'not_assessed',
     exposure: 'not_assessed', // labels give no amounts Purrbi could assess an exposure from
     humanReview: (flaggedEntry ?? own?.entry)?.reviewStatus === 'vet_reviewed' ? 'performed' : 'not_performed',
   };
@@ -280,6 +295,7 @@ function assess(s: Subject, species: Species[], claimsFor: ClaimsFor): Assessed 
   if (concern) [color, reason] = ['red', shortFor(worst.entry, 'concern')];
   else if (caution) [color, reason] = ['yellow', shortFor(worst.entry, 'caution')];
   else if (dcm) [color, reason] = ['yellow', `${dcmFor === 'potato' ? 'Potato' : 'Pulse'} in the first 10: FDA reviewed dog heart disease (DCM); no causal link established`];
+  else if (checkedRisk) [color, reason] = ['yellow', `A checked source notes a risk${checkedRisk.doseContext ? ` (${checkedRisk.doseContext.slice(0, 40)})` : ''}`];
   else if (cls === 'unspecified') [color, reason] = ['gray', 'Source not stated on the label'];
   else if (cls in KINDS) [color, reason] = ['green', KINDS[cls as Kind].reason];
   else if (supporting) [color, reason, byClaim] = ['green', supporting.speciesScope === 'animal_feed' ? 'Role in animal feed supported by a checked source' : 'Role in pet food supported by a checked source', true];
@@ -350,12 +366,13 @@ function assess(s: Subject, species: Species[], claimsFor: ClaimsFor): Assessed 
     ...scopeNotes(used, species),
   ].join(' ');
 
-  // The entry behind the colour, else the one Purrbi's ingredient notes use (the longest term), when it covers the species.
-  const kbEntry = flaggedEntry ?? longest[0]?.entry;
+  // The entry behind the colour, else the one Purrbi's ingredient notes use (the most severe, then the longest term), when it covers the species.
+  const kbEntry = flaggedEntry ?? worst?.entry;
   const kbId = kbEntry && species.some((sp) => kbEntry.status[sp]) ? kbEntry.id : undefined;
   const concernFor = kbId ? species.filter((sp) => kbEntry!.status[sp] === 'concern' || kbEntry!.status[sp] === 'caution') : [];
   return {
-    role: match?.role ?? (fn ? normalizeRole(fn.claim) : ''),
+    // A role from a claim only when the claim is about this kind of product, and only in the table's words.
+    role: match?.role ?? (fn && fitsProduct(fn.speciesScope, species) ? normalizeRole(fn.claim, true) : ''),
     color,
     reason,
     statuses,
@@ -366,7 +383,7 @@ function assess(s: Subject, species: Species[], claimsFor: ClaimsFor): Assessed 
     sources,
     ...(kbId ? { kbId } : {}),
     ...(concernFor.length ? { concernFor } : {}),
-    nutrient: color === 'green' && (cls === 'vitamin' || cls === 'mineral' || cls === 'choline' || cls === 'amino_acid'),
+    nutrient: color === 'green' && (cls === 'vitamin' || cls === 'mineral' || cls === 'choline' || (cls === 'amino_acid' && !/carnitine/.test(s.own))),
   };
 }
 
@@ -421,7 +438,8 @@ function entryRow(ing: ParsedIngredient, species: Species[], claimsFor: ClaimsFo
     return `Includes ${listed(list.map((k) => ing.children[kids.indexOf(k)].name))}${what}`;
   };
   // The entry behind the colour, else the one Purrbi's ingredient notes use for the whole entry (the longest term in it or its items).
-  const notesEntry = curatedEntries([ing.normalized, ...ing.subIngredients]).sort((a, b) => b.term.length - a.term.length)[0]?.entry;
+  const kbSeverity = (e: KbEntry) => Math.max(0, ...species.map((sp) => (e.status[sp] ? KB_SEVERITY[e.status[sp]!] : 0)));
+  const notesEntry = curatedEntries([ing.normalized, ...ing.subIngredients]).sort((a, b) => kbSeverity(b.entry) - kbSeverity(a.entry) || b.term.length - a.term.length)[0]?.entry;
   const entryKb = (red[0] ?? yellow[0])?.kbId ?? (notesEntry && species.some((sp) => notesEntry.status[sp]) ? notesEntry.id : undefined);
 
   if (ing.kind === 'group') {
@@ -447,7 +465,8 @@ function entryRow(ing: ParsedIngredient, species: Species[], claimsFor: ClaimsFo
       whyUsed: `Added so the food supplies essential ${what}.`,
       benefitsRisks: flaggedKids.length ? notesOf(flaggedKids).join(' ') : allCovered ? 'Purrbi’s reviewed list has no species-specific concern for these items; effects at the amounts used aren’t assessed.' : 'Not assessed as a whole; each item has its own assessment.',
       uncertainty: 'The label doesn’t give the amounts, so exposure isn’t assessed. Not reviewed by a person yet.',
-      sources: sourcesOf(flaggedKids),
+      // Every item's sources, so a colour that rests on an item's checked claim shows where it comes from.
+      sources: sourcesOf(kids),
       ...(entryKb ? { kbId: entryKb } : {}),
       ...(concernFor.length ? { concernFor } : {}),
       nutrient: false,
@@ -491,7 +510,7 @@ function entryRow(ing: ParsedIngredient, species: Species[], claimsFor: ClaimsFo
  */
 export function ingredientRows(ingredients: ParsedIngredient[], species: Species[], claimsFor: ClaimsFor): IngredientRow[] {
   // The FDA's criterion for a main ingredient: listed within the first 10, before the vitamins and minerals.
-  const firstNutrients = ingredients.find((i) => i.kind === 'group' || /vitamin|mineral|minerau|oligo-?element|spurenelement/.test(ownText(i.name)));
+  const firstNutrients = ingredients.find((i) => i.kind === 'group' || /vitamin|mineral|minerau|oligo-?element|spurenelement/.test(ownText(i.name)) || ingredientRoleMatch(i.name)?.role === 'Vitamin or mineral');
   const mainUpTo = Math.min(10, firstNutrients ? firstNutrients.position - 1 : 10);
   return ingredients.map((ing) => entryRow(ing, species, claimsFor, ing.position <= mainUpTo));
 }

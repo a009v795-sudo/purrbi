@@ -149,7 +149,8 @@ const ENTRIES: KbEntry[] = [
   },
   {
     id: 'natural_flavor',
-    terms: ['natural flavor', 'natural flavors', 'natural flavour', 'natural flavours', 'animal digest', 'digest'],
+    // "Chicken digest" names its source; only an unnamed digest is listed here.
+    terms: ['natural flavor', 'natural flavors', 'natural flavour', 'natural flavours', 'animal digest'],
     status: { cat: 'info', dog: 'info' },
     note: { both: 'A flavouring whose exact source is not disclosed on the label. If your pet has a protein allergy, ask the manufacturer what it is made from.' },
     sources: [SRC.fdaLabels],
@@ -177,22 +178,14 @@ const ENTRIES: KbEntry[] = [
 
 const SEVERITY: Record<IngredientNote['status'], number> = { concern: 4, caution: 3, info: 1, positive: 1, unknown: 0 };
 
-function entryFor(ing: ParsedIngredient): KbEntry | undefined {
-  const texts = [ing.normalized, ...ing.subIngredients];
-  let best: KbEntry | undefined;
-  let bestLen = 0;
-  for (const e of ENTRIES) {
-    for (const text of texts) {
-      if (e.exclude?.some((x) => containsTerm(text, x))) continue;
-      for (const term of e.terms) {
-        if (containsTerm(text, term) && term.length > bestLen) {
-          best = e;
-          bestLen = term.length;
-        }
-      }
-    }
-  }
-  return best;
+/**
+ * The curated entry an ingredient is judged by, as the ingredient rows choose it: of every entry its name
+ * and listed parts name, the most severe for these species, then the one named by the longest term. So the
+ * score, its cap and the row never disagree ("Peanut Butter (Peanuts, Natural Flavors, Xylitol)" is xylitol's).
+ */
+function entryFor(ing: ParsedIngredient, species: Species[]): KbEntry | undefined {
+  const severity = (e: KbEntry) => Math.max(0, ...species.map((s) => (e.status[s] ? SEVERITY[e.status[s]!] : 0)));
+  return curatedEntries([ing.normalized, ...ing.subIngredients]).sort((a, b) => severity(b.entry) - severity(a.entry) || b.term.length - a.term.length)[0]?.entry;
 }
 
 /**
@@ -224,7 +217,7 @@ export function ingredientNotes(ingredients: ParsedIngredient[], species: Specie
   return ingredients.map((ing): IngredientNote => {
     const role = ingredientRole(ing.name);
     const withRole = (n: IngredientNote): IngredientNote => (role ? { ...n, role, roleSource: 'curated' } : n);
-    const entry = entryFor(ing);
+    const entry = entryFor(ing, species);
     if (!entry) {
       return withRole({ name: ing.name, position: ing.position, status: 'unknown', note: 'Not yet reviewed by Purrbi. Unknown is not the same as harmful.', explanationKind: 'none' });
     }

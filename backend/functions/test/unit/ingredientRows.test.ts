@@ -247,3 +247,70 @@ describe('ingredient rows: the Wellness gravies list for a cat', () => {
     expect(['Natural Flavor', 'Guar Gum', 'Xanthan Gum'].map((n) => row(list, n).color)).toEqual(['gray', 'gray', 'gray']);
   });
 });
+
+describe('review of the ingredient rows (2026-10-30)', () => {
+  it('a red row and the score agree: the note uses the most severe entry too', async () => {
+    const { assessGeneral } = await import('../../src/domain/score');
+    const { classifyScope } = await import('../../src/domain/scope');
+    const { facts } = await import('../helpers/fixtures');
+    const f = facts({ ingredientsText: 'Chicken, Brown Rice, Peanut Butter (Peanuts, Natural Flavors, Xylitol), Chicken Fat', classificationSignals: [{ text: 'en:dog-food', source: 't' }], adequacyText: 'TEST FIXTURE is formulated to meet the nutritional levels established by the AAFCO Dog Food Nutrient Profiles for adult maintenance.' });
+    const scope = classifyScope({ origin: 'opff', categoriesTags: ['en:dog-food'], texts: [''], adequacy: f.adequacy?.value });
+    expect(row(rows('Chicken, Brown Rice, Peanut Butter (Peanuts, Natural Flavors, Xylitol), Chicken Fat', ['dog']), 'Peanut Butter').color).toBe('red');
+    const g = assessGeneral(f, scope);
+    expect(g.scoreLabel).toBe('Serious concern');
+    expect(g.criticalConcerns.join(' ')).toMatch(/Peanut Butter/);
+    expect(ingredientNotes(parseIngredientList('Natural Flavor (contains onion)'), ['cat'])[0].status).toBe('concern');
+  });
+  it('cooking liquids are broths, and modifier words never make a protein source', () => {
+    const list = rows('Tuna Juice, Chicken Gravy, Tuna Consommé, Soy Lecithin, Bone Meal, Alfalfa Meal, Coconut Water, Magnesium Stearate', ['cat']);
+    expect(['Tuna Juice', 'Chicken Gravy', 'Tuna Consommé'].map((n) => row(list, n).role)).toEqual(['Broth (moisture and flavour)', 'Broth (moisture and flavour)', 'Broth (moisture and flavour)']);
+    expect(row(list, 'Soy Lecithin').role).toBe('Emulsifier');
+    expect(row(list, 'Bone Meal').role).toBe('Vitamin or mineral');
+    expect(row(list, 'Alfalfa Meal').role).toBe('Fibre source');
+    expect(row(list, 'Coconut Water').role).toBe('Fruit or vegetable');
+    expect(row(list, 'Magnesium Stearate').role).toBe('Processing aid');
+    expect(everyRow(list).some((r) => r.reason === 'Named animal protein source')).toBe(false);
+    expect(row(rows('Turkey Giblets, Dried Egg Product', ['dog']), 'Turkey Giblets').reason).toBe('Named animal protein source');
+  });
+  it('a claim about the other species does not make a row green', () => {
+    const dogClaim = claim({ claimType: 'function', claim: 'Used in dog foods and supplements as an antioxidant.', ingredientForm: 'alpha-lipoic acid', speciesScope: 'dog' });
+    const forCats = row(rows('Chicken, Alpha-Lipoic Acid', ['cat'], (t) => (/lipoic/i.test(t) ? [dogClaim] : [])), 'Alpha-Lipoic Acid');
+    expect(forCats.color).not.toBe('green');
+    const forDogs = row(rows('Chicken, Alpha-Lipoic Acid', ['dog'], (t) => (/lipoic/i.test(t) ? [dogClaim] : [])), 'Alpha-Lipoic Acid');
+    expect(forDogs.color).toBe('green');
+  });
+  it('a checked risk for the product’s species makes the row yellow and its risk a consideration, and lifts the blend', () => {
+    const risk = claim({ claimType: 'risk', claim: 'Fed in excess, it caused steatitis in cats.', ingredientForm: 'tuna oil', speciesScope: 'cat', doseContext: 'in excess' });
+    const tuna = row(rows('Chicken, Tuna Oil', ['cat'], (t) => (/tuna oil/i.test(t) ? [risk] : [])), 'Tuna Oil');
+    expect(tuna).toMatchObject({ color: 'yellow', statuses: expect.objectContaining({ risk: 'consideration' }) });
+    const vitRisk = claim({ claimType: 'risk', claim: 'Excess vitamin D3 is toxic to dogs.', ingredientForm: 'vitamin d3 supplement', speciesScope: 'dog' });
+    const blend = row(rows('Chicken, Vitamins [Vitamin E Supplement, Vitamin D3 Supplement]', ['dog'], (t) => (/d3/i.test(t) ? [vitRisk] : [])), 'Vitamins');
+    expect(blend.color).toBe('yellow');
+  });
+  it('a blend item’s claim keeps its source, and a claim sentence is never shown as a role', () => {
+    const feed = claim({ claimType: 'function', claim: 'As a feed additive, ethylenediamine dihydriodide supplies iodine.', ingredientForm: 'ethylenediamine dihydroiodide', speciesScope: 'animal_feed' });
+    const people = claim({ claimType: 'function', claim: 'Used as a foaming agent in beverages.', ingredientForm: 'yucca schidigera extract', speciesScope: 'people' });
+    const list = rows('Chicken, Minerals (Zinc Proteinate, Ethylenediamine Dihydroiodide), Vitamins [Vitamin E Supplement, Yucca Schidigera Extract]', ['dog'], (t) => (/ethylenediamine/i.test(t) ? [feed] : /yucca/i.test(t) ? [people] : []));
+    expect(row(list, 'Minerals').sources.some((s) => s.url === feed.url)).toBe(true);
+    const yucca = row(list, 'Vitamins').children.find((c) => c.name === 'Yucca Schidigera Extract')!;
+    expect(yucca.role).toBe('');
+  });
+  it('sweet potatoes are not potatoes in any label language; a mineral listed by name ends the main ingredients', () => {
+    for (const t of ['Agneau, Patate douce (25%), Riz', 'Agnello, Patate dolci, Riso', 'Lamm, Süßkartoffeln, Reis']) expect([t, rows(t, ['dog'])[1].color]).not.toEqual([t, 'yellow']);
+    const list = rows('Chicken, Rice, Chicken Fat, Natural Flavor, Dicalcium Phosphate, Salt, Potatoes, Vitamin E Supplement', ['dog']);
+    expect(row(list, 'Potatoes').color).not.toBe('yellow');
+  });
+  it('nutrient texts say no more than is true', () => {
+    const list = rows('Chicken, Ascorbic Acid, Inositol, Beta-Carotene, L-Carnitine', ['cat']);
+    expect(row(list, 'Ascorbic Acid').whatItIs).toMatch(/make themselves/);
+    expect(row(list, 'Inositol').whatItIs).toMatch(/make themselves/);
+    expect(row(list, 'Beta-Carotene').whatItIs).toMatch(/cats cannot/);
+    expect(row(list, 'L-Carnitine').whatItIs).toMatch(/not an essential amino acid/);
+    expect(everyRow(list).filter((r) => /essential vitamin/.test(r.whyUsed))).toEqual([]);
+  });
+  it('named sources in other languages are named; a named digest discloses its source', () => {
+    const list = rows('Huile de colza, Huile de tournesol, Algae Oil, Chicken Digest', ['cat']);
+    expect(['Huile de colza', 'Huile de tournesol', 'Algae Oil'].map((n) => row(list, n).reason)).toEqual(['Named fat source', 'Named fat source', 'Named fat source']);
+    expect(row(list, 'Chicken Digest').whatItIs).not.toMatch(/not disclosed/);
+  });
+});

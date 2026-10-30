@@ -7,7 +7,7 @@ import { caloriesForPackage, describeCalories, describeEntry, dryMatterPercent, 
 import { SCOPE_VERSION } from '../domain/scope';
 import { ASSESSMENT_VERSION } from './config';
 import type { RowRelevance } from '../domain/personalize';
-import type { EvidenceKind, GeneralAssessment, IngredientRow, IngredientStatuses, PersonalAssessment, ProductFacts, RecallCheck, ScopeResult, SpeciesBasis, SpeciesScope } from '../domain/types';
+import type { ClaimSource, EvidenceKind, GeneralAssessment, IngredientRow, IngredientStatuses, PersonalAssessment, ProductFacts, RecallCheck, ScopeResult, SpeciesBasis, SpeciesScope } from '../domain/types';
 import type { ResultState } from '../domain/summary';
 import type { Highlight } from '../domain/highlights';
 import { summarizeCalls, type SourceCall } from '../util/diagnostics';
@@ -296,6 +296,12 @@ const STATUS_TEXT: { [K in keyof IngredientStatuses]: Record<IngredientStatuses[
 const SCOPE_TEXT: Record<SpeciesScope, string> = { cat: 'about cats', dog: 'about dogs', cat_and_dog: 'about cats and dogs', pets: 'about pets', animal_feed: 'about animal feed', other_species: 'about other animals, not cats or dogs', people: 'about people, not pet evidence', not_species_specific: 'not species-specific' };
 const EVIDENCE_TEXT: Record<EvidenceKind, string> = { regulation: 'regulation', regulatory_assessment: 'regulatory assessment', standards_body: 'standards body', veterinary_reference: 'veterinary reference', peer_reviewed: 'peer-reviewed research', curated: 'Purrbi’s curated list (draft)', other: 'source' };
 
+/** A source as the app lists it, with one line saying what kind of evidence it is, whom it is about and when. */
+const sourceRow = (x: ClaimSource) => ({
+  ...x,
+  label: [x.title || x.url, EVIDENCE_TEXT[x.evidence], SCOPE_TEXT[x.speciesScope], x.publishedAt ? `published ${x.publishedAt.slice(0, 10)}` : '', x.retrievedAt ? `checked ${x.retrievedAt.slice(0, 10)}` : ''].filter(Boolean).join(' · '),
+});
+
 /**
  * The ingredient rows as the app binds them (label order, and the same rows concerns first), with what each
  * means for the selected pet. Statuses are plain words; every source keeps its passage, scope and dates.
@@ -325,15 +331,17 @@ export function ingredientRowFields(rows: IngredientRow[], relevance: Map<string
       statusExposure: st.exposure,
       statusHumanReview: st.humanReview,
       checksText: [STATUS_TEXT.identity[st.identity], STATUS_TEXT.role[st.role], STATUS_TEXT.risk[st.risk], STATUS_TEXT.exposure[st.exposure], STATUS_TEXT.humanReview[st.humanReview]].join(' · '),
-      sources: r.sources.map((x) => ({
-        ...x,
-        label: [x.title || x.url, EVIDENCE_TEXT[x.evidence], SCOPE_TEXT[x.speciesScope], x.publishedAt ? `published ${x.publishedAt.slice(0, 10)}` : '', x.retrievedAt ? `checked ${x.retrievedAt.slice(0, 10)}` : ''].filter(Boolean).join(' · '),
+      sources: r.sources.map(sourceRow),
+      // Each item keeps its own checks and sources, so a blend's colour that rests on an item's claim shows its passage.
+      children: r.children.map((c) => ({
+        id: c.id, name: c.name, labelText: c.labelText, role: c.role, color: c.color, reason: c.reason, whatItIs: c.whatItIs, whyUsed: c.whyUsed, benefitsRisks: c.benefitsRisks, uncertainty: c.uncertainty,
+        checksText: [STATUS_TEXT.identity[c.statuses.identity], STATUS_TEXT.role[c.statuses.role], STATUS_TEXT.risk[c.statuses.risk]].join(' · '),
+        sources: c.sources.map(sourceRow),
       })),
-      children: r.children.map((c) => ({ id: c.id, name: c.name, role: c.role, color: c.color, reason: c.reason, whatItIs: c.whatItIs, whyUsed: c.whyUsed, benefitsRisks: c.benefitsRisks, uncertainty: c.uncertainty })),
       concernRank: r.concernRank,
     };
   });
-  // A pet-specific conflict is shown first in the concerns-first order too.
-  const rank = (x: (typeof flat)[number]) => x.concernRank + (x.petFlag === 'conflict' ? 4 : x.petFlag === 'unconfirmed' ? 0.5 : 0);
+  // A pet-specific conflict is shown first in the concerns-first order too (an allergy before a sensitivity).
+  const rank = (x: (typeof flat)[number]) => x.concernRank + (x.petFlag === 'conflict' ? 4 : x.petFlag === 'sensitivity' ? 2 : x.petFlag === 'unconfirmed' ? 0.5 : 0);
   return { ingredientRows: flat, ingredientRowsByConcern: [...flat].sort((a, b) => rank(b) - rank(a) || a.position - b.position) };
 }
