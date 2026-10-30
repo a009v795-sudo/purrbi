@@ -675,9 +675,11 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   // than those of a result already saved (e.g. a photo and a pet change processed at the same time) does
   // not overwrite it.
   const ref = db.doc(scanPath(o.uid, o.scanId));
+  const labelPhotoCount = (await db.collection(`users/${o.uid}/photos`).where('scanId', '==', o.scanId).count().get().catch(() => null))?.data().count ?? 0;
   let superseded = false;
   try {
     const fields = {
+      labelPhotoCount,
       ...resultFields({ facts, scope, general, personal, recall, summary, state, photoRequests: requests, factsVersion, labelEvidenceUsed: labelUsed, labelIdentityVerified: !labelUsed || labelTied }),
       ...explanationFields(general, pending ? 'pending' : explain.status),
       ...highlightFields(highlights, verdict),
@@ -897,6 +899,9 @@ async function photoJob(deps: Deps, uid: string, photoId: string): Promise<void>
     return { scan: scan.data()!, photo: photo.data()! };
   });
   if (!claimed) return;
+  // How many label photos this scan has, so the app shows the photos card only when there are some.
+  const photoCount = (await db.collection(`users/${uid}/photos`).where('scanId', '==', scanId).count().get().catch(() => null))?.data().count;
+  if (typeof photoCount === 'number') await scanRef.update({ labelPhotoCount: photoCount }).catch(() => undefined);
   const traceId = (claimed.scan.traceId as string) || randomUUID().slice(0, 12);
   const job = newJob('photo', traceId, now);
   const gtin = (claimed.scan.gtin as string) ?? normalizeBarcode(claimed.scan.barcode).gtin14;

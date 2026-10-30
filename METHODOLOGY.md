@@ -1,108 +1,144 @@
 # Purrbi assessment methodology
 
-Version: `purrbi-score-2.0.0` (score), `scope-2.1.0` (classification), `verdict-1.3.0` (verdict),
-`kb-2026-10-28-draft` (ingredient notes), `label-extract-2.3.0` (label reader), `research-1.7.0` (web research), `explain-1.2.0` (cited explanations).
-A saved result records its score and ingredient-note versions (`scoreVersion`, `kbVersion`); the shared product record its
-classification version (`scopeVersion`); each fact read from a label or a web page its reader's version; each explanation its own.
+Version: `assessment-3.0.0` overall, made of `purrbi-score-3.0.0` (score), `scope-3.0.0` (classification), `verdict-2.0.0` (verdict),
+`kb-2026-10-28-draft` (ingredient notes), `label-extract-2.3.0` (label reader), `research-2.0.0` (web research), `explain-2.0.0` (claim-checked explanations).
+A saved result records `assessmentVersion` and its parts (`scoreVersion`, `kbVersion`, `scopeVersion`); the shared product record its
+classification version; each fact read from a label, page or document its reader's version; each explanation its own. When the app opens
+a result saved under an older `assessmentVersion` it asks for a re-check (section 10), so a known bad classification is corrected without
+deleting history or reinstalling.
 
-The Purrbi label score is Purrbi's own measure of how well the label information that is available supports the product's intended use. It is not an FDA, AAFCO, WSAVA or veterinary rating. It does not depend on the pet profile: two pets see the same general score for the same evidence. Personal fit is assessed separately.
+The Purrbi score is Purrbi's own, **provisional** methodology for rating what a product's label shows about it for its intended use. It is
+not an FDA, AAFCO, WSAVA or veterinary rating, and no qualified reviewer has reviewed it. It does not depend on the pet profile: two pets see
+the same general score for the same evidence. Personal fit is assessed separately (section 6).
 
-Code: `backend/functions/src/domain/score.ts` (score), `scope.ts` (classification), `roles.ts` (ingredient roles), `highlights.ts`, `personalize.ts`, `../ai/verdict.ts`.
+Code: `backend/functions/src/domain/score.ts` (score), `scope.ts` (classification), `ingredientRows.ts` and `roles.ts` (ingredient rows),
+`highlights.ts`, `personalize.ts`, `../knowledge/explain.ts` and `claims.ts` (claim checks), `../ai/verdict.ts`, `../sources/research.ts` and
+`pageEvidence.ts` (retrieval).
 
 ## 1. What the product is, first
 
-Every scan is classified from the product's own evidence before anything is scored. The evidence comes from the record's categories, label text, ingredients, a verified manufacturer or retailer page, or the owner's label photo.
+Every scan is classified from the product's own evidence before anything is scored.
 
 | State | When | What the app shows |
 |---|---|---|
-| **Confirmed pet product** (`supported`) | Pet categories, a feeding statement for cats or dogs, label words such as "cat food", or a verified page or label photo saying who it is for | The assessment |
-| **Confirmed not a pet product** (`out_of_scope`) | Affirmative evidence of another kind of product. Examples: the record's own categories are all human-food or cosmetic ones, or a verified page describes it as for people. Nothing may point to an animal food | Why it is out of scope; no score |
-| **Unresolved** (`unknown`) | Neither of the above, or the evidence conflicts | "Not scored yet", with a request for the front of the package |
+| **Confirmed pet product** (`supported`) | Some evidence says it is for cats or dogs (see species, below) | The assessment |
+| **Confirmed not a pet product** (`out_of_scope`) | Affirmative evidence of another kind of product (its own categories are all human-food or cosmetic ones, or a verified page says it is for people) and nothing points to an animal food | Why it is out of scope; no score |
+| **Unresolved** (`unknown`) | Neither of the above, or strong sources disagree | "Not scored yet", with a request for the front of the package |
 
-- Which database a record is filed in (Open Food Facts vs Open Pet Food Facts, `product_type`) is provenance only, never proof.
-- The selected pet profile and package illustrations never decide the species.
-- A page found by brand and name alone never decides it either. It must show the barcode, or the same recipe in the same order: at least 80% of the first 10 ingredients, with at least 5 compared.
+**Species (a set, from the strongest evidence).** A product can be for cats, dogs, or both (`productSpeciesSet: ["cat", "dog"]`). Each name or
+statement counts by where it comes from, strongest first: the package label (photo or database label image) → the nutritional adequacy
+statement → the manufacturer's page → the pet database's species categories → a pet-database record's name → a retailer's listing. The species
+named at the strongest basis present are the set. A weaker source naming fewer species is consistent, not a conflict (a retailer's "Dog Trt …"
+for a "Dog and Cat Treat"). Two sources at the same strongest basis naming different species leave it unresolved, never merged.
+**Confirmed** means the strongest basis is not a retailer's listing: a retailer's catalogue title, category or tags alone do not confirm who a
+product is for, so a mismatch with the pet is shown as "review", never as "made for another species" (section 6). The selected pet, package
+pictures, the database a record is filed in, a URL or a single keyword never decide the species.
+
+**Product type (`categoryBasis`).** Complete food, treat, topper/complementary or supplement rests on, in order: a product named a supplement;
+the feeding statement ("complete and balanced …" → complete food; "for intermittent or supplemental feeding" → treat or complementary);
+the product named a treat, topper, mixer or complementary food; and only then general words such as "cat food" (unconfirmed). Words such as
+broth, gravy, flaked or entrée never make a topper. Marketing copy ("complete and balanced nutrition for everyday feeding") is not an
+adequacy statement: a real one names the species or life stage, or the standard it was substantiated against (AAFCO, FEDIAF, "formulated to
+meet", feeding tests). A manufacturer's "AAFCO nutrient profile claim substantiation" document is such a statement.
+
+- A page found by brand and name alone never decides the species when nothing else says it, and gives only what does not vary between a
+  product's package sizes (section 9).
 - When a saved classification changes, an audit entry is written to `products/{gtin}/classifications`.
 
 ## 2. Minimum evidence per category
 
-Essential inputs are required. Without them the score is withheld, never estimated. Other inputs change only the coverage. The one exception is a complete food's adequacy statement: without it, the score is capped at 74.
+Essential inputs are required before any number is shown; without them the score is withheld (never estimated) and the result names the exact
+missing requirement while still showing what was found. A number is also shown only when the parts assessed are worth at least 70 points.
 
-| Category | Essential (no score without) | Other inputs (coverage only) |
+| Category | Essential (no number without) | Optional (coverage only) |
 |---|---|---|
-| Complete food | Ingredient list; guaranteed analysis (protein, fat, fiber) | Nutritional adequacy statement (score capped at 74 until it is known); calorie statement; moisture; further guarantees |
-| Treat / complementary | Ingredient list **or** guaranteed analysis | Feeding statement; calorie statement; moisture; the other of ingredients / analysis |
-| Supplement | Active ingredients or ingredient list | Amounts per serving; warnings; quality signals |
+| Complete food | Nutritional adequacy statement; guaranteed protein and fat (with moisture for the dry-matter comparison); ingredient list | Calorie statement; further guarantees |
+| Treat / complementary | Ingredient list; and the calorie statement, or both the feeding statement and the guaranteed analysis | Feeding statement; guaranteed analysis |
+| Supplement | Active ingredients or ingredient list (no number: see below) | Amounts per serving; warnings; quality signals |
 | Any | Confirmed identity, species and category (section 1) | — |
 
-## 3. Components and weights (each category totals 100)
+## 3. Parts and weights (each category totals 100)
 
 **Complete food**
 
-| Component | Points | Rule |
+| Part | Points | Rule |
 |---|---|---|
-| Nutritional adequacy statement | 50 | Feeding tests 50; formulation 43; complete but no life stage or a different species 30; unclear 20; missing: unverified |
-| Required guarantees (protein, fat, fiber) | 25 | Listed 25 |
-| Calorie content statement | 15 | Listed 15 |
-| Moisture guarantee | 5 | Listed 5 |
-| Further guarantees | 5 | 2 or more 5; one 3; none 0 (unverified if from a database record) |
+| Nutritional adequacy statement | 30 | Complete and balanced for a named life stage: feeding tests 30, formulation 27, method not stated 24; no life stage 18; names another species 10; unclear 8 |
+| Protein and fat (AAFCO minimums, dry matter) | 30 | Both at or above the AAFCO minimum for the species and life stage 30; one 12; neither 0 (see below) |
+| Main ingredients named by source | 20 | 20 × the share of the first five source ingredients that name their animal or plant |
+| Calorie content statement | 10 | Listed 10; not found: left out |
+| Further guarantees | 10 | Two or more beyond protein, fat, fiber and moisture 10; one 6; none 0 (left out when the only analysis is a database record's) |
+
+AAFCO minimums used (% of dry matter): cats, adult protein 26 and fat 9, growth protein 30 and fat 9; dogs, adult protein 18 and fat 5.5,
+growth protein 22.5 and fat 8.5. A product for both species is held to the stricter (cat) values; "all life stages" and gestation/lactation
+claims use the growth values. Dry matter is computed from the guaranteed **minimums** and the **maximum** moisture, so it is conservative (the
+true values can only be higher). Without a moisture guarantee a value already at the minimum as fed passes; otherwise moisture is required.
+Guaranteed minimums and maximums are never presented as exact analytical values.
 
 **Treat or complementary product**
 
-| Component | Points | Rule |
+| Part | Points | Rule |
 |---|---|---|
-| Feeding statement | 25 | Present and clear 25; unclear 13; missing: unverified |
-| Required guarantees | 40 | Listed 40 |
-| Calorie content statement | 30 | Listed 30 |
-| Moisture guarantee | 5 | Listed 5 |
+| Main ingredients named by source | 40 | 40 × the share of the first five source ingredients that name their animal or plant |
+| Calorie content statement | 30 | Listed 30 (portion control: treats under about 10% of daily calories) |
+| Feeding statement | 15 | Clear 15; unclear 8 |
+| Guaranteed analysis (protein, fat, fiber) | 15 | Listed 15 |
 
-Ingredients earn and lose no points: see section 5.
+"Source ingredients" leave out processing liquids (water, broth), vitamins and minerals, and technological additives (gums, preservatives,
+salt). An ingredient "names its source" unless it is a generic name: meat, animal, poultry, fish, by-products, derivatives, digest, cereals,
+vegetable oils, natural flavor(s). "Chicken by-product meal" names its animal; what part is used is not what this checks.
 
-**Supplements** get no number: their purpose, dose and evidence vary by ingredient. Instead they get:
-- the label facts, and their active ingredients with amounts;
-- any documented concerns;
-- personal suitability checks (section 6).
+**Supplements** get no number: their purpose, dose and evidence vary by ingredient. They get the label facts, their active ingredients with
+amounts, any documented concerns and personal suitability checks (section 6).
 
-## 4. Coverage is kept separate from quality
+## 4. One score; coverage kept separate
 
-- A component without evidence is **unverified**. It is left out of the score, never counted as poor quality and never filled in.
-- **Score (quality)** = points earned ÷ points' worth of the components that could be assessed × 100.
-- **Coverage** (`scoreCoverage`) = points' worth of the components that could be assessed (0–100).
-- **Range**: `scoreMinPossible` (every unverified item failed) to `scoreMaxPossible` (every one met). The score always lies within it.
-- `scoreBasis` gives all three in one line, e.g. "Based on 50 of 100 points' worth of label information (nutritional adequacy statement not available yet); the complete label could put it between 50 and 100. Score capped at 74 until the adequacy statement is known."
-- Below 80 points' coverage the label is **Partial assessment**, not a quality band.
-- **Caps** (stated in `scoreBasis`):
-  - a documented concern for the product's species caps the score at 20, labelled **Documented ingredient concern** (section 5);
-  - a complete food without its adequacy statement is capped at 74, so it is never "strong".
-- **Bands** (coverage of 80 or more, no documented concern):
-  - 85+ Strong label information;
-  - 70–84 Good label information;
-  - 50–69 Review the details;
-  - below 50 Weak label information.
-- The app shows `scoreText`, never the raw number on its own:
-  - **Unscored** when essential evidence is missing;
-  - **Not scored** for supplements and out-of-scope products;
-  - an unscored result is never shown as 0/100.
+- A part without evidence is left out of the score, never counted as poor quality and never filled in. **Score** = points earned ÷ points'
+  worth of the parts assessed × 100, rounded.
+- **Coverage** is shown apart from the score (`coverageText`, e.g. "Based on 4 of 5 parts: … (calorie content statement not found)").
+  The app shows one number, never a range.
+- **Critical concerns cannot be averaged away.** A documented concern for the product's species (section 5) caps the score at **20** and
+  labels it **Serious concern**, whatever the other parts earned; the concern and its source are listed (`criticalConcerns`). It is
+  counted only there (no second penalty elsewhere). A context-dependent caution never caps or lowers the score. An unsupported hypothetical
+  risk is never a concern.
+- **Ratings**: 85+ Strong (green); 70–84 Good (green); 50–69 Fair (yellow); below 50 Weak (red); capped: Serious concern (red).
+  Not scored: gray, with the exact missing requirement.
+- Stable inputs give the same score (deterministic). Vitamin and mineral blends count once, and splitting a blend adds nothing.
 
-## 5. Ingredients: roles and documented concerns, not counts
+## 5. Ingredients: rows, colors and claims
 
-- **No counting.** Ingredients are never counted as "good" or "bad". Grains, by-products, unfamiliar names and synthetic nutrients are not penalised. "Unknown" means not yet reviewed, not harmful.
-- **Roles.** Each ingredient is listed in label order with its role, e.g. "Protein source", "Fibre source", "Preservative" or "Vitamin or mineral". The role comes from Purrbi's curated role table (`roles.ts`). Where that table has none, it comes from a cited page whose quote Purrbi found on the page. A role never changes the score.
-- **Purrbi's reviewed list** (`kb.ts`) changes the result in two ways only:
-  - a **concern** is harm that a regulatory or veterinary toxicology source documents for that species. Examples: propylene glycol in cat food (21 CFR 589.1001), onion, xylitol for dogs. It caps the score at 20 and comes first among the cautions;
-  - a **caution** is harm that depends on an amount the label does not state (e.g. garlic). It is a flag only, with no points.
-- Each listed entry gives one finding, naming every form listed (e.g. "garlic, garlic powder").
-- Explanations never change a status or the score.
+Each label entry is one row, in label order (a "concerns first" order is offered separately). A vitamin or mineral blend is one row with
+its items as children, each assessed and searchable; children never count as separate positives. Malformed brackets are repaired without
+losing or duplicating an ingredient, and the entry as printed is kept for traceability.
+
+| Color | Meaning |
+|---|---|
+| **Green** | A supported favourable or appropriate role under the assessed conditions: Purrbi's curated role classes (named animal proteins and fats, essential nutrients, standard preservatives, processing water or broth, named carbohydrate and fibre sources), or a claim-checked explanation from a pet-food or animal-feed source. Not a guarantee of benefit or safety; never given because no study or recall was found. |
+| **Yellow** | A supported context-dependent consideration, with its reason: a documented caution whose harm depends on an amount the label does not state (garlic), or a documented consideration (for dogs, pulses or potatoes among the first ten ingredients: the FDA's DCM investigation, which found no causal link). |
+| **Red** | A documented concern for the species from a regulatory or veterinary toxicology source (propylene glycol in cat food, onion, xylitol for dogs). A confirmed allergy match is shown separately as a pet-specific conflict. Never red because an ingredient is unfamiliar, synthetic or processed, or harmful only at unrelated exposures. |
+| **Gray** | Not enough applicable evidence yet, or an unstated source ("natural flavor"): not harmful by default. |
+
+Tapping a row shows: what it is → why it is used → supported benefits and risks → relevance to this pet → what is not known → sources. Each row
+keeps five separate statuses: identity established; role explained; risk evidence assessed; exposure assessed (labels give no amounts, so
+"not assessed"); human review (not performed: the curated list is a draft). An AI explanation never marks anything "reviewed".
+
+**Claims are checked one by one** (`explain-2.0.0`). Each displayed claim keeps: the exact ingredient or chemical form → the claim → the
+source passage (verbatim, found on the fetched page) → the species or use the source is about → dose or exposure when it matters → evidence
+strength → retrieval and publication date → review status ("automated checks"). Purrbi checks that the passage names that exact form (sunflower
+seeds are not sunflower oil), that a benefit or risk claim comes from a source about cats, dogs, pets or animal-feed safety (never swine
+nutrition or human food-additive evidence presented as pet evidence), that a product-naming rule is not applied to an ingredient-list entry,
+and then asks a second model whether the passage supports the claim, narrowing or rejecting it. Explanations made under the earlier method were
+withdrawn and are written again under these checks; each withdrawal is recorded with its reasons (`knowledgeAudit`).
 
 ## 6. Personal fit (separate from the score)
 
 Personal fit is checked against the selected pet's recorded information:
 
-- species, from the product label (not from the pet);
+- species, from the product's own evidence (not from the pet). A mismatch ("made for dogs, not cats") is stated only when that evidence is confirmed (section 1); when only a retailer's listing names a species, the fit is "review" ("Only a retailer's listing says who it is for …"). Unknown species is never a mismatch;
 - documented concerns and cautions, judged for the pet's own species. A cat-only concern in a product for cats and dogs is noted as "not for dogs" for a dog. A concern for the pet's species makes the fit a possible mismatch; a caution makes it "review";
 - life stage, against the adequacy claim;
 - large-breed growth;
-- allergies and sensitivities ("Contains" versus "may include");
+- allergies and sensitivities: "Contains chicken — you recorded chicken as an allergy" is a pet-specific conflict (it never changes the general score); an ingredient whose source is not stated ("natural flavor") makes compatibility **unconfirmed**, never a confirmed match ("Compatibility with milly's recorded pork allergy is unconfirmed: the source of natural flavor isn't stated on the label"); recorded allergens not on the list are one qualified line that never implies allergen-free manufacturing;
 - owner preferences;
 - vet-directed diets;
 - for supplements, suitability: medicines, a reported condition, or pregnancy or nursing call for the vet's view, so the fit is "review", never "fits".
@@ -118,10 +154,11 @@ Cautions:
 2. Documented ingredient concern, judged for the selected pet's species (without a pet, for the product's)
 3. Made for another species
 4. Contains an ingredient in the allergy or sensitivity profile
+4a. Who it is for isn't confirmed (only a retailer's listing names a species other than the pet's)
 5. Possible (lot-specific) recall match
 6. Life-stage mismatch
 7. Large-breed growth
-8. May match the allergy profile
+8. Allergy match unconfirmed (an ingredient whose source isn't stated)
 9. Vet-directed diet
 10. Unclear feeding statement
 11. Documented caution (a flag; no points)
@@ -131,7 +168,9 @@ Cautions:
 Positives:
 - matches the known life stage;
 - complete and balanced;
-- no listed allergy match;
+- protein and fat above the AAFCO minimums (dry matter);
+- main ingredients named by source;
+- recorded allergens not on the ingredient list (one qualified line);
 - calories listed (treats);
 - made for the pet's species.
 
@@ -139,19 +178,19 @@ Positives:
 
 While the product is unresolved, only recall and documented-concern cautions are shown, and no positives.
 
-**Verdict.** 25–45 words written by a model (`OPENAI_VERDICT_MODEL`).
+**Verdict.** 25–40 words written by a model (`OPENAI_VERDICT_MODEL`). It interprets the findings for the pet; it never restates the score's missing-information message (the screen shows that).
 
 - **Input.** Only the computed assessment, highlights (their full statements) and pet-fit findings, as JSON.
 - **Privacy.** The pet's name is replaced by "your cat" or "your dog" before the call and put back only in the app's copy.
 - **Checks.** The sentence is rejected, and a rule-based sentence from the same findings is used instead, if it:
-  - is under 25 or over 45 words, or ends with "…";
+  - is under 25 or over 40 words, or ends with "…";
+  - repeats a missing-information message ("not enough information to score", "partial assessment", a range) instead of interpreting the findings, or names none of the findings when there are some;
   - makes a claim Purrbi does not make: safety, praise such as "great", "high-quality", "premium", "nutritious" or "best", "recommended", "no concerns", or health and treatment claims;
   - gives a score ("N/100", "N out of 100") other than the assessment's score;
   - uses any other number that is not stated in the score, its basis, the highlights or the unresolved items;
-  - calls a full assessment partial, or the reverse;
-  - gives a partial assessment's score as if it were final: a partial assessment is described by how much of the label could be assessed (coverage) or by the range the complete label could give, never by its score alone;
+  - gives an unscored product a number out of 100;
   - omits the most serious caution.
-- **Fallback.** The rule-based sentence is built from whole sentences, 25–45 words, with the most serious caution first. It passes the same checks.
+- **Fallback.** The rule-based sentence is built from whole sentences, 25–40 words, with the most serious caution first, then what the findings mean; an unscored product gets one short clause on what a rating still needs. It passes the same checks.
 - **Fixed sentences.** Out-of-scope and unresolved products get a fixed sentence.
 - **Caching.**
   - Verdicts are cached per account by the hash of their input and model (`users/{uid}/verdicts/{key}`, server-only), so the same evidence and pet never cost a second call.
@@ -169,6 +208,13 @@ Purrbi checks the official FDA enforcement reports (openFDA, updated weekly). Th
 | `brand_history` | "No current matching notice (older notices exist for this brand)"; the summary names a closed recall of this barcode and counts open records of the brand's other products |
 | `none_found` | "No matching notice found in the sources checked" (never "no recalls") |
 | `unavailable` | "The recall check failed; try again later" |
+| `not_checked` | "Not checked" (e.g. the brand isn't known yet) |
+
+Icons say what kind of outcome it is, never a certification: a match is red, a possible match or a failed check orange, and "no match found",
+brand history and "not checked" use neutral icons (no green badge): no match in the sources checked is not a safety guarantee. The result
+keeps when the check was made (a cached check shows its original date, never "checked" again), what was searched (`recallCoverage`: openFDA
+enforcement reports by barcode, then brand and product name; FDA's recall page, manufacturers' notices and lot codes are not checked) and
+what a match rests on (`recallMatchBasis`). Recall checking is separate from nutrition completeness: it runs whenever the brand is known.
 
 ## 9. Evidence labels and label photos
 
@@ -194,7 +240,7 @@ Nothing is marked as reviewed by a person unless it was.
   - nothing ambiguous is read: a printed line where a value has no name of its own ("1.0% / 1.5%", "30% 28%") or which gives a range is skipped; a section where values are printed before their names ("Minimum: 30% Crude Protein, …") is not read at all; nor are values printed inline without units, a space that may be a thousands separator ("36 900 UI/kg"), one value under two nutrients ("oméga 3 et 6"), anything an unreadable mark touches, and a nutrient given two different values (two recipes, as fed and dry matter); "15,000 IU/kg" is fifteen thousand.
 - Readings made by `label-extract-2.2.0` stay in use as they are (2.3.0 only reads an adequacy line 2.2.0 left out); a database label image's nutrition panel is read again once.
 - Readings made by `label-extract-2.1.0` stay in use as the current rules use them: only their plain analysis rows (a row naming one nutrient, with no other number in its name, in %, within food-level bounds for minor nutrients, and no second value for that nutrient), and an ingredient list cut again where its analysis starts. A row set aside that was a required guarantee is asked for again; a reading that was disputed only because of a row now set aside is compared with the public record again (its photo's stage and note change with it). A database label image whose 2.1.0 analysis had a row set aside, or whose nutrition panel 2.1.0 could not read, is read again once, and retried after a technical failure.
-- The same analysis rules read the analysis printed on a manufacturer's or retailer's page (research `research-1.7.0`), from the fetched page that is itself shown to be this product (the one with the barcode, or else the one with the brand and the name): the page's own analysis is used when it gives more than the model's answer, or when the answer disagrees with it, and the result says so only when it uses it.
+- The same analysis rules read the analysis printed on a manufacturer's or retailer's page (research `research-2.0.0`), from the fetched page that is itself shown to be this product (the one with the barcode, or else the one with the brand and the name): the page's own analysis is used when it gives more than the model's answer, or when the answer disagrees with it, and the result says so only when it uses it.
 
 An owner's label photo goes through these stages, recorded on the photo (`stage`, `stageNote`) by the backend only (`pipeline/corroborate.ts`):
 
@@ -213,3 +259,29 @@ Promotion rules for verified readings:
 - The switch is `PROMOTE_LABEL_PHOTOS`.
 
 A result that uses the owner's photo before it is tied to the barcode says "Label-based assessment with product identity not yet independently verified".
+
+## 10. Retrieval before photos, and keeping results current
+
+**Research `research-2.0.0`** (`sources/research.ts`, `pageEvidence.ts`). When the pet databases lack something, research looks for it before
+any photo is asked for:
+- With no name or brand from any database, a public barcode database (UPCitemdb's free lookup, `BARCODE_LOOKUP_ENABLED`) is asked for the
+  product's title, only to tell research what to search for; nothing from it is shown or used as a fact. Its failure is recorded as such.
+- Purrbi fetches each candidate page itself and reads its visible text, **image alternative text** (manufacturers publish ingredient lists
+  as an image's alt text), barcodes in its **markup** (a shop widget's `ps-sku`, `data-upc`, JSON-LD `gtin`) or its **Shopify product
+  record**, and **linked nutrition documents** (a "Nutrient Profiles" PDF: the AAFCO claim and calories per package).
+- Strong identity is the barcode on the page (text, markup or product record) or the same recipe in the same order. After a retailer's page,
+  the manufacturer's own page is sought for what is missing; it may be matched by brand and the product name with catalogue abbreviations
+  written out ("Dog Trt Frz Dr Wld Salmn" = "freeze dried wild salmon … treat"). From such a name-level match only what does not vary between
+  package sizes is used: who it is for (only when it includes the species already known), the feeding statement, and a single-ingredient list
+  named in the product's name; never the analysis or calories. The manufacturer's product name replaces a retailer's catalogue title on screen.
+- Calories keep the package they are for ("70 kcal per 2.8-oz can", "133 kcal per 5.3-oz can"); the scanned package's size (from the
+  barcode's own page or the label) selects the one shown. Values for other sizes are never shown as interchangeable servings.
+- For each missing field the result distinguishes: not searched, source unavailable, not on the source, not read, rejected by a check, and
+  the photo request that follows. A provider error is never "product unknown"; partial findings are kept.
+- Only panels still missing after this are requested; one photo can cover several requests; "Continue without photos" keeps the findings.
+
+**Keeping results current.** Every result records `assessmentVersion`. When the app opens a result saved under an older version, it asks the
+backend to re-check it (`refreshPersonalRequested`, already allowed by the security rules): the product's evidence is re-read where its saved
+record is out of date (bounded by the same per-product freshness as a scan, so no repeated paid processing), explanations are checked under the
+current rules, and the result is saved with a note saying it was re-checked. A late or duplicate job never overwrites a newer result
+(`assessmentInputsAt`).

@@ -176,6 +176,7 @@ describe('research 2.0', () => {
     expect(signals).toContain('intended for cats and dogs @ web:abettertreat.com:00850063633017');
     expect(r.sources.map((s) => s.sourceType)).toEqual(['retailer_or_web', 'manufacturer']);
     expect(r.facts?.ingredients?.value).toEqual(['Wild Caught Salmon']); // a single ingredient named in the product's name
+    expect(r.facts?.productName?.value).toBe('Freeze Dried Raw Wild Caught Salmon Dog and Cat Treats'); // not the catalogue abbreviation
     expect(r.facts?.adequacy?.value.type).toBe('intermittent');
     expect(r.facts?.guaranteedAnalysis).toBeUndefined(); // not taken from a page matched by name only
     expect(r.facts?.packageSize?.value).toMatchObject({ amount: 1.5, unit: 'oz' }); // from the barcode's own page

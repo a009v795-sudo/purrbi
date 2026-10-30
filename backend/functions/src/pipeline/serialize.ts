@@ -6,7 +6,8 @@ import { evidenceLabel } from '../domain/score';
 import { caloriesForPackage, describeCalories, describeEntry, dryMatterPercent, findNutrient } from '../domain/nutrition';
 import { SCOPE_VERSION } from '../domain/scope';
 import { ASSESSMENT_VERSION } from './config';
-import type { GeneralAssessment, PersonalAssessment, ProductFacts, RecallCheck, ScopeResult } from '../domain/types';
+import type { RowRelevance } from '../domain/personalize';
+import type { EvidenceKind, GeneralAssessment, IngredientRow, IngredientStatuses, PersonalAssessment, ProductFacts, RecallCheck, ScopeResult, SpeciesBasis, SpeciesScope } from '../domain/types';
 import type { ResultState } from '../domain/summary';
 import type { Highlight } from '../domain/highlights';
 import { summarizeCalls, type SourceCall } from '../util/diagnostics';
@@ -108,6 +109,7 @@ export function resultFields(args: {
     speciesBasis: scope.speciesEvidence?.basis ?? '',
     speciesConfirmed: scope.speciesEvidence?.confirmed ?? scope.species !== 'unknown',
     speciesNote: scope.speciesEvidence?.note ?? '',
+    speciesLine: speciesLine(scope),
     productCategory: general.category,
     productCategoryLabel: categoryLabel(general.category),
     categoryBasis: scope.categoryBasis ?? '',
@@ -269,4 +271,67 @@ export function highlightFields(h: { positives: Highlight[]; cautions: Highlight
     verdictSource: verdict.source, // 'ai' (checked against the assessment) or 'rules'
     verdictStatus: verdict.status, // 'pending' while the written verdict is on its way
   };
+}
+
+const BASIS_WORDS: Partial<Record<SpeciesBasis, string>> = { label: 'package label', adequacy_statement: 'feeding statement', manufacturer_page: 'manufacturer', database_category: 'pet database', database_name: 'pet database', retailer_listing: 'a retailer’s listing' };
+
+/** "For cats and dogs (manufacturer)", or "Listed for dogs by a retailer (not confirmed)". */
+export function speciesLine(scope: ScopeResult): string {
+  const ev = scope.speciesEvidence;
+  if (scope.status !== 'supported' || scope.species === 'unknown') return ev?.disputed ? 'Sources disagree on whether it is for cats or dogs' : '';
+  const who = speciesLabel(scope.species).toLowerCase();
+  if (!ev) return `For ${who}`;
+  return ev.confirmed ? `For ${who} (${BASIS_WORDS[ev.basis] ?? 'product evidence'})` : `Listed for ${who} by ${BASIS_WORDS[ev.basis] ?? 'a retailer'} (not confirmed)`;
+}
+
+const STATUS_TEXT: { [K in keyof IngredientStatuses]: Record<IngredientStatuses[K], string> } = {
+  identity: { established: 'Identified', not_established: 'Not identified yet' },
+  role: { explained: 'Role explained', not_explained: 'Role not explained yet' },
+  risk: { documented_concern: 'Documented concern', documented_caution: 'Documented caution', consideration: 'Context-dependent consideration', none_in_reviewed_list: 'No concern in Purrbi’s reviewed list', not_assessed: 'Risk not assessed yet' },
+  exposure: { assessed: 'Exposure assessed', not_assessed: 'Exposure not assessed (no amounts on the label)' },
+  humanReview: { performed: 'Reviewed by a person', not_performed: 'Not reviewed by a veterinarian' },
+};
+const SCOPE_TEXT: Record<SpeciesScope, string> = { cat: 'about cats', dog: 'about dogs', cat_and_dog: 'about cats and dogs', pets: 'about pets', animal_feed: 'about animal feed', other_species: 'about other animals, not cats or dogs', people: 'about people, not pet evidence', not_species_specific: 'not species-specific' };
+const EVIDENCE_TEXT: Record<EvidenceKind, string> = { regulation: 'regulation', regulatory_assessment: 'regulatory assessment', standards_body: 'standards body', veterinary_reference: 'veterinary reference', peer_reviewed: 'peer-reviewed research', curated: 'Purrbi’s curated list (draft)', other: 'source' };
+
+/**
+ * The ingredient rows as the app binds them (label order, and the same rows concerns first), with what each
+ * means for the selected pet. Statuses are plain words; every source keeps its passage, scope and dates.
+ */
+export function ingredientRowFields(rows: IngredientRow[], relevance: Map<string, RowRelevance>): Record<string, unknown> {
+  const flat = rows.map((r) => {
+    const rel = relevance.get(r.name);
+    const st = r.statuses;
+    return {
+      id: r.id,
+      position: r.position,
+      name: r.name,
+      labelText: r.labelText,
+      kind: r.kind,
+      role: r.role,
+      color: r.color,
+      reason: r.reason,
+      whatItIs: r.whatItIs,
+      whyUsed: r.whyUsed,
+      benefitsRisks: r.benefitsRisks,
+      relevance: rel?.text ?? '',
+      petFlag: rel?.flag ?? '',
+      uncertainty: r.uncertainty,
+      statusIdentity: st.identity,
+      statusRole: st.role,
+      statusRisk: st.risk,
+      statusExposure: st.exposure,
+      statusHumanReview: st.humanReview,
+      checksText: [STATUS_TEXT.identity[st.identity], STATUS_TEXT.role[st.role], STATUS_TEXT.risk[st.risk], STATUS_TEXT.exposure[st.exposure], STATUS_TEXT.humanReview[st.humanReview]].join(' · '),
+      sources: r.sources.map((x) => ({
+        ...x,
+        label: [x.title || x.url, EVIDENCE_TEXT[x.evidence], SCOPE_TEXT[x.speciesScope], x.publishedAt ? `published ${x.publishedAt.slice(0, 10)}` : '', x.retrievedAt ? `checked ${x.retrievedAt.slice(0, 10)}` : ''].filter(Boolean).join(' · '),
+      })),
+      children: r.children.map((c) => ({ id: c.id, name: c.name, role: c.role, color: c.color, reason: c.reason, whatItIs: c.whatItIs, whyUsed: c.whyUsed, benefitsRisks: c.benefitsRisks, uncertainty: c.uncertainty })),
+      concernRank: r.concernRank,
+    };
+  });
+  // A pet-specific conflict is shown first in the concerns-first order too.
+  const rank = (x: (typeof flat)[number]) => x.concernRank + (x.petFlag === 'conflict' ? 4 : x.petFlag === 'unconfirmed' ? 0.5 : 0);
+  return { ingredientRows: flat, ingredientRowsByConcern: [...flat].sort((a, b) => rank(b) - rank(a) || a.position - b.position) };
 }

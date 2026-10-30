@@ -264,9 +264,12 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
       if (r2.facts) {
         const sameSource = r2.sources.every((x) => found!.sources.some((y) => y.sourceId === x.sourceId));
         if (!sameSource) {
+          // The manufacturer's own product name replaces a retailer's catalogue title ("Dog Trt Frz Dr …") on
+          // screen; the retailer's title stays among the product's statements.
+          const makerName = r2.sources[0]?.sourceType === 'manufacturer' ? r2.facts.productName : undefined;
           found = {
             ...found,
-            facts: mergeResearch(found.facts, r2.facts),
+            facts: { ...mergeResearch(found.facts, r2.facts), ...(makerName ? { productName: makerName } : {}) },
             sources: [...found.sources, ...r2.sources.filter((x) => !found!.sources.some((y) => y.sourceId === x.sourceId))],
             verified: [...(found.verified ?? []), ...(r2.verified ?? [])],
             analysisNote: found.analysisNote ?? r2.analysisNote,

@@ -258,3 +258,45 @@ export function personalize(
   }[state];
   return { ...base, state, headline, findings, unresolved, trace };
 }
+
+export interface RowRelevance {
+  flag: 'conflict' | 'unconfirmed' | '';
+  text: string;
+}
+
+/**
+ * What one label entry means for this pet (shown under "For <pet>" in the ingredient detail): a recorded
+ * allergy or sensitivity it contains, one whose source it doesn't state (unconfirmed, never a match), or a
+ * documented concern for the pet's species. Keyed by the entry's name as printed.
+ */
+export function ingredientRelevance(pet: PetProfile | null, facts: ProductFacts, general: GeneralAssessment): Map<string, RowRelevance> {
+  const out = new Map<string, RowRelevance>();
+  if (!pet) return out;
+  const ingredients = productIngredients(facts);
+  const name = pet.name || 'your pet';
+  const recorded = [
+    ...(pet.allergiesStatus === 'reported' ? (pet.allergies ?? []).map((k) => ({ key: k, what: 'allergy' })) : []),
+    ...(pet.sensitivitiesStatus === 'reported' ? (pet.sensitivities ?? []).map((k) => ({ key: k, what: 'sensitivity' })) : []),
+  ];
+  for (const { key, what } of recorded) {
+    const m = matchAllergen(key, ingredients);
+    for (const ing of m.matches) {
+      if (m.status === 'contains') out.set(ing, { flag: 'conflict', text: `Contains ${allergenLabel(key)} — you recorded ${allergenLabel(key)} as ${what === 'allergy' ? 'an allergy' : 'a sensitivity'} for ${name}.` });
+      else if (m.status === 'possible' && out.get(ing)?.flag !== 'conflict')
+        out.set(ing, { flag: 'unconfirmed', text: `Compatibility with ${name}’s recorded ${allergenLabel(key)} ${what} is unconfirmed: the label doesn’t say what this is made from.` });
+    }
+  }
+  for (const n of general.ingredientNotes) {
+    if (out.has(n.name) || (n.status !== 'concern' && n.status !== 'caution')) continue;
+    const forSpecies = n.concernFor ?? [];
+    out.set(n.name, {
+      flag: '',
+      text: forSpecies.includes(pet.species) ? `A documented ${n.status} for ${pet.species}s like ${name}.` : `Documented for ${forSpecies.map((x) => `${x}s`).join(' and ')}, not for ${pet.species}s like ${name}.`,
+    });
+  }
+  const none = recorded.length
+    ? `Doesn’t match ${name}’s recorded ${recorded.length === 1 ? allergenLabel(recorded[0].key) : `${recorded.slice(0, -1).map((r) => allergenLabel(r.key)).join(', ')} or ${allergenLabel(recorded[recorded.length - 1].key)}`} (labels don’t cover cross-contact).`
+    : `No allergies or sensitivities are recorded for ${name}.`;
+  for (const ing of ingredients) if (!out.has(ing.name)) out.set(ing.name, { flag: '', text: none });
+  return out;
+}
