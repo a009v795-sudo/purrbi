@@ -105,43 +105,70 @@ function openAiResponse(items: unknown[], citations: string[]) {
     ],
   };
 }
+/** A term with its claims, as the explanation model returns them (TEST FIXTURE). */
+const item = (n: number, term: string, claims: Record<string, unknown>[], english_name = term) => ({ n, term, english_name, claims });
+const claimOf = (claim: string, citation_url: string, citation_passage: string, over: Record<string, unknown> = {}) => ({
+  claim_type: 'function', claim, citation_url, citation_title: 'TEST FIXTURE page', citation_passage, ingredient_words_in_passage: '', source_is_about: 'not_species_specific', dose_or_exposure: null, ...over,
+});
+/** The claims a support check request (Chat Completions) was sent. */
+const sentClaims = (body: string) => JSON.parse(JSON.parse(body).messages[1].content[0].text.split('\n').slice(2).join('\n')) as { id: number; claim: string; model?: string }[];
+/** The support check's answer: every claim it was sent, confirmed as stated. */
+function confirmAll(body: string) {
+  const verdicts = sentClaims(body).map((c) => ({ id: c.id, supported: 'yes', narrowed_claim: '', species_scope: 'not_species_specific', form_match: 'exact', dose_context: '', reason: 'TEST FIXTURE' }));
+  return new Response(JSON.stringify({ model: 'judge-mock', choices: [{ message: { content: JSON.stringify({ verdicts }) }, finish_reason: 'stop' }] }), { status: 200 });
+}
+const RESEARCH = 'https://api.openai.com/v1/responses';
+const SUPPORT = 'https://api.openai.com/v1/chat/completions';
 
 describe('cited explanations', () => {
-  it('keeps an explanation only when its quote is on the cited page', async () => {
+  it('keeps a claim only when its passage is on the cited page and the support check confirms it', async () => {
     const quote = 'Carrageenan is a thickener extracted from red seaweed and used in canned foods.';
-    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
-      if (url.startsWith('https://api.openai.com/')) {
+    const judged: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === RESEARCH) {
         return new Response(JSON.stringify(openAiResponse([
-          { term: 'carrageenan', role: 'thickener', summary: 'A seaweed-derived thickener used in wet foods.', citation_url: 'https://www.merckvetmanual.com/test', citation_title: 'Test page', citation_quote: quote },
-          { term: 'sodium hexametaphosphate', role: 'dental additive', summary: 'Binds calcium in saliva.', citation_url: 'https://www.merckvetmanual.com/test', citation_title: 'Test page', citation_quote: 'This sentence is not on the page at all, so it must be rejected.' },
-          { term: 'guar gum', role: 'thickener', summary: 'A thickener.', citation_url: 'https://random-blog.example/guar', citation_title: 'Blog', citation_quote: 'Guar gum is a thickener used in many pet foods and treats.' },
+          item(1, 'carrageenan', [claimOf('Carrageenan is used as a thickener in canned foods.', 'https://www.merckvetmanual.com/test', quote)]),
+          item(2, 'sodium hexametaphosphate', [claimOf('Sodium hexametaphosphate binds calcium in saliva.', 'https://www.merckvetmanual.com/test', 'This sentence is not on the page at all, so it must be rejected.')]),
+          item(3, 'guar gum', [claimOf('Guar gum is a thickener.', 'https://random-blog.example/guar', 'Guar gum is a thickener used in many pet foods and treats.')]),
         ], ['https://www.merckvetmanual.com/test'])), { status: 200 });
       }
-      return new Response(`<html><body><p>${quote}</p><script>ignored()</script></body></html>`, { status: 200 });
+      if (url === SUPPORT) {
+        judged.push(String(init?.body));
+        return confirmAll(String(init?.body));
+      }
+      return new Response(`<html><body><p>TEST FIXTURE page.</p><p>${quote}</p><script>ignored()</script></body></html>`, { status: 200 });
     }));
     const out = await explainTerms({ apiKey: 'k', model: 'm', species: 'dog', terms: [
       { term: 'carrageenan', kind: 'ingredient' }, { term: 'sodium hexametaphosphate', kind: 'ingredient' }, { term: 'guar gum', kind: 'ingredient' }, { term: 'beet pulp', kind: 'ingredient' },
     ], userAgent: 'test', now: new Date('2026-10-28T00:00:00Z') });
     expect(out.map((e) => `${e.term}:${e.status}:${e.reason}`)).toEqual([
       'carrageenan:verified:',
-      'sodium hexametaphosphate:unverified:quote not found on the cited page (merckvetmanual.com)',
+      'sodium hexametaphosphate:unverified:passage not found on the cited page (merckvetmanual.com)',
       'guar gum:not_found:cited page is not on the allowed list (random-blog.example)',
       'beet pulp:not_found:no explanation returned',
     ]);
-    expect(out[0]).toMatchObject({ key: 'dog_ingredient_carrageenan', sourceUrl: 'https://www.merckvetmanual.com/test', quote });
-    expect(out[1].summary).toBe(''); // unverified text is never kept
+    expect(out[0]).toMatchObject({ key: 'dog_ingredient_carrageenan', summary: 'Carrageenan is used as a thickener in canned foods.', role: 'Thickener or binder', sourceUrl: 'https://www.merckvetmanual.com/test', quote, model: 'm', judgeModel: 'judge-mock' });
+    expect(out[0].claims).toEqual([{
+      claimType: 'function', claim: 'Carrageenan is used as a thickener in canned foods.', ingredientForm: 'carrageenan', title: 'TEST FIXTURE page', url: 'https://www.merckvetmanual.com/test', passage: quote,
+      speciesScope: 'not_species_specific', evidence: 'veterinary_reference', doseContext: '', retrievedAt: '2026-10-28T00:00:00.000Z', publishedAt: '', reviewStatus: 'automated_checks',
+    }]);
+    // Unverified text is never kept; why each claim was left out is.
+    expect(out[1]).toMatchObject({ summary: '', quote: '', claims: [], rejected: [{ claimType: 'function', claim: 'Sodium hexametaphosphate binds calcium in saliva.', reason: 'passage not found on the cited page (merckvetmanual.com)' }] });
+    // One support check for the batch, sent only the claim that passed the checks on its page.
+    expect(judged.map((b) => sentClaims(b).map((c) => c.claim))).toEqual([['Carrageenan is used as a thickener in canned foods.']]);
   });
-  it('shows the page’s own sentence when the model’s quote is close but not word for word, without needing search citations', async () => {
+  it('shows the page’s own sentence when the model’s passage is close but not word for word, without needing search citations', async () => {
     const onPage = 'Beet pulp is a source of fiber that is fermented slowly by bacteria in the colon.';
-    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
-      if (url.startsWith('https://api.openai.com/')) {
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === RESEARCH) {
         return new Response(JSON.stringify(openAiResponse([
-          // translated term, matched by its number; the quote changes one word
-          { n: 1, term: 'dried beet pulp', role: 'fiber source', summary: 'Dried sugar beet pulp adds slowly fermented fiber.', citation_url: 'https://vcahospitals.com/know-your-pet/fiber', citation_title: 'Fiber', citation_quote: 'Beet pulp is a source of fibre that is fermented slowly by bacteria in the colon.' },
+          // translated term, matched by its number and named on the page by its English name; the passage changes one word
+          item(1, 'dried beet pulp', [claimOf('Dried sugar beet pulp adds slowly fermented fiber.', 'https://vcahospitals.com/test-fixture/fiber', 'Beet pulp is a source of fibre that is fermented slowly by bacteria in the colon.')]),
           // a different sentence altogether is still rejected
-          { n: 2, term: 'Levures déshydratées', role: 'yeast', summary: 'Dried yeast.', citation_url: 'https://vcahospitals.com/know-your-pet/fiber', citation_title: 'Fiber', citation_quote: 'Dried yeast is a rich natural source of B vitamins for dogs and cats.' },
+          item(2, 'Levures déshydratées', [claimOf('Dried yeast adds B vitamins.', 'https://vcahospitals.com/test-fixture/fiber', 'Dried yeast is a rich natural source of B vitamins for dogs and cats.')], 'dried yeast'),
         ], [])), { status: 200 });
       }
+      if (url === SUPPORT) return confirmAll(String(init?.body));
       return new Response(`<html><body><h1>Fiber</h1><p>Some pet foods add fiber.</p><p>${onPage}</p><p>Too much fiber can reduce how well other nutrients are digested.</p></body></html>`, { status: 200 });
     }));
     const out = await explainTerms({ apiKey: 'k', model: 'm', species: 'cat', terms: [
@@ -149,22 +176,29 @@ describe('cited explanations', () => {
     ], userAgent: 'test', now: new Date('2026-10-29T00:00:00Z') });
     expect(out.map((e) => `${e.term}:${e.status}:${e.reason}`)).toEqual([
       'Pulpes de betterave déshydratée:verified:',
-      'Levures déshydratées:unverified:quote not found on the cited page (vcahospitals.com)',
+      'Levures déshydratées:unverified:passage not found on the cited page (vcahospitals.com)',
     ]);
     expect(out[0].quote).toBe(onPage); // the page's wording, not the model's
-    expect(out[0].version).toBe('explain-1.2.0');
+    expect(out[0].claims[0]).toMatchObject({ ingredientForm: 'Pulpes de betterave déshydratée', passage: onPage, title: 'Fiber' });
+    expect(out[0].role).toBe('Fibre source');
+    expect(out[0].version).toBe('explain-2.0.0');
   });
   it('tries the next listed model when one is rejected, and reports pages it could not use', async () => {
     const models: string[] = [];
+    let judged = 0;
     vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
-      if (url.startsWith('https://api.openai.com/')) {
+      if (url === SUPPORT) {
+        judged++;
+        return confirmAll(String(init?.body));
+      }
+      if (url === RESEARCH) {
         const body = JSON.parse(String(init?.body));
         models.push(body.model);
         if (body.model === 'missing-model') return new Response(JSON.stringify({ error: { message: 'The model `missing-model` does not exist' } }), { status: 404 });
         expect(body.reasoning).toBeUndefined(); // only reasoning models get a reasoning effort
         return new Response(JSON.stringify({ model: body.model, ...openAiResponse([
-          { n: 1, term: 'carrageenan', role: 'thickener', summary: 'A thickener.', citation_url: 'https://www.fda.gov/moved', citation_title: 'FDA', citation_quote: 'Carrageenan is a thickener extracted from red seaweed and used in canned foods.' },
-          { n: 2, term: 'guar gum', role: 'thickener', summary: 'A thickener.', citation_url: 'https://www.aspca.org/blocked', citation_title: 'ASPCA', citation_quote: 'Guar gum is a thickener used in many pet foods and treats.' },
+          item(1, 'carrageenan', [claimOf('Carrageenan is a thickener.', 'https://www.fda.gov/moved', 'Carrageenan is a thickener extracted from red seaweed and used in canned foods.')]),
+          item(2, 'guar gum', [claimOf('Guar gum is a thickener.', 'https://www.aspca.org/blocked', 'Guar gum is a thickener used in many pet foods and treats.')]),
         ], []) }), { status: 200 });
       }
       if (url.includes('aspca.org')) return new Response('Forbidden', { status: 403 });
@@ -180,15 +214,36 @@ describe('cited explanations', () => {
       'gpt-4.1-mini:unverified:cited page redirected off the allowed sites (elsewhere.example)',
       'gpt-4.1-mini:unverified:cited page could not be fetched (aspca.org, HTTP 403)',
     ]);
+    expect(judged).toBe(0); // nothing passed the checks on its page: no support check is paid for
   });
-  it('reports a cited PDF as a file Purrbi cannot check, not as a quote missing from the page', async () => {
+  it('shows nothing when the support check fails, and runs it with the first listed model the API knows', async () => {
+    const quote = 'Carrageenan is a thickener extracted from red seaweed and used in canned foods.';
+    const judgedBy: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const body = init?.body ? JSON.parse(String(init.body)) : {};
+      if (url === RESEARCH) {
+        if (body.model === 'missing-model') return new Response(JSON.stringify({ error: { message: 'The model `missing-model` does not exist' } }), { status: 404 });
+        return new Response(JSON.stringify(openAiResponse([item(1, 'carrageenan', [claimOf('Carrageenan is used as a thickener in canned foods.', 'https://www.merckvetmanual.com/test', quote)])], [])), { status: 200 });
+      }
+      if (url === SUPPORT) {
+        judgedBy.push(body.model);
+        return new Response(JSON.stringify({ error: { message: 'TEST FIXTURE: the support check is unavailable' } }), { status: 400 });
+      }
+      return new Response(`<p>${quote}</p>`, { status: 200 });
+    }));
+    const [e] = await explainTerms({ apiKey: 'k', model: 'missing-model, gpt-4.1-mini', species: 'dog', terms: [{ term: 'carrageenan', kind: 'ingredient' }], userAgent: 'test', now: new Date('2026-10-30T00:00:00Z') });
+    expect(judgedBy).toEqual(['gpt-4.1-mini']);
+    expect(e).toMatchObject({ status: 'unverified', reason: 'support check unavailable', claims: [], summary: '', sourceUrl: '', quote: '', judgeModel: '' });
+    expect(e.rejected.map((r) => r.reason)).toEqual([expect.stringMatching(/^support check unavailable \(OpenAI: HTTP 400/)]);
+  });
+  it('reports a cited PDF as a file Purrbi cannot check, not as a passage missing from the page', async () => {
     const asked: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
-      if (url.startsWith('https://api.openai.com/')) {
+      if (url === RESEARCH) {
         asked.push(String(JSON.parse(String(init?.body)).instructions ?? JSON.stringify(JSON.parse(String(init?.body)).input)));
         return new Response(JSON.stringify(openAiResponse([
-          { n: 1, term: 'Glycerol', role: 'humectant', summary: 'Keeps treats moist.', citation_url: 'https://www.aafco.org/wp-content/uploads/2023/01/manual.pdf', citation_title: 'Manual', citation_quote: 'Glycerin is a humectant that keeps soft treats moist during storage.' },
-          { n: 2, term: 'Yeast', role: 'flavour', summary: 'Adds flavour.', citation_url: 'https://www.aafco.org/wp-content/uploads/2026/01/chapter.pdf', citation_title: 'Chapter', citation_quote: 'Dried yeast is used in pet foods as a source of flavor and B vitamins.' },
+          item(1, 'Glycerol', [claimOf('Glycerin keeps soft treats moist.', 'https://www.aafco.org/wp-content/uploads/2023/01/manual.pdf', 'Glycerin is a humectant that keeps soft treats moist during storage.')]),
+          item(2, 'Yeast', [claimOf('Dried yeast adds flavor.', 'https://www.aafco.org/wp-content/uploads/2026/01/chapter.pdf', 'Dried yeast is used in pet foods as a source of flavor and B vitamins.')]),
         ], [])), { status: 200 });
       }
       // One PDF is served with its content type, the other only recognisable by its first bytes.
@@ -204,14 +259,15 @@ describe('cited explanations', () => {
   });
   it('treats an Office document or another file as a file, and an HTML page as a page whatever it is served as', async () => {
     const quote = 'Carrageenan is a thickener extracted from red seaweed and used in canned foods.';
-    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
-      if (url.startsWith('https://api.openai.com/')) {
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === RESEARCH) {
         return new Response(JSON.stringify(openAiResponse([
-          { n: 1, term: 'Glycerol', role: 'humectant', summary: 'Keeps treats moist.', citation_url: 'https://www.aafco.org/manual.docx', citation_title: 'Manual', citation_quote: 'Glycerin is a humectant that keeps soft treats moist during storage.' },
-          { n: 2, term: 'Yeast', role: 'flavour', summary: 'Adds flavour.', citation_url: 'https://www.aafco.org/data.json', citation_title: 'Data', citation_quote: 'Dried yeast is used in pet foods as a source of flavor and B vitamins.' },
-          { n: 3, term: 'carrageenan', role: 'thickener', summary: 'A thickener.', citation_url: 'https://www.aafco.org/page', citation_title: 'Page', citation_quote: quote },
+          item(1, 'Glycerol', [claimOf('Glycerin keeps soft treats moist.', 'https://www.aafco.org/manual.docx', 'Glycerin is a humectant that keeps soft treats moist during storage.')]),
+          item(2, 'Yeast', [claimOf('Dried yeast adds flavor.', 'https://www.aafco.org/data.json', 'Dried yeast is used in pet foods as a source of flavor and B vitamins.')]),
+          item(3, 'carrageenan', [claimOf('Carrageenan is used as a thickener in canned foods.', 'https://www.aafco.org/page', quote)]),
         ], [])), { status: 200 });
       }
+      if (url === SUPPORT) return confirmAll(String(init?.body));
       if (url.endsWith('.docx')) return new Response('PK\u0003\u0004 zip', { status: 200, headers: { 'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' } });
       if (url.endsWith('.json')) return new Response('{"a":1}', { status: 200, headers: { 'Content-Type': 'application/json' } });
       return new Response(`<!doctype html><html><body><p>${quote}</p></body></html>`, { status: 200, headers: { 'Content-Type': 'application/octet-stream' } });
@@ -222,6 +278,7 @@ describe('cited explanations', () => {
       'unverified:cited page is a file (application/json), which Purrbi cannot check yet (aafco.org)',
       'verified:',
     ]);
+    expect(out[2].claims[0].evidence).toBe('standards_body');
   });
   it('does not pay to explain plain whole foods', () => {
     expect(needsExplanation('Chicken', 'ingredient')).toBe(false);

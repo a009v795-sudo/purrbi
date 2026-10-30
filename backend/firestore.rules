@@ -130,5 +130,6 @@ service cloud.firestore {
     match /system/{id} { allow read, write: if false; }
     match /productMeta/{id} { allow read, write: if false; }
     match /knowledge/{id} { allow read, write: if false; }
+    match /knowledgeAudit/{id} { allow read, write: if false; }
   }
 }

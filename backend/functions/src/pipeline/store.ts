@@ -1,8 +1,9 @@
 // Firestore persistence. All writes here use the Admin SDK (server only); clients cannot write
 // products, evidence, label facts, usage counters or assessment fields (see firestore.rules).
 import { createHash } from 'node:crypto';
-import { FieldValue, Timestamp, type Firestore } from 'firebase-admin/firestore';
+import { FieldValue, Timestamp, type DocumentSnapshot, type Firestore, type WriteBatch } from 'firebase-admin/firestore';
 import type { ValidatedLabel } from '../ai/labelExtract';
+import { auditLegacyExplanation } from '../knowledge/claims';
 import { EXPLAIN_VERSION, type CitedExplanation } from '../knowledge/explain';
 import type { PetProfile, ProductFacts, RecallCheck, ScopeResult, SourceRef } from '../domain/types';
 import type { Limits } from './config';
@@ -234,34 +235,86 @@ const NOT_RETURNED_DAYS = 1; // a term the model left out is asked for again the
 const FILE_REASON = /^cited page is a .*, which Purrbi cannot check/;
 const fileDays = (attempts: number) => (attempts >= 3 ? 30 : attempts === 2 ? 7 : 1);
 
-/** Cached explanations that are still current; expired ones are treated as missing. */
+/**
+ * Cached explanations that are still current; expired ones are treated as missing. One made under earlier
+ * rules is treated as missing too, so it is made again claim by claim; if it was shown, it is withdrawn
+ * first, with an audit record of what was shown and why it would not pass now.
+ */
 export async function readExplanations(db: Firestore, keys: string[], now: Date): Promise<Map<string, CitedExplanation>> {
   const out = new Map<string, CitedExplanation>();
   const unique = [...new Set(keys)].slice(0, 100);
   if (!unique.length) return out;
   const snaps = await db.getAll(...unique.map((k) => db.doc(`knowledge/${k}`)));
+  const withdrawn: DocumentSnapshot[] = [];
   for (const snap of snaps) {
     if (!snap.exists) continue;
     const e = snap.data() as CitedExplanation;
-    if (e.status !== 'verified' && e.version !== EXPLAIN_VERSION) continue; // a failed lookup is tried again once the method changes
+    if (e.version !== EXPLAIN_VERSION) {
+      if (e.status === 'verified' && !snap.get('withdrawnAt')) withdrawn.push(snap);
+      continue;
+    }
     const age = (now.getTime() - new Date(e.checkedAt).getTime()) / 86400000;
     const reason = e.reason ?? '';
     const lifetime =
       e.status === 'verified' ? VERIFIED_DAYS
-      : /^cited page could not be fetched/.test(reason) ? TRANSIENT_DAYS
+      : /^cited page could not be fetched|^support check unavailable/.test(reason) ? TRANSIENT_DAYS
       : FILE_REASON.test(reason) ? fileDays(e.attempts ?? 1)
       : e.status === 'not_found' ? NOT_RETURNED_DAYS
       : UNVERIFIED_DAYS;
     if (age <= lifetime) out.set(snap.id, e);
   }
+  if (withdrawn.length) await withdrawExplanations(db, withdrawn, now).catch(() => undefined); // best-effort: never fails the scan
   return out;
+}
+
+/**
+ * Audit records (knowledgeAudit/{key}__{oldVersion}, server-only) for shown explanations withdrawn under
+ * new rules: what was shown, its source and quote, and why it would not pass now. Each is created once,
+ * and the old cache entry is marked withdrawn only while it is still the one read (a newer explanation
+ * written meanwhile is left alone). One batch; when a record already exists (another scan withdrew it at
+ * the same moment), each is tried again on its own.
+ */
+async function withdrawExplanations(db: Firestore, snaps: DocumentSnapshot[], now: Date): Promise<void> {
+  const at = Timestamp.fromDate(now);
+  const writes = snaps.map((snap) => {
+    const e = snap.data() as CitedExplanation;
+    const oldVersion = String(e.version ?? 'unversioned');
+    const record = {
+      key: snap.id,
+      term: e.term ?? '',
+      kind: e.kind ?? '',
+      species: e.species ?? '',
+      oldVersion,
+      oldStatus: e.status ?? '',
+      oldSummary: e.summary ?? '',
+      oldSourceTitle: e.sourceTitle ?? '',
+      oldSourceUrl: e.sourceUrl ?? '',
+      oldQuote: e.quote ?? '',
+      oldModel: e.model ?? '',
+      oldCheckedAt: e.checkedAt ?? '',
+      withdrawnAt: at,
+      supersededBy: EXPLAIN_VERSION,
+      reasons: auditLegacyExplanation(e),
+    };
+    return { snap, record, ref: db.doc(`knowledgeAudit/${`${snap.id}__${oldVersion}`.replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 700)}`) };
+  });
+  const add = (batch: WriteBatch, w: (typeof writes)[number]) =>
+    batch.create(w.ref, w.record).update(w.snap.ref, { withdrawnAt: at, supersededBy: EXPLAIN_VERSION }, { lastUpdateTime: w.snap.updateTime! });
+  try {
+    const batch = db.batch();
+    for (const w of writes) add(batch, w);
+    await batch.commit();
+  } catch {
+    if (writes.length > 1) await Promise.all(writes.map((w) => add(db.batch(), w).commit().catch(() => undefined)));
+  }
 }
 
 export async function writeExplanations(db: Firestore, items: CitedExplanation[]): Promise<void> {
   if (!items.length) return;
   const files = items.filter((e) => FILE_REASON.test(e.reason ?? ''));
   const before = files.length ? await db.getAll(...files.map((e) => db.doc(`knowledge/${e.key}`))) : [];
-  const attempts = new Map(before.filter((d) => d.exists && FILE_REASON.test(String(d.get('reason') ?? ''))).map((d) => [d.id, Number(d.get('attempts') ?? 1)]));
+  // Counted under the current rules only: a new method starts the file backoff again.
+  const attempts = new Map(before.filter((d) => d.exists && d.get('version') === EXPLAIN_VERSION && FILE_REASON.test(String(d.get('reason') ?? ''))).map((d) => [d.id, Number(d.get('attempts') ?? 1)]));
   const batch = db.batch();
   for (const e of items) batch.set(db.doc(`knowledge/${e.key}`), FILE_REASON.test(e.reason ?? '') ? { ...e, attempts: (attempts.get(e.key) ?? 0) + 1 } : e);
   await batch.commit();
