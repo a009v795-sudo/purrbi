@@ -273,3 +273,13 @@ describe('why a requested panel is still missing (never "product unknown")', () 
     expect(retrievalStatus('front', { research: { outcome: 'done', discarded: ['example.com is for cats, but this product is for dogs: another variant, so nothing from it was used'], source: '' } })).toMatchObject({ status: 'rejected', detail: expect.stringMatching(/another variant/) });
   });
 });
+
+describe('a page that could not be read is told apart from pages read and found not to be this product (trace 2ae090c1-eda)', () => {
+  it('says which happened', async () => {
+    const { retrievalStatus } = await import('../../src/pipeline/facts');
+    const blockedOnly = retrievalStatus('ingredients', { research: { outcome: 'fetch_failed', discarded: ['barcode search: could not fetch https://shop.example/p to verify it (HTTP 403)'], source: '' } });
+    expect(blockedOnly).toMatchObject({ status: 'source_unavailable', detail: 'The manufacturer’s and retailers’ pages couldn’t be reached; Purrbi tries again later.' });
+    const blockedAndWeak = retrievalStatus('ingredients', { research: { outcome: 'fetch_failed', discarded: ['barcode search: could not fetch https://www.mercadomagico.com/x to verify it (HTTP 403)', 'name search: onlynaturalpet.com matches only by brand and name (no ingredient list to compare), and it is not yet known whether this product is for cats or dogs, so nothing from it was used'], source: '' } });
+    expect(blockedAndWeak).toMatchObject({ status: 'source_unavailable', detail: 'A page the search found couldn’t be read, and the others it could read didn’t show this product; Purrbi tries again later.' });
+  });
+});

@@ -314,3 +314,19 @@ describe('review of the ingredient rows (2026-10-30)', () => {
     expect(row(list, 'Chicken Digest').whatItIs).not.toMatch(/not disclosed/);
   });
 });
+
+describe('live acceptance run of 2026-10-30 (trace 74de5c85-803): what a checked claim may change', () => {
+  // Claims as the explanation step returned them for the Wellness can's vitamin blend (passages from the Merck Veterinary Manual).
+  it('what lacking a nutrient does is why it is added, not a risk of it: the row stays green', () => {
+    const niacin = claim({ claimType: 'risk', claim: 'Niacin deficiency is uncommon in cats fed complete and balanced diets but has been reported in kittens fed purified diets without niacin.', ingredientForm: 'niacin', speciesScope: 'cat', evidence: 'veterinary_reference' });
+    const list = rows('Chicken, Vitamins [Niacin, Biotin]', ['cat'], claimsOnly('Niacin', [niacin]));
+    const item = row(list, 'Vitamins').children.find((c) => c.name === 'Niacin')!;
+    expect(item.color).toBe('green');
+    expect(item.statuses.risk).not.toBe('consideration');
+    expect(row(list, 'Vitamins').color).toBe('green');
+    // An excess the label gives no amount for still is a consideration.
+    const vitaminA = claim({ claimType: 'risk', claim: 'Excess vitamin A causes bone and joint disease in cats fed large amounts of liver.', ingredientForm: 'vitamin A', speciesScope: 'cat', evidence: 'veterinary_reference' });
+    const withA = rows('Chicken, Vitamins [Vitamin A Supplement]', ['cat'], claimsOnly('Vitamin A Supplement', [vitaminA]));
+    expect(row(withA, 'Vitamins').children[0].color).toBe('yellow');
+  });
+});

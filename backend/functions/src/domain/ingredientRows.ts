@@ -51,6 +51,7 @@ const DCM_NOTE =
   'The FDA investigated reports of heart disease (DCM) in dogs eating diets with peas, lentils, other pulses or potatoes among their main ingredients; no causal link was established. Ask your veterinarian if this concerns you.';
 const DCM_NOT_MAIN = 'Here it is not among the main ingredients (the first 10, before the vitamins and minerals).';
 const NONE_IN_LIST = 'Purrbi’s reviewed list has no species-specific concern for this ingredient; effects at the amount used aren’t assessed.';
+const ABOUT_LACKING = /\b(?:deficien\w*|lack(?:ing)? of|insufficient|inadequate (?:intake|amounts?|levels?)|not enough|without (?:enough|added|supplemental))\b/i;
 
 type Kind = 'animal_protein' | 'fat' | 'vitamin' | 'optional_nutrient' | 'mineral' | 'choline' | 'amino_acid' | 'preservative' | 'water' | 'broth' | 'carbohydrate' | 'fibre' | 'fruit_vegetable';
 // Vitamins dogs and cats make themselves, or (beta-carotene, for cats) cannot use: not "an essential vitamin".
@@ -261,8 +262,9 @@ function assess(s: Subject, species: Species[], claimsFor: ClaimsFor): Assessed 
   const fn = claims.find((c) => c.claimType === 'function');
   const supporting = claims.find((c) => (c.claimType === 'function' || c.claimType === 'identity') && fitsProduct(c.speciesScope, species));
   const findings = claims.filter((c) => c.claimType === 'benefit' || c.claimType === 'risk');
-  // A checked risk for this product's species is a consideration: the row says so in its colour too.
-  const checkedRisk = claims.find((c) => c.claimType === 'risk' && fitsProduct(c.speciesScope, species));
+  // A checked risk for this product's species is a consideration: the row says so in its colour too. What
+  // lacking a nutrient does ("niacin deficiency … in kittens fed diets without niacin") is why it is added, not a risk of it.
+  const checkedRisk = claims.find((c) => c.claimType === 'risk' && fitsProduct(c.speciesScope, species) && !ABOUT_LACKING.test(c.claim));
 
   // The reviewed list: the most severe entry anywhere in the name decides the colour; the entry for the
   // ingredient itself (not a qualifier) decides whether Purrbi's list covers it at all.

@@ -584,6 +584,25 @@ const NAMING = [
 ];
 export const NAMING_REASON = 'a product-naming rule, not about an ingredient-list entry';
 
+// ---- 6. drug use --------------------------------------------------------------------------------------
+
+// Using a substance as a medicine (to treat an infection, as a laxative) or its therapeutic dose is not the
+// ingredient's role in a food: potassium iodide "administered to treat … fungal infections", magnesium
+// sulfate's laxative dose "Cats: 2–5 g, PO".
+const DRUG_USE = [
+  /\b(?:administered|given|used|prescribed|indicated)\b(?: \w+){0,3} (?:to treat|for the treatment of|as an? (?:laxative|cathartic|purgative|sedative|emetic|antidote))\b/,
+  /\b(?:cathartic|laxative|purgative|anthelmintic|antifungal|antibacterial|antimicrobial|emetic) (?:drugs?|agents?|therapy|treatment|use)\b/,
+  /\b(?:to treat|treatment of|treating) (?:\w+ ){0,4}(?:infections?|poisoning|toxicosis|constipation)\b/,
+  /\b\d+(?:[.,]\d+)?(?:\s*(?:[–-]|to)\s*\d+(?:[.,]\d+)?)?\s*(?:mg|g|ml|iu)(?:\/kg)?,?\s*(?:po|iv|im|sc|sq)\b/,
+];
+export const DRUG_REASON = 'a drug use or therapeutic dose, not the ingredient’s role in a food';
+
+/** A claim or passage about using the substance as a medicine, or a page in a drug formulary. */
+export function isDrugUse(claim: string, passage: string, url = ''): boolean {
+  const t = `${claim} ${passage}`.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ');
+  return DRUG_USE.some((re) => re.test(t)) || /\/(?:pharmacology|therapeutics)\//.test(url.toLowerCase());
+}
+
 /** A passage about what a product's NAME must contain ("the name must…", the 95%, 25% and "with" rules), not about an ingredient-list entry. */
 export function isNamingRule(passage: string): boolean {
   const t = passage.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/['"\u2018\u2019\u201c\u201d]/g, ' ').replace(/\s+/g, ' ');
@@ -695,6 +714,7 @@ export function checkClaim(o: { term: string; englishName?: string; species: Exp
   const shown = quoteOnPage(page, passage);
   if (!shown) return reject(`passage not found on the cited page (${hostOf(url)})`, 'substance');
   if (isNamingRule(shown)) return reject(NAMING_REASON, 'substance');
+  if (isDrugUse(text, shown, finalUrl)) return reject(DRUG_REASON, 'substance');
   const { before, after } = around(page, shown);
   const englishName = clip(o.englishName, 120);
   const form = formMatch(o.term, { passage: shown, before, after }, englishName);

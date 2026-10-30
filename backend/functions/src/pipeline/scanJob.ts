@@ -22,6 +22,7 @@ import { classifyScope, SCOPE_VERSION, type DatabaseOrigin, type SpeciesClaim } 
 import { assessedSpecies, assessGeneral, productIngredients } from '../domain/score';
 import { buildSummary, overallState } from '../domain/summary';
 import type { ClaimSource, ClassificationSignal, GeneralAssessment, PetProfile, ProductFacts, RecallCheck, ScopeResult, SourceRef, SpeciesBasis } from '../domain/types';
+import { isDrugUse } from '../knowledge/claims';
 import { explainTerms as explainImpl, explanationKey, needsExplanation, type CitedExplanation, type ExplainRequest } from '../knowledge/explain';
 import { lookupBarcodeHint as barcodeHintImpl, type BarcodeHint } from '../sources/barcodeLookup';
 import { readDatabaseLabelImages as databaseImagesImpl } from '../sources/labelImages';
@@ -580,9 +581,16 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       if (doc && fromDoc.length) job.evidenceNotes.push(`Read the ${fromDoc.map(fieldLabel).join(' and ')} from ${doc.sourceName}, linked from the product’s page.`);
       const confirmed = r.facts?.classificationSignals?.find((c) => c.kind === 'research' && /^intended for /.test(c.text))?.text;
       if (confirmed && src) job.evidenceNotes.push(`${src.sourceName} (${pageKind}) says it is ${confirmed}; checked on the page.`);
+      // Each field is named with the page (or document) it was read from.
+      const bySource = new Map<string, string[]>();
+      for (const k of filled.filter((x) => x !== 'ingredients')) {
+        const s = (facts[k as keyof ProductFacts] as { source?: SourceRef } | undefined)?.source ?? src;
+        const where = s ? `${s.sourceName}${/\(PDF\)$/.test(s.sourceName) ? '' : s.sourceType === 'manufacturer' ? ' (manufacturer page)' : ' (web page)'}` : 'the page';
+        bySource.set(where, [...(bySource.get(where) ?? []), fieldLabel(k)]);
+      }
       job.evidenceNotes.push(
         filled.length && src
-          ? `Filled ${filled.filter((k) => k !== 'ingredients').map(fieldLabel).join(', ')} from ${src.sourceName} (${pageKind}), each checked against the page.`
+          ? `Filled ${[...bySource].map(([where, ks]) => `${ks.join(', ')} from ${where}`).join('; ')}, each checked against its page.`
           : confirmed
             ? 'No further label details could be verified on that page.'
             : unreachable
@@ -745,6 +753,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
 
   // Explanations already in the cache are attached now; new ones follow in step 8.
   const explain = await cachedExplanations(deps, general, scope, now, parsed, claimsByTerm);
+  if (explain.drugUseHidden) job.diagnosticNotes.push(`${explain.drugUseHidden} saved claim${explain.drugUseHidden === 1 ? ' is' : 's are'} about using the substance as a medicine, not its role in a food, and ${explain.drugUseHidden === 1 ? 'is' : 'are'} not shown.`);
   job.explanationsCached = explain.cachedCount;
   const pending = o.allowExplain && config.aiEnabled && config.explanationsEnabled && explain.missing.length > 0;
   // New explanations and the verdict need up to about three minutes. A job that reaches them late (after a long
@@ -825,7 +834,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       const fresh = settled.flatMap((r) => (r.status === 'fulfilled' ? r.value : []));
       await writeExplanations(db, fresh, deps.now());
       applyExplanations(general, new Map(fresh.map((e) => [e.key, e])), species);
-      collectClaims(fresh, claimsByTerm);
+      collectClaims(fresh, claimsByTerm); // new claims are already checked for drug use
       job.explanationsNew = fresh.filter((e) => e.status === 'verified').length;
       finalStatus = explanationStatus(explain, fresh);
       const misses = fresh.filter((e) => e.status !== 'verified').map((e) => `${e.term.slice(0, 40)}: ${e.reason}`);
@@ -958,9 +967,18 @@ function supplementEntries(facts: ProductFacts): ParsedIngredient[] {
 }
 
 /** The claims that passed claim-by-claim checks, by term, for the ingredient rows. */
-function collectClaims(items: Iterable<CitedExplanation>, into: Map<string, ClaimSource[]>): void {
-  // A supplement's active ingredient is a row too: its checked claims go with it.
-  for (const e of items) if (e.status === 'verified') into.set(termKey(e.term), [...(into.get(termKey(e.term)) ?? []), ...((e as CitedExplanation & { claims?: ClaimSource[] }).claims ?? [])]);
+function collectClaims(items: Iterable<CitedExplanation>, into: Map<string, ClaimSource[]>): number {
+  // A supplement's active ingredient is a row too: its checked claims go with it. A claim about using the
+  // substance as a medicine (checked before that rule existed) is not shown.
+  let drugUse = 0;
+  for (const e of items) {
+    if (e.status !== 'verified') continue;
+    const all = (e as CitedExplanation & { claims?: ClaimSource[] }).claims ?? [];
+    const claims = all.filter((c) => !isDrugUse(c.claim, c.passage, c.url));
+    drugUse += all.length - claims.length;
+    into.set(termKey(e.term), [...(into.get(termKey(e.term)) ?? []), ...claims]);
+  }
+  return drugUse;
 }
 
 function applyExplanations(general: GeneralAssessment, byKey: Map<string, CitedExplanation>, species: string): number {
@@ -997,6 +1015,7 @@ interface ExplainPlan {
   status: ExplanationStatus;
   looked: Set<string>; // term keys looked up (verified or not)
   verified: Set<string>; // term keys with a verified explanation
+  drugUseHidden?: number; // cached claims about drug use, not shown
 }
 
 /**
@@ -1023,14 +1042,14 @@ async function cachedExplanations(deps: Deps, general: GeneralAssessment, scope:
   if (!requests.length) return { ...empty, status: 'not_needed' };
   const cache = await readExplanations(deps.db, requests.map((r) => explanationKey(species, r.kind, r.term)), now);
   const cachedCount = applyExplanations(general, cache, species);
-  collectClaims(cache.values(), claims);
+  const drugUseHidden = collectClaims(cache.values(), claims);
   // Terms already looked up (even without a verifiable source) are not paid for again until they expire. The
   // cap applies to the terms still missing, so a later scan explains the next ones.
   const inCache = (r: ExplainRequest) => cache.get(explanationKey(species, r.kind, r.term));
   const missing = requests.filter((r) => !inCache(r)).slice(0, MAX_NEW_TERMS);
   const looked = new Set(requests.filter((r) => inCache(r)).map((r) => termKey(r.term)));
   const verified = new Set(requests.filter((r) => inCache(r)?.status === 'verified').map((r) => termKey(r.term)));
-  const plan = { requests, missing, cachedCount, looked, verified };
+  const plan = { requests, missing, cachedCount, looked, verified, ...(drugUseHidden ? { drugUseHidden } : {}) };
   return { ...plan, status: explanationStatus(plan) };
 }
 

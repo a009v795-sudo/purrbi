@@ -450,3 +450,17 @@ describe('review of the claim checks (2026-10-30)', () => {
     expect(r).toMatchObject({ ok: false, reason: expect.stringMatching(/number that is not in the passage \(3\)/) });
   });
 });
+
+describe('drug use is not an ingredient’s role in a food (live acceptance run of 2026-10-30, trace 74de5c85-803)', () => {
+  it('rejects a therapeutic use or a dose by route, and keeps what the substance is in food', async () => {
+    const { isDrugUse } = await import('../../src/knowledge/claims');
+    // As the explanation step returned them for the Wellness can's minerals (Merck Veterinary Manual, Pharmacology).
+    expect(isDrugUse('Sodium and potassium iodide have both been administered to treat selected bacterial, actinomycete, and fungal infections in animals.', 'Sodium and potassium iodide have been administered to treat selected bacterial, actinomycete, and fungal infections.', 'https://www.merckvetmanual.com/pharmacology/systemic-pharmacotherapeutics-of-the-integumentary-system/iodides-for-use-in-animals')).toBe(true);
+    expect(isDrugUse('The passage identifies magnesium sulfate (Epsom salts) and lists oral doses for cats as "Cats: 2–5 g, PO, as needed" in the cathartic/laxative drugs context.', 'Magnesium sulfate (Epsom salts) Cats: 2–5 g, PO, as needed', 'https://www.merckvetmanual.com/pharmacology/systemic-pharmacotherapeutics-of-the-digestive-system/cathartic-and-laxative-drugs-used-in-monogastric-animals')).toBe(true);
+    expect(isDrugUse('Used as a laxative agent in dogs.', 'Lactulose is used as a laxative agent.')).toBe(true);
+    // What it is and why it is added to a food.
+    expect(isDrugUse('Potassium iodide is a source of iodine in complete pet foods.', 'Iodine is supplied in pet foods as potassium iodide or calcium iodate.', 'https://www.aafco.org/consumers/understanding-pet-food/whats-in-the-ingredients-list')).toBe(false);
+    expect(isDrugUse('Taurine is an amino acid cats must get from their food.', 'Cats require 0.1% taurine in dry food on a dry matter basis.', 'https://vcahospitals.com/know-your-pet/taurine')).toBe(false);
+    expect(isDrugUse('Vitamin E supplementation of 5 mg per kg of food prevents deficiency.', 'Diets should contain at least 30 IU of vitamin E per kg.', 'https://www.merckvetmanual.com/management-and-nutrition/nutrition-small-animals/nutritional-requirements-of-small-animals')).toBe(false);
+  });
+});

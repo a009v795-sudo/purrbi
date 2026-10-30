@@ -187,7 +187,11 @@ export function retrievalStatus(purpose: PhotoPurpose, ctx: RetrievalContext): F
   const out = (status: RetrievalStatus, detail: string): FieldStatus => ({ purpose, status, detail });
   const r = ctx.research;
   const panel = (x: string) => x.split(/[,:]/)[0].trim();
-  if (r?.outcome === 'fetch_failed') return out('source_unavailable', 'The manufacturer’s and retailers’ pages couldn’t be reached; Purrbi tries again later.');
+  if (r?.outcome === 'fetch_failed') {
+    // Some pages could not be read while others were read and were not this product.
+    const reached = r.discarded.some((d) => /match(?:es|ed) only|does not show this product’s barcode|another (?:recipe|variant)/.test(d));
+    return out('source_unavailable', reached ? 'A page the search found couldn’t be read, and the others it could read didn’t show this product; Purrbi tries again later.' : 'The manufacturer’s and retailers’ pages couldn’t be reached; Purrbi tries again later.');
+  }
   if (r?.outcome === 'hint_failed') return out('source_unavailable', 'The barcode database didn’t answer, so the search had only the barcode to go on and found nothing; Purrbi tries again later.');
   if (!r && ctx.researchNotRun === 'error') return out('source_unavailable', 'Purrbi’s search for the manufacturer’s page didn’t work just now; it tries again later.');
   if (ctx.images?.failed?.some((x) => panel(x) === purpose)) return out('not_read', 'The database’s label image of this panel couldn’t be read just now; Purrbi tries again later.');

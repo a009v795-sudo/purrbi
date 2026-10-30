@@ -131,7 +131,8 @@ most severe for the product's species, then the one named by the longest term ("
 xylitol's). Roles come from the role table, matched on the head of the name ("Tuna Broth" and "chicken gravy" are broths, "Salmon Oil" a fat,
 "Soy Lecithin" an emulsifier, "Magnesium Stearate" a processing aid, "Bone Meal" a mineral source; a meat word that is not the head does not make
 a protein source). A cited claim supplies a role only when it is about cats and dogs, pets, animal feed or the product's own species, and only in
-the table's words. A claim-checked risk for the product's species makes the row yellow with its reason. Vitamin C, inositol and beta-carotene are
+the table's words. A claim-checked risk for the product's species makes the row yellow with its reason; what lacking a nutrient does
+("niacin deficiency in kittens fed diets without niacin") is why it is added, not a risk of it, and leaves the row green. Vitamin C, inositol and beta-carotene are
 "optional nutrients" (dogs and cats make the first two; cats cannot use beta-carotene), and carnitine is not an essential amino acid. Sweet
 potatoes (also in French, German, Italian and Spanish) and green, soy, locust or carob beans are not pulses or potatoes for the DCM note. A blend lists the sources
 of all its items, and each item keeps its own label text, checks and sources.
@@ -146,7 +147,8 @@ strength → retrieval and publication date → review status ("automated checks
 seeds are not sunflower oil), that a benefit or risk claim comes from a source about cats, dogs, pets or animal-feed safety (never swine
 nutrition or human food-additive evidence presented as pet evidence), that a product-naming rule is not applied to an ingredient-list entry,
 and then asks a second model whether the passage supports the claim, narrowing or rejecting it. A quote keeps its numbers and its whole
-sentence. Explanations made under the earlier method were withdrawn and are written again under these checks; each withdrawal is recorded with
+sentence. A passage about using the substance as a medicine (potassium iodide "administered to treat … fungal infections", a laxative dose
+"2–5 g, PO") is not about the ingredient's role in a food: such a claim is rejected, and one saved before this rule is not shown. Explanations made under the earlier method were withdrawn and are written again under these checks; each withdrawal is recorded with
 its reasons (`knowledgeAudit`), including terms no scan asks for any more (a sweep of earlier entries on each assessment).
 
 ## 6. Personal fit (separate from the score)
