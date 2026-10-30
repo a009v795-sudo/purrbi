@@ -14,11 +14,13 @@ import { parseAdequacyStatement } from '../domain/adequacy';
 import { normalizeBarcode, type NormalizedBarcode } from '../domain/barcode';
 import { buildHighlights } from '../domain/highlights';
 import { normalizeRole } from '../domain/roles';
-import { personalize } from '../domain/personalize';
+import { ingredientRelevance, personalize } from '../domain/personalize';
+import { ingredientRows } from '../domain/ingredientRows';
+import { normalizeIngredientName, type ParsedIngredient } from '../domain/ingredients';
 import { classifyScope, SCOPE_VERSION, type DatabaseOrigin, type SpeciesClaim } from '../domain/scope';
-import { assessGeneral } from '../domain/score';
+import { assessGeneral, productIngredients, speciesList } from '../domain/score';
 import { buildSummary, overallState } from '../domain/summary';
-import type { ClassificationSignal, GeneralAssessment, PetProfile, ProductFacts, RecallCheck, ScopeResult, SourceRef, SpeciesBasis } from '../domain/types';
+import type { ClaimSource, ClassificationSignal, GeneralAssessment, PetProfile, ProductFacts, RecallCheck, ScopeResult, SourceRef, SpeciesBasis } from '../domain/types';
 import { explainTerms as explainImpl, explanationKey, needsExplanation, type CitedExplanation, type ExplainRequest } from '../knowledge/explain';
 import { lookupBarcodeHint as barcodeHintImpl, type BarcodeHint } from '../sources/barcodeLookup';
 import { readDatabaseLabelImages as databaseImagesImpl } from '../sources/labelImages';
@@ -31,7 +33,7 @@ import { rematchAnalysis } from '../domain/nutrition';
 import { ASSESSMENT_VERSION, SCAN_STATUS, STUCK_AFTER_MS, WORKING_STATUSES, type ErrorCode, type RuntimeConfig } from './config';
 import { corroborateLabel } from './corroborate';
 import { dropStaleImageReads, enrichmentFacts, fillMissing, labelToFacts, missingInfo, type PhotoRequest } from './facts';
-import { explanationFields, highlightFields, jobFields, resultFields, type JobInfo } from './serialize';
+import { explanationFields, highlightFields, ingredientRowFields, jobFields, resultFields, type JobInfo } from './serialize';
 import {
   consumeAiBudget,
   consumeQuota,
@@ -621,6 +623,13 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   for (const n of notes) general.findings.push({ kind: 'info', text: n, evidence: 'Purrbi', rule: 'G-NOTE' });
   if (labelUsed) general.findings.push({ kind: 'info', text: 'Some details come from your own label photo, read by AI and not reviewed by Purrbi. Check them against the package.', evidence: 'Your label photo', rule: 'G-LABEL' });
   const personal = personalize(pet, facts, scope, general, recall, now);
+  // One row per label entry (blends with their items), coloured from Purrbi's lists and the claims that passed
+  // claim-by-claim checks; what each means for this pet. Rebuilt when new explanations arrive (step 8).
+  const parsed = productIngredients(facts);
+  const claimsByTerm = new Map<string, ClaimSource[]>();
+  const relevance = ingredientRelevance(pet, facts, general);
+  const rowFields = () =>
+    scope.status === 'out_of_scope' ? { ingredientRows: [], ingredientRowsByConcern: [] } : ingredientRowFields(ingredientRows(parsed, speciesList(scope.species), (term) => claimsByTerm.get(normalizeIngredientName(term)) ?? []), relevance);
   const summary = buildSummary(facts, scope, general, personal, recall);
   const state = overallState(general, recall, scope);
   // What a photo would still add. After "Continue without photos" the result is complete, but the requests
@@ -665,7 +674,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       : { text: named(ruleVerdict(vInput)), source: 'rules', status: verdictPending ? 'pending' : 'ready' };
 
   // Explanations already in the cache are attached now; new ones follow in step 8.
-  const explain = await cachedExplanations(deps, general, scope, now);
+  const explain = await cachedExplanations(deps, general, scope, now, parsed, claimsByTerm);
   job.explanationsCached = explain.cachedCount;
   const pending = o.allowExplain && config.aiEnabled && config.explanationsEnabled && explain.missing.length > 0;
 
@@ -684,6 +693,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       labelPhotoCount,
       ...resultFields({ facts, scope, general, personal, recall, summary, state, photoRequests: requests, factsVersion, labelEvidenceUsed: labelUsed, labelIdentityVerified: !labelUsed || labelTied }),
       ...explanationFields(general, pending ? 'pending' : explain.status),
+      ...rowFields(),
       ...highlightFields(highlights, verdict),
       ...jobFields(job, currentCalls(), deps.now()),
       assessmentRunId: job.runId,
@@ -735,13 +745,14 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       const fresh = settled.flatMap((r) => (r.status === 'fulfilled' ? r.value : []));
       await writeExplanations(db, fresh);
       applyExplanations(general, new Map(fresh.map((e) => [e.key, e])), species);
+      collectClaims(fresh, claimsByTerm);
       job.explanationsNew = fresh.filter((e) => e.status === 'verified').length;
-      finalStatus = explanationStatus(general);
+      finalStatus = explanationStatus(general, parsed, new Set([...explain.looked, ...fresh.map((e) => normalizeIngredientName(e.term))]));
       const misses = fresh.filter((e) => e.status !== 'verified').map((e) => `${e.term.slice(0, 40)}: ${e.reason}`);
       job.diagnosticNotes.push(`Explanations (${fresh[0]?.model ?? config.explainModel}): ${job.explanationsNew} of ${fresh.length} verified against their cited page.`, ...misses.slice(0, 10));
       log('explanations', { requested: explain.missing.length, verified: job.explanationsNew, unverified: misses });
     } catch (err) {
-      finalStatus = explanationStatus(general) === 'not_needed' ? 'unavailable' : explanationStatus(general);
+      finalStatus = explanationStatus(general, parsed, explain.looked) === 'not_needed' ? 'unavailable' : explanationStatus(general, parsed, explain.looked);
       const reason = err instanceof QuotaError ? err.kind : errorDetail((err as Error).message);
       job.diagnosticNotes.push(`Explanations not run: ${reason}`);
       log('explanations skipped', { reason });
@@ -774,7 +785,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   await db
     .runTransaction(async (tx) => {
       if ((await tx.get(ref)).get('assessmentRunId') !== job.runId) return;
-      tx.update(ref, { ...explanationFields(general, finalStatus), ...highlightFields(highlights, verdict), ...jobFields(job, currentCalls(), deps.now()), updatedAt: Timestamp.fromDate(deps.now()) });
+      tx.update(ref, { ...explanationFields(general, finalStatus), ...rowFields(), ...highlightFields(highlights, verdict), ...jobFields(job, currentCalls(), deps.now()), updatedAt: Timestamp.fromDate(deps.now()) });
     })
     .catch((err) => {
       deps.log.error('explanation save failed', { traceId: job.traceId, error: (err as Error).message });
@@ -824,14 +835,30 @@ async function sisterRecord(deps: Deps, barcode: NormalizedBarcode, now: Date, d
 
 // ---- explanations ------------------------------------------------------------------------------
 
-function explainRequests(general: GeneralAssessment): ExplainRequest[] {
+/**
+ * Terms to explain: supplement actives, the label entries without a curated note, and the items of a vitamin
+ * or mineral blend (each is a row of its own). Explanations are cached per species and term for every product.
+ */
+function explainRequests(general: GeneralAssessment, parsed: ParsedIngredient[]): ExplainRequest[] {
   const out: ExplainRequest[] = [];
   for (const a of general.supplement?.actives ?? []) if (needsExplanation(a.name, 'active')) out.push({ term: a.name, kind: 'active' });
-  const actives = new Set(out.map((x) => x.term.toLowerCase()));
-  for (const n of general.ingredientNotes.slice(0, 15)) {
-    if (n.explanationKind === 'none' && needsExplanation(n.name, 'ingredient') && !actives.has(n.name.toLowerCase())) out.push({ term: n.name, kind: 'ingredient' });
-  }
-  return out.slice(0, 20);
+  const seen = new Set(out.map((x) => normalizeIngredientName(x.term)));
+  const add = (term: string) => {
+    const k = normalizeIngredientName(term);
+    if (!seen.has(k) && needsExplanation(term, 'ingredient')) {
+      seen.add(k);
+      out.push({ term, kind: 'ingredient' });
+    }
+  };
+  const curated = new Set(general.ingredientNotes.filter((n) => n.explanationKind !== 'none').map((n) => normalizeIngredientName(n.name)));
+  for (const i of parsed.slice(0, 20)) if (i.kind !== 'group' && !curated.has(normalizeIngredientName(i.name))) add(i.name);
+  for (const i of parsed) for (const c of i.children) add(c.name);
+  return out.slice(0, 40);
+}
+
+/** The claims that passed claim-by-claim checks, by term, for the ingredient rows. */
+function collectClaims(items: Iterable<CitedExplanation>, into: Map<string, ClaimSource[]>): void {
+  for (const e of items) if (e.status === 'verified' && e.kind === 'ingredient') into.set(normalizeIngredientName(e.term), (e as CitedExplanation & { claims?: ClaimSource[] }).claims ?? []);
 }
 
 function applyExplanations(general: GeneralAssessment, byKey: Map<string, CitedExplanation>, species: string): number {
@@ -857,23 +884,26 @@ function applyExplanations(general: GeneralAssessment, byKey: Map<string, CitedE
 
 type ExplanationStatus = 'ready' | 'partial' | 'unavailable' | 'not_needed' | 'pending';
 
-function explanationStatus(general: GeneralAssessment): ExplanationStatus {
-  const wanted = explainRequests(general).length + general.ingredientNotes.filter((n) => n.explanationKind === 'cited_ai').length + (general.supplement?.actives.filter((a) => a.evidence === 'cited').length ?? 0);
+function explanationStatus(general: GeneralAssessment, parsed: ParsedIngredient[], explained = new Set<string>()): ExplanationStatus {
+  const requests = explainRequests(general, parsed).filter((r) => !explained.has(normalizeIngredientName(r.term)));
+  const wanted = requests.length + explained.size;
   if (!wanted) return 'not_needed';
-  const remaining = explainRequests(general).length;
+  const remaining = requests.length;
   if (!remaining) return 'ready';
   return remaining < wanted ? 'partial' : 'unavailable';
 }
 
-async function cachedExplanations(deps: Deps, general: GeneralAssessment, scope: ScopeResult, now: Date): Promise<{ missing: ExplainRequest[]; cachedCount: number; status: ExplanationStatus }> {
+async function cachedExplanations(deps: Deps, general: GeneralAssessment, scope: ScopeResult, now: Date, parsed: ParsedIngredient[], claims: Map<string, ClaimSource[]>): Promise<{ missing: ExplainRequest[]; cachedCount: number; status: ExplanationStatus; looked: Set<string> }> {
   const species = scope.species === 'unknown' ? 'cat_and_dog' : scope.species;
-  const requests = scope.status === 'out_of_scope' ? [] : explainRequests(general);
-  if (!requests.length) return { missing: [], cachedCount: 0, status: explanationStatus(general) };
+  const requests = scope.status === 'out_of_scope' ? [] : explainRequests(general, parsed);
+  if (!requests.length) return { missing: [], cachedCount: 0, status: explanationStatus(general, parsed), looked: new Set() };
   const cache = await readExplanations(deps.db, requests.map((r) => explanationKey(species, r.kind, r.term)), now);
   const cachedCount = applyExplanations(general, cache, species);
+  collectClaims(cache.values(), claims);
   // Terms already looked up (even without a verifiable source) are not paid for again until they expire.
   const missing = requests.filter((r) => !cache.has(explanationKey(species, r.kind, r.term)));
-  return { missing, cachedCount, status: explanationStatus(general) };
+  const looked = new Set(requests.filter((r) => cache.has(explanationKey(species, r.kind, r.term))).map((r) => normalizeIngredientName(r.term)));
+  return { missing, cachedCount, status: explanationStatus(general, parsed, looked), looked };
 }
 
 // ---------------------------------------------------------------------------------------------
