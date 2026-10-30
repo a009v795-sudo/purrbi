@@ -33,7 +33,7 @@ import { SourceError } from '../util/http';
 import { rematchAnalysis } from '../domain/nutrition';
 import { ASSESSMENT_VERSION, MAX_CACHE_LOOKUPS, MAX_NEW_TERMS, olderAssessment, RESEARCH_TIME_LIMIT_MS, SCAN_STATUS, STEP8_LATEST_START_MS, STUCK_AFTER_MS, WORKING_STATUSES, type ErrorCode, type RuntimeConfig } from './config';
 import { corroborateLabel } from './corroborate';
-import { dropStaleImageReads, enrichmentFacts, fillMissing, labelToFacts, missingInfo, type PhotoRequest } from './facts';
+import { dropStaleImageReads, enrichmentFacts, fillMissing, labelToFacts, missingInfo, retrievalStatus, type PhotoRequest, type RetrievalContext } from './facts';
 import { explanationFields, highlightFields, ingredientRowFields, jobFields, resultFields, type JobInfo } from './serialize';
 import {
   consumeAiBudget,
@@ -522,6 +522,8 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   // A page already used is searched again only after a new research method (which may read more of it), and only while something is missing.
   let researchReturned = false;
   const researchWanted = (stillMissing || scope.status === 'out_of_scope') && (!hasWeb || meta.enrichment.research?.version !== RESEARCH_VERSION) && researchDue;
+  // Why research wanted here did not run (said per missing panel, never as "product unknown").
+  let researchNotRun: RetrievalContext['researchNotRun'] = researchWanted && !(aiOk && config.researchEnabled) ? (o.allowFetch ? 'switched_off' : 'saved_evidence') : undefined;
   if (aiOk && config.researchEnabled && researchWanted) {
     await setStatus(deps, o.uid, o.scanId, SCAN_STATUS.researching, 'Looking for the manufacturer’s label information', 40);
     try {
@@ -577,6 +579,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
     } catch (err) {
       // Research is optional: keep going with what we have.
       const reason = err instanceof QuotaError ? err.kind : errorDetail((err as Error).message);
+      researchNotRun = err instanceof QuotaError ? (err.kind === 'research' ? 'quota' : 'ai_budget') : 'error';
       job.diagnosticNotes.push(`Research not run: ${reason}`);
       log('research skipped', { reason });
     }
@@ -666,6 +669,16 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   // What a photo would still add. After "Continue without photos" the result is complete, but the requests
   // stay listed (optional), so the owner can add a photo later and the findings so far are kept.
   const requests: PhotoRequest[] = missingInfo(facts, scope, general.category);
+  // Each request says why its information is still missing: not searched, unreachable, not on the sources,
+  // unreadable, or rejected by a check.
+  const savedResearch = meta.enrichment.research?.version === RESEARCH_VERSION ? meta.enrichment.research : undefined;
+  const retrieval: RetrievalContext = {
+    ...(savedResearch ? { research: { outcome: savedResearch.outcome, discarded: savedResearch.discarded ?? [], source: savedResearch.source ?? '', at: meta.enrichment.researchAt } } : {}),
+    researchNotRun,
+    ...(meta.enrichment.databaseImages ? { images: meta.enrichment.databaseImages } : {}),
+  };
+  const fieldStatus = requests.map((r) => retrievalStatus(r.purpose, retrieval));
+  const shownRequests = requests.map((r, i) => ({ ...r, reason: `${fieldStatus[i].detail} ${r.reason}` }));
 
   // The concise result: up to two positives and two cautions, and the verdict for the selected pet.
   // Supported products get a model-written verdict, checked against this assessment and cached; until it
@@ -727,7 +740,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   try {
     const fields = {
       labelPhotoCount,
-      ...resultFields({ facts, scope, general, personal, recall, summary, state, photoRequests: requests, factsVersion, labelEvidenceUsed: labelUsed, labelIdentityVerified: !labelUsed || labelTied }),
+      ...resultFields({ facts, scope, general, personal, recall, summary, state, photoRequests: shownRequests, fieldStatus, factsVersion, labelEvidenceUsed: labelUsed, labelIdentityVerified: !labelUsed || labelTied }),
       ...explanationFields(general, pending ? 'pending' : explain.status),
       ...rowFields(),
       ...highlightFields(highlights, verdict),

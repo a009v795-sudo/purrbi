@@ -11,7 +11,7 @@ import type { ClaimSource, EvidenceKind, GeneralAssessment, IngredientRow, Ingre
 import type { ResultState } from '../domain/summary';
 import type { Highlight } from '../domain/highlights';
 import { summarizeCalls, type SourceCall } from '../util/diagnostics';
-import type { PhotoRequest } from './facts';
+import type { FieldStatus, PhotoRequest } from './facts';
 
 /** What one job (scan, retry, photo, personal refresh) did; saved as `lastJob` with its sanitized calls. */
 export interface JobInfo {
@@ -92,6 +92,7 @@ export function resultFields(args: {
   summary: string[];
   state: ResultState;
   photoRequests: PhotoRequest[];
+  fieldStatus?: FieldStatus[]; // why each requested panel's information is still missing
   factsVersion: number;
   labelEvidenceUsed: boolean;
   labelIdentityVerified?: boolean; // every label photo used is tied to this barcode (verified)
@@ -210,6 +211,7 @@ export function resultFields(args: {
     missingInfo: args.photoRequests.map((p) => p.purpose),
     missingForScore: general.missingForScore, // what the score still needs (photo requests are separate)
     photoRequests: args.photoRequests.map((p) => ({ ...p })),
+    fieldStatus: (args.fieldStatus ?? []).map((f) => ({ ...f })),
     labelEvidenceUsed: args.labelEvidenceUsed,
     evidenceRevision: args.factsVersion,
   };

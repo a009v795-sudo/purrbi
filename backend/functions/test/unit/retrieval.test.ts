@@ -212,3 +212,32 @@ describe('research 2.0', () => {
     expect(r.facts?.ingredients?.value.slice(0, 3)).toEqual(['Chicken Broth', 'Water Sufficient For Processing', 'Chicken']);
   });
 });
+
+describe('why a requested panel is still missing (never "product unknown")', () => {
+  // Statuses are derived from what the job recorded: research outcome and its discarded notes, and database label images.
+  it('tells apart a search not made, a source unreachable, information not on the source, an unreadable image and a rejected value', async () => {
+    const { retrievalStatus } = await import('../../src/pipeline/facts');
+    const at = new Date('2026-10-30T05:00:00Z');
+    expect(retrievalStatus('nutrition', { researchNotRun: 'quota' })).toMatchObject({ status: 'not_searched', detail: expect.stringMatching(/searches for this account are used up/) });
+    expect(retrievalStatus('nutrition', { researchNotRun: 'ai_budget' })).toMatchObject({ status: 'not_searched', detail: expect.stringMatching(/AI checks are used up/) });
+    expect(retrievalStatus('nutrition', { researchNotRun: 'switched_off' }).status).toBe('not_searched');
+    expect(retrievalStatus('ingredients', { researchNotRun: 'error' })).toMatchObject({ status: 'source_unavailable', detail: expect.not.stringMatching(/unknown/i) });
+    expect(retrievalStatus('ingredients', { research: { outcome: 'fetch_failed', discarded: [], source: '' } }).status).toBe('source_unavailable');
+    expect(retrievalStatus('nutrition', { research: { outcome: 'done', discarded: [], source: 'companionpetfoodsupply.com (retailer_or_web)', at } })).toEqual({
+      purpose: 'nutrition',
+      status: 'not_found',
+      detail: 'Not printed on the page matched to this barcode (companionpetfoodsupply.com, checked 2026-10-30).',
+    });
+    expect(retrievalStatus('ingredients', { research: { outcome: 'done', discarded: [], source: '', at } }).detail).toBe('No manufacturer or retailer page could be matched to this barcode (checked 2026-10-30).');
+    expect(retrievalStatus('nutrition', { images: { skipped: ['nutrition: unreadable'], failed: [] } }).status).toBe('not_read');
+    expect(retrievalStatus('nutrition', { images: { skipped: [], failed: ['nutrition: HTTP 503'] }, research: { outcome: 'done', discarded: [], source: 'x' } })).toMatchObject({ status: 'not_read', detail: expect.stringMatching(/tries again later/) });
+    // A value found but rejected by a check, and a page matched by name only.
+    const rejected = retrievalStatus('nutrition', { research: { outcome: 'done', discarded: ['barcode search: guaranteed analysis: kept 2 of 3 values; not on the page: Cendres brutes 7'], source: 'x' } });
+    expect(rejected).toMatchObject({ status: 'rejected', detail: expect.stringMatching(/didn’t match what the page prints, so the nutrition details weren’t used/) });
+    const weak = retrievalStatus('ingredients', { research: { outcome: 'done', discarded: ['manufacturer page: ingredients: not used from a page matched only by brand and name'], source: 'x' } });
+    expect(weak).toMatchObject({ status: 'rejected', detail: expect.stringMatching(/doesn’t show this barcode or the same recipe, so its ingredient list wasn’t used/) });
+    // A note about another panel does not decide this one.
+    expect(retrievalStatus('ingredients', { research: { outcome: 'done', discarded: ['guaranteed analysis: not on the page'], source: 'x (manufacturer)' } }).status).toBe('not_found');
+    expect(retrievalStatus('front', { research: { outcome: 'done', discarded: ['example.com is for cats, but this product is for dogs: another variant, so nothing from it was used'], source: '' } })).toMatchObject({ status: 'rejected', detail: expect.stringMatching(/another variant/) });
+  });
+});

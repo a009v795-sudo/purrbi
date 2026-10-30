@@ -78,7 +78,8 @@ Lists (each item a map with fixed keys; mirrored as FlutterFlow data types):
 | `recallRecords` | `recallNumber, status, classification, reason, reportDate, productDescription, recallingFirm, match` |
 | `sources` | `name, type, url, retrievedAt, license, match, label` |
 | `personalTrace` | `input, value, rule, effect` |
-| `photoRequests` | `purpose, title, reason` |
+| `photoRequests` | `purpose, title, reason` (the reason starts with why the information is still missing, from `fieldStatus`) |
+| `fieldStatus` | one per photo request: `purpose (front\|ingredients\|nutrition), status, detail`; `status` is `not_searched` (research not run: today's research quota or AI budget used up, switched off, or a run on the saved evidence), `source_unavailable` (the pages could not be reached, or the search failed: a provider error is never "product unknown"), `not_found` (searched; not printed on the page matched to the barcode, or no page could be matched), `not_read` (the database's label image of that panel could not be read) or `rejected` (found, but it failed a check: not on the page as printed, a page matched by name only, another variant) |
 | `positives`, `cautions` | `kind (positive\|caution), severity (alert\|review\|info), title, detail, value, evidence, rule` — at most 2 each, fixed priority (METHODOLOGY.md §7) |
 | `summary`, `missingInfo`, `personalUnresolved`, `nutritionContext`, `evidenceNotes`, `diagnosticNotes`, `supplementLimitations`, `supplementQualitySignals` | String |
 

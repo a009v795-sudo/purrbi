@@ -1090,6 +1090,28 @@ describe('fallbacks before asking the owner for photos', () => {
     expect(calls.research).toBe(2); // webOnly once, unknown once: the failed search is not repeated
     expect((await read(again)).status).toBe('needs_photos');
   });
+  it('each photo request says why its information is missing: a provider error, a search not made, nothing on the sources', async () => {
+    researchThrows = true;
+    const failed = await newScan('u1', BC.unknown);
+    await processScan(deps({ researchEnabled: true }), 'u1', failed.id);
+    const f = await read(failed);
+    researchThrows = false;
+    expect(f.status).toBe('needs_photos');
+    expect(f.errorCode).toBe('');
+    expect(f.fieldStatus.map((x: { status: string }) => x.status)).toEqual(f.photoRequests.map(() => 'source_unavailable'));
+    expect(f.photoRequests[0].reason).toMatch(/^Purrbi’s search for the manufacturer’s page didn’t work just now; it tries again later\. /);
+    expect(JSON.stringify(f.photoRequests)).not.toMatch(/unknown/i);
+    // Research switched off: not searched, said as such.
+    const off = await newScan('u2', BC.unknown);
+    await processScan(deps({ researchEnabled: false }), 'u2', off.id);
+    expect((await read(off)).fieldStatus.every((x: { status: string }) => x.status === 'not_searched')).toBe(true);
+    // Research ran and found no page for the barcode: not found, with the date it was checked.
+    const none = await newScan('u1', BC.unknown);
+    await processScan(deps({ researchEnabled: true }), 'u1', none.id);
+    const n = await read(none);
+    expect(n.fieldStatus.every((x: { status: string }) => x.status === 'not_found')).toBe(true);
+    expect(n.photoRequests[0].reason).toMatch(/^No manufacturer or retailer page could be matched to this barcode \(checked \d{4}-\d{2}-\d{2}\)\. /);
+  });
 });
 
 describe('saved results under older rules', () => {

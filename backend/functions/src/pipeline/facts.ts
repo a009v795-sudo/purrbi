@@ -138,6 +138,58 @@ export interface PhotoRequest {
   reason: string;
 }
 
+/**
+ * Why a requested panel's information is still missing, so a search that was never made, a source that
+ * could not be reached, information that is not on the sources, a label image that could not be read and a
+ * value rejected by a check are never confused (and never shown as "product unknown").
+ */
+export type RetrievalStatus = 'not_searched' | 'source_unavailable' | 'not_found' | 'not_read' | 'rejected';
+export interface FieldStatus {
+  purpose: PhotoPurpose;
+  status: RetrievalStatus;
+  detail: string;
+}
+export interface RetrievalContext {
+  /** Research under the current method, as saved (this run's or an earlier one's). */
+  research?: { outcome?: 'done' | 'fetch_failed'; discarded: string[]; source: string; at?: Date | null };
+  /** Why research did not run when it was wanted and none under the current method is saved. */
+  researchNotRun?: 'quota' | 'ai_budget' | 'switched_off' | 'saved_evidence' | 'error';
+  /** Database label images that could not be read: definitive (`skipped`) or technical (`failed`), by panel. */
+  images?: { skipped: string[]; failed?: string[] };
+}
+
+const PANEL_WORDS: Record<PhotoPurpose, RegExp> = {
+  front: /intended for|product name|who it is for|cats or dogs/i,
+  ingredients: /ingredient/i,
+  nutrition: /analysis|adequacy|feeding statement|calori/i,
+};
+const WHAT: Record<PhotoPurpose, string> = { front: 'details weren’t', ingredients: 'ingredient list wasn’t', nutrition: 'nutrition details weren’t' };
+
+export function retrievalStatus(purpose: PhotoPurpose, ctx: RetrievalContext): FieldStatus {
+  const out = (status: RetrievalStatus, detail: string): FieldStatus => ({ purpose, status, detail });
+  const r = ctx.research;
+  const panel = (x: string) => x.split(/[,:]/)[0].trim();
+  if (r?.outcome === 'fetch_failed') return out('source_unavailable', 'The manufacturer’s and retailers’ pages couldn’t be reached; Purrbi tries again later.');
+  if (!r && ctx.researchNotRun === 'error') return out('source_unavailable', 'Purrbi’s search for the manufacturer’s page didn’t work just now; it tries again later.');
+  if (ctx.images?.failed?.some((x) => panel(x) === purpose)) return out('not_read', 'The database’s label image of this panel couldn’t be read just now; Purrbi tries again later.');
+  if (r) {
+    const notes = r.discarded.filter((d) => PANEL_WORDS[purpose].test(d) || /nothing from it was used/.test(d));
+    const weak = notes.find((d) => /match(?:es|ed) only/.test(d));
+    const variant = notes.find((d) => /another variant/.test(d));
+    if (variant) return out('rejected', 'The page found is for another variant of this product, so nothing from it was used.');
+    if (weak) return out('rejected', `A page with this product’s name was found, but it doesn’t show this barcode or the same recipe, so its ${WHAT[purpose]} used.`);
+    if (notes.length) return out('rejected', `What the search found didn’t match what the page prints, so the ${WHAT[purpose]} used.`);
+  }
+  if (ctx.images?.skipped.some((x) => panel(x) === purpose)) return out('not_read', 'The database’s label image of this panel isn’t clear enough to read.');
+  if (r) {
+    const when = r.at ? ` (checked ${r.at.toISOString().slice(0, 10)})` : '';
+    const page = r.source.replace(/\s*\((?:manufacturer|retailer_or_web)\)$/, '');
+    return page ? out('not_found', `Not printed on the page matched to this barcode (${page}${when.replace(' (', ', ').replace(')', '')}).`) : out('not_found', `No manufacturer or retailer page could be matched to this barcode${when}.`);
+  }
+  const why = { quota: 'today’s searches for this account are used up', ai_budget: 'today’s AI checks are used up', switched_off: 'the manufacturer search is switched off', saved_evidence: 'this check reused the saved evidence, and the next full check searches for it', error: 'the search failed' }[ctx.researchNotRun ?? 'saved_evidence'];
+  return out('not_searched', `The manufacturer’s page hasn’t been searched yet: ${why}.`);
+}
+
 /** Only what is missing for this product type; a photo of several panels satisfies several requests. */
 export function missingInfo(facts: ProductFacts, scope: ScopeResult, category: ProductCategory): PhotoRequest[] {
   if (scope.status === 'out_of_scope') return [];
