@@ -1,6 +1,6 @@
 # Purrbi assessment methodology
 
-Version: `assessment-3.0.0` overall, made of `purrbi-score-3.0.0` (score), `scope-3.0.0` (classification), `verdict-2.0.0` (verdict),
+Version: `assessment-3.0.0` overall, made of `purrbi-score-3.0.0` (score), `scope-3.0.0` (classification), `verdict-2.1.0` (verdict),
 `kb-2026-10-28-draft` (ingredient notes), `label-extract-2.3.0` (label reader), `research-2.0.0` (web research), `explain-2.0.0` (claim-checked explanations).
 A saved result records `assessmentVersion` and its parts (`scoreVersion`, `kbVersion`, `scopeVersion`); the shared product record its
 classification version; each fact read from a label, page or document its reader's version; each explanation its own. When the app opens
@@ -33,6 +33,10 @@ for a "Dog and Cat Treat"). Two sources at the same strongest basis naming diffe
 **Confirmed** means the strongest basis is not a retailer's listing: a retailer's catalogue title, category or tags alone do not confirm who a
 product is for, so a mismatch with the pet is shown as "review", never as "made for another species" (section 6). The selected pet, package
 pictures, the database a record is filed in, a URL or a single keyword never decide the species.
+Each source counts once, at its own strongest basis (a retailer's page naming dogs in its title and cats in its tags is one retailer listing for
+cats and dogs). A species that a weaker source names but the strongest does not is kept (`alsoNamed`): a pet of that species is told "review",
+never that the product is not for it. While the species is unconfirmed, documented concerns and the score's species rules are applied for
+**both** cats and dogs (the stricter values), so weak evidence never makes a result less careful than no evidence.
 
 **Product type (`categoryBasis`).** Complete food, treat, topper/complementary or supplement rests on, in order: a product named a supplement;
 the feeding statement ("complete and balanced …" → complete food; "for intermittent or supplemental feeding" → treat or complementary);
@@ -73,6 +77,10 @@ AAFCO minimums used (% of dry matter): cats, adult protein 26 and fat 9, growth 
 growth protein 22.5 and fat 8.5. A product for both species is held to the stricter (cat) values; "all life stages" and gestation/lactation
 claims use the growth values. Dry matter is computed from the guaranteed **minimums** and the **maximum** moisture, so it is conservative (the
 true values can only be higher). Without a moisture guarantee a value already at the minimum as fed passes; otherwise moisture is required.
+The AAFCO profiles assume 4,000 kcal ME per kg of dry matter: for a denser food (calories per kg, per 100 g, per oz or per lb as sold, with the
+moisture), the minimum is raised in proportion; a less dense food is held to the
+plain minimum (no correction downwards), and the result gives both ("minimum 26%, ≈ 30.1% at this food's energy density"). A part that is not
+met says what would reach it.
 Guaranteed minimums and maximums are never presented as exact analytical values.
 
 **Treat or complementary product**
@@ -118,6 +126,16 @@ losing or duplicating an ingredient, and the entry as printed is kept for tracea
 | **Red** | A documented concern for the species from a regulatory or veterinary toxicology source (propylene glycol in cat food, onion, xylitol for dogs). A confirmed allergy match is shown separately as a pet-specific conflict. Never red because an ingredient is unfamiliar, synthetic or processed, or harmful only at unrelated exposures. |
 | **Gray** | Not enough applicable evidence yet, or an unstated source ("natural flavor"): not harmful by default. |
 
+The row, the score's cap and the ingredient note always use the same curated entry: of every entry the name and its listed parts match, the
+most severe for the product's species, then the one named by the longest term ("Peanut Butter (Peanuts, Natural Flavors, Xylitol)" is
+xylitol's). Roles come from the role table, matched on the head of the name ("Tuna Broth" and "chicken gravy" are broths, "Salmon Oil" a fat,
+"Soy Lecithin" an emulsifier, "Magnesium Stearate" a processing aid, "Bone Meal" a mineral source; a meat word that is not the head does not make
+a protein source). A cited claim supplies a role only when it is about cats and dogs, pets, animal feed or the product's own species, and only in
+the table's words. A claim-checked risk for the product's species makes the row yellow with its reason. Vitamin C, inositol and beta-carotene are
+"optional nutrients" (dogs and cats make the first two; cats cannot use beta-carotene), and carnitine is not an essential amino acid. Sweet
+potatoes (also in French, German, Italian and Spanish) and green, soy, locust or carob beans are not pulses or potatoes for the DCM note. A blend lists the sources
+of all its items, and each item keeps its own label text, checks and sources.
+
 Tapping a row shows: what it is → why it is used → supported benefits and risks → relevance to this pet → what is not known → sources. Each row
 keeps five separate statuses: identity established; role explained; risk evidence assessed; exposure assessed (labels give no amounts, so
 "not assessed"); human review (not performed: the curated list is a draft). An AI explanation never marks anything "reviewed".
@@ -127,8 +145,9 @@ source passage (verbatim, found on the fetched page) → the species or use the 
 strength → retrieval and publication date → review status ("automated checks"). Purrbi checks that the passage names that exact form (sunflower
 seeds are not sunflower oil), that a benefit or risk claim comes from a source about cats, dogs, pets or animal-feed safety (never swine
 nutrition or human food-additive evidence presented as pet evidence), that a product-naming rule is not applied to an ingredient-list entry,
-and then asks a second model whether the passage supports the claim, narrowing or rejecting it. Explanations made under the earlier method were
-withdrawn and are written again under these checks; each withdrawal is recorded with its reasons (`knowledgeAudit`).
+and then asks a second model whether the passage supports the claim, narrowing or rejecting it. A quote keeps its numbers and its whole
+sentence. Explanations made under the earlier method were withdrawn and are written again under these checks; each withdrawal is recorded with
+its reasons (`knowledgeAudit`), including terms no scan asks for any more (a sweep of earlier entries on each assessment).
 
 ## 6. Personal fit (separate from the score)
 
@@ -138,7 +157,7 @@ Personal fit is checked against the selected pet's recorded information:
 - documented concerns and cautions, judged for the pet's own species. A cat-only concern in a product for cats and dogs is noted as "not for dogs" for a dog. A concern for the pet's species makes the fit a possible mismatch; a caution makes it "review";
 - life stage, against the adequacy claim;
 - large-breed growth;
-- allergies and sensitivities: "Contains chicken — you recorded chicken as an allergy" is a pet-specific conflict (it never changes the general score); an ingredient whose source is not stated ("natural flavor") makes compatibility **unconfirmed**, never a confirmed match ("Compatibility with milly's recorded pork allergy is unconfirmed: the source of natural flavor isn't stated on the label"); recorded allergens not on the list are one qualified line that never implies allergen-free manufacturing;
+- allergies and sensitivities: "Contains chicken — you recorded chicken as an allergy" is a pet-specific conflict (it never changes the general score); a recorded sensitivity is flagged as a sensitivity, never as an allergy, and ranked after an allergy; an ingredient whose source is not stated ("natural flavor") makes compatibility **unconfirmed**, never a confirmed match ("Compatibility with milly's recorded pork allergy is unconfirmed: the source of natural flavor isn't stated on the label"); recorded allergens not on the list are one qualified line that never implies allergen-free manufacturing;
 - owner preferences;
 - vet-directed diets;
 - for supplements, suitability: medicines, a reported condition, or pregnancy or nursing call for the vet's view, so the fit is "review", never "fits".
@@ -269,7 +288,12 @@ any photo is asked for:
 - Purrbi fetches each candidate page itself and reads its visible text, **image alternative text** (manufacturers publish ingredient lists
   as an image's alt text), barcodes in its **markup** (a shop widget's `ps-sku`, `data-upc`, JSON-LD `gtin`) or its **Shopify product
   record**, and **linked nutrition documents** (a "Nutrient Profiles" PDF: the AAFCO claim and calories per package).
-- Strong identity is the barcode on the page (text, markup or product record) or the same recipe in the same order. After a retailer's page,
+- Every fact is checked on its own page, and each page is tied to the product on its own. Strong identity is the barcode on the page (in its
+  text, as its markup's one barcode, or as the Shopify variant it shows, tied to the link by `?variant=` when the product has several), or the
+  same recipe in the same order (at least 5 ingredients compared, 80% matching, with the brand on the page). A barcode that is one of several on
+  a page (sizes or flavours) or a trusted name in the product's heading is weak: such a page gives only what a weak match may give (below), and
+  nothing at all while it is unknown whether the product is for cats or dogs. Downloads are bounded and the research step stops after 200 s,
+  keeping what was verified; when the AI budget runs out before the manufacturer follow-up, what the first page verified is kept. After a retailer's page,
   the manufacturer's own page is sought for what is missing; it may be matched by brand and the product name with catalogue abbreviations
   written out ("Dog Trt Frz Dr Wld Salmn" = "freeze dried wild salmon … treat"). From such a name-level match only what does not vary between
   package sizes is used: who it is for (only when it includes the species already known), the feeding statement, and a single-ingredient list
@@ -280,8 +304,15 @@ any photo is asked for:
   the photo request that follows. A provider error is never "product unknown"; partial findings are kept.
 - Only panels still missing after this are requested; one photo can cover several requests; "Continue without photos" keeps the findings.
 
-**Keeping results current.** Every result records `assessmentVersion`. When the app opens a result saved under an older version, it asks the
-backend to re-check it (`refreshPersonalRequested`, already allowed by the security rules): the product's evidence is re-read where its saved
-record is out of date (bounded by the same per-product freshness as a scan, so no repeated paid processing), explanations are checked under the
-current rules, and the result is saved with a note saying it was re-checked. A late or duplicate job never overwrites a newer result
-(`assessmentInputsAt`).
+**Keeping results current.** Every result records `assessmentVersion`. When the app opens a result saved under an older version (complete,
+waiting for photos, or out of scope), it asks the backend to re-check it (`refreshPersonalRequested`, allowed by the security rules for those
+states): the product's evidence is re-read where its saved record is out of date (bounded by the same per-product freshness as a scan, so no
+repeated paid processing), explanations are checked under the current rules, the photos the current rules need are asked for again (unless the
+owner chose "Continue without photos"), and the result is saved with a note saying it was re-checked. Re-checks have their own daily quota per
+owner (40); past it, the saved evidence is used and the result keeps its old version, so the re-check happens on a later opening.
+- Research saved by an earlier method is kept until research under the current method has returned: a provider error, quota, switch or time
+  limit never turns a known product into an unknown one, and such a result keeps its old version so it is re-checked later. A run that cannot
+  re-read sources (a photo, a pet change) never removes saved research, and every write to the shared record is conditional on the record the
+  run read: when another job changed it meanwhile, the newer record is kept.
+- A result made under newer rules than the backend's (a later release, before a rollback) is left as it is. A late or duplicate job never
+  overwrites a newer result (`assessmentInputsAt`). Explanations and the verdict that a job reaches late are added by a run of their own.

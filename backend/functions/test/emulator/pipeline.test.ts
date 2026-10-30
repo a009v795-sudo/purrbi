@@ -1239,6 +1239,18 @@ describe('explanations reach every row that asks for them', () => {
     expect(s.ingredientRows.find((r: { name: string }) => r.name === 'Mannan-Oligosaccharides').sources.length).toBeGreaterThan(0);
     expect(calls.research ?? 0).toBe(0); // no source read again
   });
+  it('explanations queued on a result made by newer rules leave that result as it is', async () => {
+    const ref = await newScan('u1', BC.hyphenA);
+    await processScan(deps({ explanationsEnabled: false }), 'u1', ref.id);
+    await ref.update({ assessmentVersion: 'assessment-9.0.0', personalState: 'from-a-newer-release' });
+    const before = await read(ref);
+    await ref.update({ explanationsQueued: true });
+    await handleScanUpdate(deps(), 'u1', ref.id, before, await read(ref));
+    const s = await read(ref);
+    expect(s.explanationsQueued).toBe(false);
+    expect(s.personalState).toBe('from-a-newer-release');
+    expect(s.assessmentVersion).toBe('assessment-9.0.0');
+  });
 });
 
 describe('explanations shown under earlier rules all get an audit record', () => {

@@ -1120,6 +1120,11 @@ export async function handleScanUpdate(deps: Deps, uid: string, scanId: string, 
   // Explanations and the verdict handed over by a job that reached them late, or explanations a newer run
   // saved the result without: added now, from the saved evidence (no source is read again).
   if (rising('explanationsQueued')) {
+    // Never re-run a result made by newer rules (a later release, before a rollback) under these.
+    if (!olderAssessment(after.assessmentVersion) && after.assessmentVersion !== ASSESSMENT_VERSION) {
+      await ref.update({ explanationsQueued: false });
+      return;
+    }
     const job = newJob('refresh', (after.traceId as string) || randomUUID().slice(0, 12), deps.now());
     await runWithCallLog(async () => {
       try {
