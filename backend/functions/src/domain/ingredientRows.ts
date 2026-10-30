@@ -395,7 +395,7 @@ function combinedRisk(parts: Assessed[]): Risk {
 
 function childSubject(c: IngredientChild): Subject {
   const qualifiers = [...c.name.matchAll(/\(([^()]*)\)|\[([^[\]]*)\]/g)].map((m) => (m[1] ?? m[2]).trim());
-  return { name: c.name, own: ownText(c.name), texts: [c.normalized], qualifiers, labelText: c.name, main: false };
+  return { name: c.name, own: ownText(c.name), texts: [c.normalized], qualifiers, labelText: c.printed ?? c.name, main: false };
 }
 
 function entryRow(ing: ParsedIngredient, species: Species[], claimsFor: ClaimsFor, main: boolean): IngredientRow {
@@ -404,7 +404,7 @@ function entryRow(ing: ParsedIngredient, species: Species[], claimsFor: ClaimsFo
     return row(assess({ name: ing.name, own: ownText(ing.name), texts: [ing.normalized, ...ing.subIngredients], qualifiers: ing.qualifiers, labelText: ing.labelText, main }, species, claimsFor), meta);
   }
   const kids = ing.children.map((c) => assess(childSubject(c), species, claimsFor));
-  const kidRows = ing.children.map((c, i) => row(kids[i], { id: `${ing.position}.${c.index}`, position: ing.position, childIndex: c.index, name: c.name, labelText: c.name, kind: 'child' }));
+  const kidRows = ing.children.map((c, i) => row(kids[i], { id: `${ing.position}.${c.index}`, position: ing.position, childIndex: c.index, name: c.name, labelText: c.printed ?? c.name, kind: 'child' }));
   const flagged = (color: IngredientColor) => kids.filter((k) => k.color === color);
   const notesOf = (list: Assessed[]) => list.map((k) => `${ing.children[kids.indexOf(k)].name}: ${k.benefitsRisks}`);
   const sourcesOf = (list: Assessed[]) => {

@@ -119,9 +119,10 @@ describe('ingredient list parser', () => {
   });
 
   it('closes a bracket left open at the end of the list, and two open blends one after the other', () => {
+    // Not a blend: it ends at its first comma and takes no later entry with it.
     const a = parseIngredientListWithNotes('Chicken, Chicken Broth (Water, Chicken');
-    expect(a.ingredients[1]).toMatchObject({ kind: 'compound', name: 'Chicken Broth', labelText: 'Chicken Broth (Water, Chicken' });
-    expect(a.notes).toEqual(['"Chicken Broth (" was not closed; closed it at the end of the list.']);
+    expect(a.ingredients.map((i) => i.name)).toEqual(['Chicken', 'Chicken Broth (Water)', 'Chicken']);
+    expect(a.notes).toEqual(['"Chicken Broth (" was not closed; closed it at its first comma.']);
     const b = parseIngredientListWithNotes('Vitamins [Niacin, Biotin, Minerals [Zinc Oxide, Iron Oxide');
     expect(b.ingredients.map((i) => [i.name, i.children.map((c) => c.name)])).toEqual([['Vitamins', ['Niacin', 'Biotin']], ['Minerals', ['Zinc Oxide', 'Iron Oxide']]]);
     expect(b.notes).toHaveLength(2);
@@ -244,5 +245,61 @@ describe('ingredient roles: from what the ingredient is, not a meat or fish word
   it('still knows nothing about what is not in the table', () => {
     expect(ingredientRole('Yucca Schidigera Extract')).toBeNull();
     expect(ingredientRole('')).toBeNull();
+  });
+});
+
+describe('review of the ingredient parser (2026-10-30)', () => {
+  const names = (text: string) => parseIngredientList(text).map((i) => i.name);
+  const kids = (text: string) => parseIngredientList(text).map((i) => [i.name, i.children.map((c) => c.name)]);
+  it('an unclosed bracket that is not a blend takes no later entry with it', () => {
+    expect(names('Chicken, Rice, Thiamine Mononitrate (Vitamin B1, Garlic Powder, Chicken Fat, Salt')).toEqual(['Chicken', 'Rice', 'Thiamine Mononitrate (Vitamin B1)', 'Garlic Powder', 'Chicken Fat', 'Salt']);
+    expect(names('Deboned Chicken, Chicken Meal (dehydrated, Peas, Potatoes, Chicken Fat, Salt')).toEqual(['Deboned Chicken', 'Chicken Meal (dehydrated)', 'Peas', 'Potatoes', 'Chicken Fat', 'Salt']);
+    // Inside a blend: the item's chemical name ends at its comma, so the blend keeps all its items.
+    expect(kids('Vitamins [Vitamin E Supplement (dl-alpha tocopheryl acetate, Niacin, Biotin, Thiamine Mononitrate], Taurine')).toEqual([
+      ['Vitamins', ['Vitamin E Supplement (dl-alpha tocopheryl acetate)', 'Niacin', 'Biotin', 'Thiamine Mononitrate']], ['Taurine', []],
+    ]);
+  });
+  it('a comma inside a number is part of the number', () => {
+    expect(parseIngredientList('Poulet (26%), Riz, Huile de saumon 1,5%, Pulpe de betterave').map((i) => i.labelText)).toEqual(['Poulet (26%)', 'Riz', 'Huile de saumon 1,5%', 'Pulpe de betterave']);
+    expect(names('Chicken, Vitamin A 15,000 IU, Vitamin D3 1,500 IU')).toEqual(['Chicken', 'Vitamin A 15,000 IU', 'Vitamin D3 1,500 IU']);
+    expect(parseIngredientList('Fleisch und tierische Nebenerzeugnisse (davon 4,5% Huhn), Getreide')[0]).toMatchObject({ kind: 'single', qualifiers: ['davon 4,5% Huhn'] });
+    expect(names('Vitamin D3,Zinc Oxide')).toEqual(['Vitamin D3', 'Zinc Oxide']);
+  });
+  it('a section after a full stop starts its own entry; a footnote is a note, not part of the last entry', () => {
+    const de = parseIngredientList('Fleisch, Getreide, Mineralstoffe, Zucker. Zusatzstoffe: Ernährungsphysiologische Zusatzstoffe: Vitamin A 1.500 IE, Vitamin D3 200 IE');
+    expect(de.map((i) => i.name)).toContain('Zucker');
+    expect(de.find((i) => i.children.some((c) => c.name.startsWith('Vitamin A')))?.children.map((c) => c.name)).toEqual(['Vitamin A 1.500 IE', 'Vitamin D3 200 IE']);
+    const foot = parseIngredientListWithNotes('Chicken, Chicken Fat. *Preserved with mixed tocopherols');
+    expect(foot.ingredients.map((i) => i.name)).toEqual(['Chicken', 'Chicken Fat']);
+    expect(foot.notes).toContain('Footnote: *Preserved with mixed tocopherols');
+    expect(names('Chicken, Rice, Salt. *Organic')).toEqual(['Chicken', 'Rice', 'Salt']);
+    expect(names('Chicken, B. subtilis, Rice')).toEqual(['Chicken', 'B. subtilis', 'Rice']); // not every full stop
+  });
+  it('a blend written with a colon is one group', () => {
+    expect(kids('Chicken, Rice, Minerals: Zinc Sulfate, Ferrous Sulfate, Copper Sulfate, Taurine')).toEqual([
+      ['Chicken', []], ['Rice', []], ['Minerals', ['Zinc Sulfate', 'Ferrous Sulfate', 'Copper Sulfate', 'Taurine']],
+    ]);
+    expect(kids('Chicken, Rice, Vitamins: Vitamin E, Niacin, Biotin; Minerals: Zinc Oxide, Iron Sulfate')).toEqual([
+      ['Chicken', []], ['Rice', []], ['Vitamins', ['Vitamin E', 'Niacin', 'Biotin']], ['Minerals', ['Zinc Oxide', 'Iron Sulfate']],
+    ]);
+    expect(parseIngredientList('Chicken, Minerals: Zinc Sulfate, Iron Sulfate')[1].labelText).toBe('Minerals: Zinc Sulfate, Iron Sulfate'); // as printed
+  });
+  it('blend shorthand names its nutrients, and "and" joins two of them', () => {
+    expect(kids('Chicken, Vitamins (A, D3, E, K3), Minerals (Zn, Fe)')).toEqual([
+      ['Chicken', []], ['Vitamins', ['Vitamin A', 'Vitamin D3', 'Vitamin E', 'Vitamin K3']], ['Minerals', ['Zinc', 'Iron']],
+    ]);
+    expect(kids('Vitamins (Niacin, Biotin and Folic Acid), Minerals (Zinc, Iron & Copper)')).toEqual([['Vitamins', ['Niacin', 'Biotin', 'Folic Acid']], ['Minerals', ['Zinc', 'Iron', 'Copper']]]);
+    expect(parseIngredientList('Vitamins (A, D3)')[0].children[0]).toMatchObject({ name: 'Vitamin A', printed: 'A' });
+    expect(names('Meat and Animal Derivatives, Rice')).toEqual(['Meat and Animal Derivatives', 'Rice']); // "and" outside a blend stays
+  });
+  it('descriptors in brackets describe the ingredient', () => {
+    expect(parseIngredientList('Chicken (Fresh, Deboned), Rice (Brown, White), Salmon').map((i) => [i.name, i.kind])).toEqual([['Chicken (Fresh, Deboned)', 'single'], ['Rice (Brown, White)', 'single'], ['Salmon', 'single']]);
+  });
+  it('a crafted list cannot slow the parser down (it was cubic)', () => {
+    for (const text of ['Chicken ' + '. '.repeat(1250) + 'x' + ')'.repeat(2500), 'x ' + '. '.repeat(1250) + 'y' + ' (b)'.repeat(625), '('.repeat(1000) + 'a' + ')'.repeat(1000) + ' (b)'.repeat(750), 'a, '.repeat(4000)]) {
+      const t0 = performance.now();
+      parseIngredientListWithNotes(text);
+      expect(performance.now() - t0).toBeLessThan(300);
+    }
   });
 });
