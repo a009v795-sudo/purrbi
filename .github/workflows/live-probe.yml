@@ -36,4 +36,6 @@ jobs:
           URLS: ${{ inputs.urls }}
           BARCODES: ${{ inputs.barcodes }}
           FIND: ${{ inputs.find }}
-        run: node backend/tools/probe-page.mjs $URLS --barcode ${BARCODES%% *} ${FIND:+--find "$FIND"}
+        run: |
+          case "$URLS" in *.pdf*) sudo apt-get install -y -qq poppler-utils >/dev/null 2>&1 || true;; esac
+          node backend/tools/probe-page.mjs $URLS --barcode ${BARCODES%% *} ${FIND:+--find "$FIND"}
