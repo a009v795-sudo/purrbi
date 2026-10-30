@@ -283,9 +283,27 @@ class _HistoryComponentWidgetState extends State<HistoryComponentWidget> {
                                             width: 44.0,
                                             height: 44.0,
                                             decoration: BoxDecoration(
-                                              color:
-                                                  FlutterFlowTheme.of(context)
-                                                      .primary,
+                                              color: listItemItem
+                                                          .ratingColor ==
+                                                      'green'
+                                                  ? FlutterFlowTheme
+                                                          .of(context)
+                                                      .success
+                                                  : (listItemItem
+                                                              .ratingColor ==
+                                                          'yellow'
+                                                      ? FlutterFlowTheme.of(
+                                                              context)
+                                                          .warning
+                                                      : (listItemItem
+                                                                  .ratingColor ==
+                                                              'red'
+                                                          ? FlutterFlowTheme.of(
+                                                                  context)
+                                                              .error
+                                                          : FlutterFlowTheme.of(
+                                                                  context)
+                                                              .primary)),
                                               shape: BoxShape.circle,
                                             ),
                                             alignment:
@@ -720,9 +738,27 @@ class _HistoryComponentWidgetState extends State<HistoryComponentWidget> {
                                             width: 44.0,
                                             height: 44.0,
                                             decoration: BoxDecoration(
-                                              color:
-                                                  FlutterFlowTheme.of(context)
-                                                      .primary,
+                                              color: listItemItem
+                                                          .ratingColor ==
+                                                      'green'
+                                                  ? FlutterFlowTheme
+                                                          .of(context)
+                                                      .success
+                                                  : (listItemItem
+                                                              .ratingColor ==
+                                                          'yellow'
+                                                      ? FlutterFlowTheme.of(
+                                                              context)
+                                                          .warning
+                                                      : (listItemItem
+                                                                  .ratingColor ==
+                                                              'red'
+                                                          ? FlutterFlowTheme.of(
+                                                                  context)
+                                                              .error
+                                                          : FlutterFlowTheme.of(
+                                                                  context)
+                                                              .primary)),
                                               shape: BoxShape.circle,
                                             ),
                                             alignment:

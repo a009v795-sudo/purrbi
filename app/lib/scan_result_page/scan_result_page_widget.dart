@@ -5,6 +5,7 @@ import '/backend/schema/structs/index.dart';
 import '/components/bullet_text_widget.dart';
 import '/components/finding_row_widget.dart';
 import '/components/highlight_row_widget.dart';
+import '/components/ingredient_row_tile_widget.dart';
 import '/flutter_flow/ff_builtin_enums.dart';
 import '/flutter_flow/flutter_flow_icon_button.dart';
 import '/flutter_flow/flutter_flow_theme.dart';
@@ -62,6 +63,26 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
         '',
         '',
       );
+      _model.openedScan = await ScansRecord.getDocumentOnce(widget!.scanRef!);
+      if (((String a0, String a1, String a2, String a3, bool a4) {
+        return (a0 != 'assessment-3.0.0') &&
+            (a1 == 'complete' ||
+                a2 == 'needs_photos' ||
+                a3 == 'out_of_scope') &&
+            !((a4 ?? false));
+      }(
+          _model.openedScan!.assessmentVersion,
+          _model.openedScan!.status,
+          _model.openedScan!.status,
+          _model.openedScan!.status,
+          _model.openedScan!.refreshPersonalRequested))!) {
+        await widget!.scanRef!.update(createScansRecordData(
+          refreshPersonalRequested: true,
+          petId: !(_model.openedScan?.petId == '')
+              ? _model.openedScan?.petId
+              : valueOrDefault(currentUserDocument?.activePetId, ''),
+        ));
+      }
     });
 
     WidgetsBinding.instance.addPostFrameCallback((_) => safeSetState(() {}));
@@ -366,6 +387,80 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                                         FlutterFlowTheme.of(
                                                                 context)
                                                             .labelMedium
+                                                            .fontStyle,
+                                                  ),
+                                            ),
+                                          if (containerScansRecord
+                                                  .speciesLine !=
+                                              '')
+                                            Text(
+                                              containerScansRecord.speciesLine,
+                                              style: FlutterFlowTheme.of(
+                                                      context)
+                                                  .bodySmall
+                                                  .override(
+                                                    font: GoogleFonts.nunito(
+                                                      fontWeight:
+                                                          FlutterFlowTheme.of(
+                                                                  context)
+                                                              .bodySmall
+                                                              .fontWeight,
+                                                      fontStyle:
+                                                          FlutterFlowTheme.of(
+                                                                  context)
+                                                              .bodySmall
+                                                              .fontStyle,
+                                                    ),
+                                                    color: FlutterFlowTheme.of(
+                                                            context)
+                                                        .secondaryText,
+                                                    letterSpacing: 0.0,
+                                                    fontWeight:
+                                                        FlutterFlowTheme.of(
+                                                                context)
+                                                            .bodySmall
+                                                            .fontWeight,
+                                                    fontStyle:
+                                                        FlutterFlowTheme.of(
+                                                                context)
+                                                            .bodySmall
+                                                            .fontStyle,
+                                                  ),
+                                            ),
+                                          if (containerScansRecord
+                                                  .packageSizeText !=
+                                              '')
+                                            Text(
+                                              'Package ${containerScansRecord.packageSizeText}',
+                                              style: FlutterFlowTheme.of(
+                                                      context)
+                                                  .bodySmall
+                                                  .override(
+                                                    font: GoogleFonts.nunito(
+                                                      fontWeight:
+                                                          FlutterFlowTheme.of(
+                                                                  context)
+                                                              .bodySmall
+                                                              .fontWeight,
+                                                      fontStyle:
+                                                          FlutterFlowTheme.of(
+                                                                  context)
+                                                              .bodySmall
+                                                              .fontStyle,
+                                                    ),
+                                                    color: FlutterFlowTheme.of(
+                                                            context)
+                                                        .secondaryText,
+                                                    letterSpacing: 0.0,
+                                                    fontWeight:
+                                                        FlutterFlowTheme.of(
+                                                                context)
+                                                            .bodySmall
+                                                            .fontWeight,
+                                                    fontStyle:
+                                                        FlutterFlowTheme.of(
+                                                                context)
+                                                            .bodySmall
                                                             .fontStyle,
                                                   ),
                                             ),
@@ -1194,31 +1289,25 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                             width: 84.0,
                                             height: 84.0,
                                             decoration: BoxDecoration(
-                                              color: containerScansRecord.resultState ==
-                                                      'strong'
+                                              color: containerScansRecord
+                                                          .ratingColor ==
+                                                      'green'
                                                   ? FlutterFlowTheme.of(context)
                                                       .success
-                                                  : (containerScansRecord.resultState ==
-                                                          'good'
-                                                      ? FlutterFlowTheme.of(context)
-                                                          .primary
+                                                  : (containerScansRecord.ratingColor ==
+                                                          'yellow'
+                                                      ? FlutterFlowTheme.of(
+                                                              context)
+                                                          .warning
                                                       : (containerScansRecord
-                                                                  .resultState ==
-                                                              'review'
-                                                          ? FlutterFlowTheme.of(context)
-                                                              .warning
-                                                          : ((containerScansRecord
-                                                                          .resultState ==
-                                                                      'low') ||
-                                                                  (containerScansRecord
-                                                                          .resultState ==
-                                                                      'alert')
-                                                              ? FlutterFlowTheme.of(
-                                                                      context)
-                                                                  .error
-                                                              : FlutterFlowTheme.of(
-                                                                      context)
-                                                                  .slate))),
+                                                                  .ratingColor ==
+                                                              'red'
+                                                          ? FlutterFlowTheme.of(
+                                                                  context)
+                                                              .error
+                                                          : FlutterFlowTheme.of(
+                                                                  context)
+                                                              .slate)),
                                               shape: BoxShape.circle,
                                             ),
                                             alignment:
@@ -1235,10 +1324,7 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                                   TextBaseline.alphabetic,
                                               children: [
                                                 if (containerScansRecord
-                                                        .scoreAvailable &&
-                                                    (containerScansRecord
-                                                            .resultState !=
-                                                        'partial'))
+                                                    .scoreAvailable)
                                                   Text(
                                                     containerScansRecord
                                                         .scoreText,
@@ -1276,29 +1362,24 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                                         ),
                                                   ),
                                                 if (containerScansRecord
-                                                        .scoreAvailable &&
-                                                    (containerScansRecord
-                                                            .resultState ==
-                                                        'partial'))
+                                                    .scoreAvailable)
                                                   Text(
-                                                    containerScansRecord
-                                                        .scoreText,
-                                                    textAlign: TextAlign.center,
+                                                    '/100',
                                                     style: FlutterFlowTheme.of(
                                                             context)
-                                                        .titleSmall
+                                                        .labelSmall
                                                         .override(
                                                           font: GoogleFonts
                                                               .nunito(
                                                             fontWeight:
                                                                 FlutterFlowTheme.of(
                                                                         context)
-                                                                    .titleSmall
+                                                                    .labelSmall
                                                                     .fontWeight,
                                                             fontStyle:
                                                                 FlutterFlowTheme.of(
                                                                         context)
-                                                                    .titleSmall
+                                                                    .labelSmall
                                                                     .fontStyle,
                                                           ),
                                                           color: FlutterFlowTheme
@@ -1308,12 +1389,12 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                                           fontWeight:
                                                               FlutterFlowTheme.of(
                                                                       context)
-                                                                  .titleSmall
+                                                                  .labelSmall
                                                                   .fontWeight,
                                                           fontStyle:
                                                               FlutterFlowTheme.of(
                                                                       context)
-                                                                  .titleSmall
+                                                                  .labelSmall
                                                                   .fontStyle,
                                                         ),
                                                   ),
@@ -1407,7 +1488,7 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                                 if (containerScansRecord
                                                     .scoreAvailable)
                                                   Text(
-                                                    'Purrbi label score out of 100',
+                                                    'Purrbi score (provisional methodology, not a veterinary rating)',
                                                     style: FlutterFlowTheme.of(
                                                             context)
                                                         .bodySmall
@@ -1442,13 +1523,13 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                                         ),
                                                   ),
                                                 if (containerScansRecord
-                                                        .scoreProvisional &&
+                                                        .scoreAvailable &&
                                                     (containerScansRecord
-                                                            .scoreBasis !=
+                                                            .coverageText !=
                                                         ''))
                                                   Text(
                                                     containerScansRecord
-                                                        .scoreBasis,
+                                                        .coverageText,
                                                     style: FlutterFlowTheme.of(
                                                             context)
                                                         .bodySmall
@@ -1852,7 +1933,11 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                   ),
                                 ),
                               ),
-                            if (containerScansRecord.status == 'needs_photos')
+                            if ((containerScansRecord.status ==
+                                    'needs_photos') ||
+                                ((containerScansRecord.status == 'complete') &&
+                                    (containerScansRecord.photoRequests.length >
+                                        0)))
                               Container(
                                 decoration: BoxDecoration(
                                   color: FlutterFlowTheme.of(context)
@@ -1877,7 +1962,10 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                     textBaseline: TextBaseline.alphabetic,
                                     children: [
                                       Text(
-                                        'Add a photo to finish',
+                                        containerScansRecord.status ==
+                                                'needs_photos'
+                                            ? 'Add a photo to finish'
+                                            : 'Add a photo for a full rating (optional)',
                                         style: FlutterFlowTheme.of(context)
                                             .titleMedium
                                             .override(
@@ -1902,12 +1990,33 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                                       .fontStyle,
                                             ),
                                       ),
-                                      Text(
-                                        'Purrbi couldn’t find these details in the sources it checked. A clear photo of the package fills them in.',
-                                        style: FlutterFlowTheme.of(context)
-                                            .bodyMedium
-                                            .override(
-                                              font: GoogleFonts.nunito(
+                                      if (valueOrDefault<bool>(
+                                        containerScansRecord
+                                                .photoRequests.length >
+                                            0,
+                                        false,
+                                      ))
+                                        Text(
+                                          'Purrbi couldn’t find these details in the sources it checked. A clear photo of the package fills them in.',
+                                          style: FlutterFlowTheme.of(context)
+                                              .bodyMedium
+                                              .override(
+                                                font: GoogleFonts.nunito(
+                                                  fontWeight:
+                                                      FlutterFlowTheme.of(
+                                                              context)
+                                                          .bodyMedium
+                                                          .fontWeight,
+                                                  fontStyle:
+                                                      FlutterFlowTheme.of(
+                                                              context)
+                                                          .bodyMedium
+                                                          .fontStyle,
+                                                ),
+                                                color:
+                                                    FlutterFlowTheme.of(context)
+                                                        .secondaryText,
+                                                letterSpacing: 0.0,
                                                 fontWeight:
                                                     FlutterFlowTheme.of(context)
                                                         .bodyMedium
@@ -1917,20 +2026,7 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                                         .bodyMedium
                                                         .fontStyle,
                                               ),
-                                              color:
-                                                  FlutterFlowTheme.of(context)
-                                                      .secondaryText,
-                                              letterSpacing: 0.0,
-                                              fontWeight:
-                                                  FlutterFlowTheme.of(context)
-                                                      .bodyMedium
-                                                      .fontWeight,
-                                              fontStyle:
-                                                  FlutterFlowTheme.of(context)
-                                                      .bodyMedium
-                                                      .fontStyle,
-                                            ),
-                                      ),
+                                        ),
                                       Builder(
                                         builder: (context) {
                                           final photoRequest =
@@ -2307,71 +2403,77 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                           );
                                         },
                                       ),
-                                      FFButtonWidget(
-                                        onPressed: () async {
-                                          await widget!.scanRef!
-                                              .update(createScansRecordData(
-                                            skipPhotos: true,
-                                          ));
-                                        },
-                                        text: 'Continue without photos',
-                                        options: FFButtonOptions(
-                                          width: double.infinity,
-                                          height: 48.0,
-                                          padding:
-                                              EdgeInsetsDirectional.fromSTEB(
-                                                  0.0, 0.0, 0.0, 0.0),
-                                          iconPadding:
-                                              EdgeInsetsDirectional.fromSTEB(
-                                                  0.0, 0.0, 0.0, 0.0),
-                                          color: FlutterFlowTheme.of(context)
-                                              .secondaryBackground,
-                                          textStyle: FlutterFlowTheme.of(
-                                                  context)
-                                              .labelLarge
-                                              .override(
-                                                font: GoogleFonts.nunito(
-                                                  fontWeight:
-                                                      FlutterFlowTheme.of(
-                                                              context)
-                                                          .labelLarge
-                                                          .fontWeight,
-                                                  fontStyle:
-                                                      FlutterFlowTheme.of(
-                                                              context)
-                                                          .labelLarge
-                                                          .fontStyle,
-                                                ),
-                                                color:
-                                                    FlutterFlowTheme.of(context)
-                                                        .primary,
-                                                letterSpacing: 0.0,
-                                                fontWeight:
-                                                    FlutterFlowTheme.of(context)
-                                                        .labelLarge
-                                                        .fontWeight,
-                                                fontStyle:
-                                                    FlutterFlowTheme.of(context)
-                                                        .labelLarge
-                                                        .fontStyle,
-                                              ),
-                                          borderSide: BorderSide(
+                                      if (containerScansRecord.status ==
+                                          'needs_photos')
+                                        FFButtonWidget(
+                                          onPressed: () async {
+                                            await widget!.scanRef!
+                                                .update(createScansRecordData(
+                                              skipPhotos: true,
+                                            ));
+                                          },
+                                          text: 'Continue without photos',
+                                          options: FFButtonOptions(
+                                            width: double.infinity,
+                                            height: 48.0,
+                                            padding:
+                                                EdgeInsetsDirectional.fromSTEB(
+                                                    0.0, 0.0, 0.0, 0.0),
+                                            iconPadding:
+                                                EdgeInsetsDirectional.fromSTEB(
+                                                    0.0, 0.0, 0.0, 0.0),
                                             color: FlutterFlowTheme.of(context)
-                                                .primary,
-                                            width: 1.0,
+                                                .secondaryBackground,
+                                            textStyle:
+                                                FlutterFlowTheme.of(context)
+                                                    .labelLarge
+                                                    .override(
+                                                      font: GoogleFonts.nunito(
+                                                        fontWeight:
+                                                            FlutterFlowTheme.of(
+                                                                    context)
+                                                                .labelLarge
+                                                                .fontWeight,
+                                                        fontStyle:
+                                                            FlutterFlowTheme.of(
+                                                                    context)
+                                                                .labelLarge
+                                                                .fontStyle,
+                                                      ),
+                                                      color:
+                                                          FlutterFlowTheme.of(
+                                                                  context)
+                                                              .primary,
+                                                      letterSpacing: 0.0,
+                                                      fontWeight:
+                                                          FlutterFlowTheme.of(
+                                                                  context)
+                                                              .labelLarge
+                                                              .fontWeight,
+                                                      fontStyle:
+                                                          FlutterFlowTheme.of(
+                                                                  context)
+                                                              .labelLarge
+                                                              .fontStyle,
+                                                    ),
+                                            borderSide: BorderSide(
+                                              color:
+                                                  FlutterFlowTheme.of(context)
+                                                      .primary,
+                                              width: 1.0,
+                                            ),
+                                            borderRadius:
+                                                BorderRadius.circular(16.0),
                                           ),
-                                          borderRadius:
-                                              BorderRadius.circular(16.0),
                                         ),
-                                      ),
                                     ].divide(SizedBox(height: 10.0)),
                                   ),
                                 ),
                               ),
-                            if ((containerScansRecord.status == 'needs_photos') ||
+                            if (_model.uploading! ||
+                                (containerScansRecord.labelPhotoCount > 0) ||
                                 (containerScansRecord.status ==
-                                    'out_of_scope') ||
-                                containerScansRecord.labelEvidenceUsed)
+                                    'processing_photo'))
                               Container(
                                 decoration: BoxDecoration(
                                   color: FlutterFlowTheme.of(context)
@@ -3026,7 +3128,7 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                             if (((containerScansRecord.status == 'complete') ||
                                     (containerScansRecord.status ==
                                         'needs_photos')) &&
-                                (containerScansRecord.ingredientNotes.length >
+                                (containerScansRecord.ingredientRows.length >
                                     0))
                               Container(
                                 decoration: BoxDecoration(
@@ -3095,12 +3197,41 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                                       ),
                                             ),
                                           ),
-                                          Text(
-                                            '${containerScansRecord.ingredientsCount.toString()}',
-                                            style: FlutterFlowTheme.of(context)
-                                                .labelMedium
-                                                .override(
-                                                  font: GoogleFonts.nunito(
+                                          InkWell(
+                                            splashColor: Colors.transparent,
+                                            focusColor: Colors.transparent,
+                                            hoverColor: Colors.transparent,
+                                            highlightColor: Colors.transparent,
+                                            onTap: () async {
+                                              _model.concernFirst =
+                                                  !(_model.concernFirst ??
+                                                      true);
+                                              safeSetState(() {});
+                                            },
+                                            child: Text(
+                                              _model.concernFirst!
+                                                  ? 'Concerns first'
+                                                  : 'Label order',
+                                              style: FlutterFlowTheme.of(
+                                                      context)
+                                                  .labelMedium
+                                                  .override(
+                                                    font: GoogleFonts.nunito(
+                                                      fontWeight:
+                                                          FlutterFlowTheme.of(
+                                                                  context)
+                                                              .labelMedium
+                                                              .fontWeight,
+                                                      fontStyle:
+                                                          FlutterFlowTheme.of(
+                                                                  context)
+                                                              .labelMedium
+                                                              .fontStyle,
+                                                    ),
+                                                    color: FlutterFlowTheme.of(
+                                                            context)
+                                                        .primary,
+                                                    letterSpacing: 0.0,
                                                     fontWeight:
                                                         FlutterFlowTheme.of(
                                                                 context)
@@ -3112,399 +3243,176 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                                             .labelMedium
                                                             .fontStyle,
                                                   ),
-                                                  color: FlutterFlowTheme.of(
-                                                          context)
-                                                      .secondaryText,
-                                                  letterSpacing: 0.0,
-                                                  fontWeight:
-                                                      FlutterFlowTheme.of(
-                                                              context)
-                                                          .labelMedium
-                                                          .fontWeight,
-                                                  fontStyle:
-                                                      FlutterFlowTheme.of(
-                                                              context)
-                                                          .labelMedium
-                                                          .fontStyle,
-                                                ),
+                                            ),
                                           ),
-                                        ].divide(SizedBox(width: 8.0)),
+                                          InkWell(
+                                            splashColor: Colors.transparent,
+                                            focusColor: Colors.transparent,
+                                            hoverColor: Colors.transparent,
+                                            highlightColor: Colors.transparent,
+                                            onTap: () async {
+                                              _model.concernFirst =
+                                                  !(_model.concernFirst ??
+                                                      true);
+                                              safeSetState(() {});
+                                            },
+                                            child: Icon(
+                                              Icons.swap_vert_rounded,
+                                              color:
+                                                  FlutterFlowTheme.of(context)
+                                                      .primary,
+                                              size: 18.0,
+                                            ),
+                                          ),
+                                        ].divide(SizedBox(width: 6.0)),
                                       ),
-                                      if (!_model.showAllIngredients!)
-                                        Text(
-                                          containerScansRecord
-                                              .ingredientsPreview,
-                                          style: FlutterFlowTheme.of(context)
-                                              .bodyMedium
-                                              .override(
-                                                font: GoogleFonts.nunito(
-                                                  fontWeight:
-                                                      FlutterFlowTheme.of(
-                                                              context)
-                                                          .bodyMedium
-                                                          .fontWeight,
-                                                  fontStyle:
-                                                      FlutterFlowTheme.of(
-                                                              context)
-                                                          .bodyMedium
-                                                          .fontStyle,
-                                                ),
-                                                letterSpacing: 0.0,
+                                      Text(
+                                        _model.concernFirst!
+                                            ? 'Red, then yellow, gray and green. Tap Label order for the order printed on the package.'
+                                            : 'In the order printed on the package (largest amount first). Tap an ingredient for what it is, why it’s used and its sources.',
+                                        style: FlutterFlowTheme.of(context)
+                                            .bodySmall
+                                            .override(
+                                              font: GoogleFonts.nunito(
                                                 fontWeight:
                                                     FlutterFlowTheme.of(context)
-                                                        .bodyMedium
+                                                        .bodySmall
                                                         .fontWeight,
                                                 fontStyle:
                                                     FlutterFlowTheme.of(context)
-                                                        .bodyMedium
+                                                        .bodySmall
                                                         .fontStyle,
                                               ),
-                                        ),
-                                      if (_model.showAllIngredients ?? true)
+                                              color:
+                                                  FlutterFlowTheme.of(context)
+                                                      .secondaryText,
+                                              letterSpacing: 0.0,
+                                              fontWeight:
+                                                  FlutterFlowTheme.of(context)
+                                                      .bodySmall
+                                                      .fontWeight,
+                                              fontStyle:
+                                                  FlutterFlowTheme.of(context)
+                                                      .bodySmall
+                                                      .fontStyle,
+                                            ),
+                                      ),
+                                      if (!_model.concernFirst!)
                                         Builder(
                                           builder: (context) {
                                             final ingredientItem =
                                                 containerScansRecord
-                                                    .ingredientNotes
+                                                    .ingredientRows
                                                     .toList();
 
-                                            return ListView.separated(
+                                            return ListView.builder(
                                               padding: EdgeInsets.zero,
                                               primary: false,
                                               shrinkWrap: true,
                                               scrollDirection: Axis.vertical,
                                               itemCount: ingredientItem.length,
-                                              separatorBuilder: (_, __) =>
-                                                  SizedBox(height: 10.0),
                                               itemBuilder: (context,
                                                   ingredientItemIndex) {
                                                 final ingredientItemItem =
                                                     ingredientItem[
                                                         ingredientItemIndex];
-                                                return Column(
-                                                  mainAxisSize:
-                                                      MainAxisSize.max,
-                                                  mainAxisAlignment:
-                                                      (FFMainAxisAlignment
-                                                              .start)
-                                                          .flutterValue,
-                                                  crossAxisAlignment:
-                                                      (FFCrossAxisAlignment
-                                                              .start)
-                                                          .flutterValue,
-                                                  textBaseline:
-                                                      TextBaseline.alphabetic,
-                                                  children: [
-                                                    Row(
-                                                      mainAxisSize:
-                                                          MainAxisSize.max,
-                                                      mainAxisAlignment:
-                                                          (FFMainAxisAlignment
-                                                                  .start)
-                                                              .flutterValue,
-                                                      crossAxisAlignment:
-                                                          (FFCrossAxisAlignment
-                                                                  .center)
-                                                              .flutterValue,
-                                                      textBaseline: TextBaseline
-                                                          .alphabetic,
-                                                      children: [
-                                                        Expanded(
-                                                          child: Text(
-                                                            '${ingredientItemItem.position.toString()}. ${ingredientItemItem.name}',
-                                                            style: FlutterFlowTheme
-                                                                    .of(context)
-                                                                .titleSmall
-                                                                .override(
-                                                                  font: GoogleFonts
-                                                                      .nunito(
-                                                                    fontWeight: FlutterFlowTheme.of(
-                                                                            context)
-                                                                        .titleSmall
-                                                                        .fontWeight,
-                                                                    fontStyle: FlutterFlowTheme.of(
-                                                                            context)
-                                                                        .titleSmall
-                                                                        .fontStyle,
-                                                                  ),
-                                                                  letterSpacing:
-                                                                      0.0,
-                                                                  fontWeight: FlutterFlowTheme.of(
-                                                                          context)
-                                                                      .titleSmall
-                                                                      .fontWeight,
-                                                                  fontStyle: FlutterFlowTheme.of(
-                                                                          context)
-                                                                      .titleSmall
-                                                                      .fontStyle,
-                                                                ),
-                                                          ),
-                                                        ),
-                                                        Text(
-                                                          functions.statusLabel(
-                                                              ingredientItemItem
-                                                                  .status),
-                                                          style: FlutterFlowTheme
-                                                                  .of(context)
-                                                              .labelSmall
-                                                              .override(
-                                                                font:
-                                                                    GoogleFonts
-                                                                        .nunito(
-                                                                  fontWeight: FlutterFlowTheme.of(
-                                                                          context)
-                                                                      .labelSmall
-                                                                      .fontWeight,
-                                                                  fontStyle: FlutterFlowTheme.of(
-                                                                          context)
-                                                                      .labelSmall
-                                                                      .fontStyle,
-                                                                ),
-                                                                color: ingredientItemItem
-                                                                            .status ==
-                                                                        'concern'
-                                                                    ? FlutterFlowTheme.of(
-                                                                            context)
-                                                                        .error
-                                                                    : (ingredientItemItem.status ==
-                                                                            'caution'
-                                                                        ? FlutterFlowTheme.of(context)
-                                                                            .warning
-                                                                        : FlutterFlowTheme.of(context)
-                                                                            .secondaryText),
-                                                                letterSpacing:
-                                                                    0.0,
-                                                                fontWeight: FlutterFlowTheme.of(
-                                                                        context)
-                                                                    .labelSmall
-                                                                    .fontWeight,
-                                                                fontStyle: FlutterFlowTheme.of(
-                                                                        context)
-                                                                    .labelSmall
-                                                                    .fontStyle,
-                                                              ),
-                                                        ),
-                                                      ].divide(
-                                                          SizedBox(width: 8.0)),
+                                                return wrapWithModel(
+                                                  model: _model
+                                                      .ingredientRowItem1Models
+                                                      .getModel(
+                                                    ingredientItemIndex
+                                                        .toString(),
+                                                    ingredientItemIndex,
+                                                  ),
+                                                  updateCallback: () =>
+                                                      safeSetState(() {}),
+                                                  child:
+                                                      IngredientRowTileWidget(
+                                                    key: Key(
+                                                      'Keymsb_${ingredientItemIndex.toString()}',
                                                     ),
-                                                    if (ingredientItemItem
-                                                            .role !=
-                                                        '')
-                                                      Text(
-                                                        ingredientItemItem.role,
-                                                        style:
-                                                            FlutterFlowTheme.of(
-                                                                    context)
-                                                                .labelSmall
-                                                                .override(
-                                                                  font: GoogleFonts
-                                                                      .nunito(
-                                                                    fontWeight: FlutterFlowTheme.of(
-                                                                            context)
-                                                                        .labelSmall
-                                                                        .fontWeight,
-                                                                    fontStyle: FlutterFlowTheme.of(
-                                                                            context)
-                                                                        .labelSmall
-                                                                        .fontStyle,
-                                                                  ),
-                                                                  color: FlutterFlowTheme.of(
-                                                                          context)
-                                                                      .primary,
-                                                                  letterSpacing:
-                                                                      0.0,
-                                                                  fontWeight: FlutterFlowTheme.of(
-                                                                          context)
-                                                                      .labelSmall
-                                                                      .fontWeight,
-                                                                  fontStyle: FlutterFlowTheme.of(
-                                                                          context)
-                                                                      .labelSmall
-                                                                      .fontStyle,
-                                                                ),
-                                                      ),
-                                                    if (ingredientItemItem
-                                                            .explanationKind ==
-                                                        'cited_ai')
-                                                      Text(
-                                                        ingredientItemItem
-                                                            .explanation,
-                                                        style:
-                                                            FlutterFlowTheme.of(
-                                                                    context)
-                                                                .bodySmall
-                                                                .override(
-                                                                  font: GoogleFonts
-                                                                      .nunito(
-                                                                    fontWeight: FlutterFlowTheme.of(
-                                                                            context)
-                                                                        .bodySmall
-                                                                        .fontWeight,
-                                                                    fontStyle: FlutterFlowTheme.of(
-                                                                            context)
-                                                                        .bodySmall
-                                                                        .fontStyle,
-                                                                  ),
-                                                                  letterSpacing:
-                                                                      0.0,
-                                                                  fontWeight: FlutterFlowTheme.of(
-                                                                          context)
-                                                                      .bodySmall
-                                                                      .fontWeight,
-                                                                  fontStyle: FlutterFlowTheme.of(
-                                                                          context)
-                                                                      .bodySmall
-                                                                      .fontStyle,
-                                                                ),
-                                                      ),
-                                                    if (ingredientItemItem
-                                                            .explanationKind !=
-                                                        'cited_ai')
-                                                      Text(
-                                                        ingredientItemItem.note,
-                                                        style:
-                                                            FlutterFlowTheme.of(
-                                                                    context)
-                                                                .bodySmall
-                                                                .override(
-                                                                  font: GoogleFonts
-                                                                      .nunito(
-                                                                    fontWeight: FlutterFlowTheme.of(
-                                                                            context)
-                                                                        .bodySmall
-                                                                        .fontWeight,
-                                                                    fontStyle: FlutterFlowTheme.of(
-                                                                            context)
-                                                                        .bodySmall
-                                                                        .fontStyle,
-                                                                  ),
-                                                                  color: FlutterFlowTheme.of(
-                                                                          context)
-                                                                      .secondaryText,
-                                                                  letterSpacing:
-                                                                      0.0,
-                                                                  fontWeight: FlutterFlowTheme.of(
-                                                                          context)
-                                                                      .bodySmall
-                                                                      .fontWeight,
-                                                                  fontStyle: FlutterFlowTheme.of(
-                                                                          context)
-                                                                      .bodySmall
-                                                                      .fontStyle,
-                                                                ),
-                                                      ),
-                                                    if (ingredientItemItem
-                                                            .explanationKind ==
-                                                        'cited_ai')
-                                                      InkWell(
-                                                        splashColor:
-                                                            Colors.transparent,
-                                                        focusColor:
-                                                            Colors.transparent,
-                                                        hoverColor:
-                                                            Colors.transparent,
-                                                        highlightColor:
-                                                            Colors.transparent,
-                                                        onTap: () async {
-                                                          await launchURL(
-                                                              ingredientItemItem
-                                                                  .explanationSourceUrl);
-                                                        },
-                                                        child: Text(
-                                                          'Source: ${ingredientItemItem.explanationSourceTitle} (AI summary of a cited page, not reviewed by a vet)',
-                                                          style: FlutterFlowTheme
-                                                                  .of(context)
-                                                              .bodySmall
-                                                              .override(
-                                                                font:
-                                                                    GoogleFonts
-                                                                        .nunito(
-                                                                  fontWeight: FlutterFlowTheme.of(
-                                                                          context)
-                                                                      .bodySmall
-                                                                      .fontWeight,
-                                                                  fontStyle: FlutterFlowTheme.of(
-                                                                          context)
-                                                                      .bodySmall
-                                                                      .fontStyle,
-                                                                ),
-                                                                color: FlutterFlowTheme.of(
-                                                                        context)
-                                                                    .primary,
-                                                                letterSpacing:
-                                                                    0.0,
-                                                                fontWeight: FlutterFlowTheme.of(
-                                                                        context)
-                                                                    .bodySmall
-                                                                    .fontWeight,
-                                                                fontStyle: FlutterFlowTheme.of(
-                                                                        context)
-                                                                    .bodySmall
-                                                                    .fontStyle,
-                                                              ),
-                                                        ),
-                                                      ),
-                                                    if ((ingredientItemItem
-                                                                .explanationKind ==
-                                                            'curated') &&
-                                                        (ingredientItemItem
-                                                                .sourceUrl !=
-                                                            ''))
-                                                      InkWell(
-                                                        splashColor:
-                                                            Colors.transparent,
-                                                        focusColor:
-                                                            Colors.transparent,
-                                                        hoverColor:
-                                                            Colors.transparent,
-                                                        highlightColor:
-                                                            Colors.transparent,
-                                                        onTap: () async {
-                                                          await launchURL(
-                                                              ingredientItemItem
-                                                                  .sourceUrl);
-                                                        },
-                                                        child: Text(
-                                                          'Source: ${ingredientItemItem.sourceTitle}',
-                                                          style: FlutterFlowTheme
-                                                                  .of(context)
-                                                              .bodySmall
-                                                              .override(
-                                                                font:
-                                                                    GoogleFonts
-                                                                        .nunito(
-                                                                  fontWeight: FlutterFlowTheme.of(
-                                                                          context)
-                                                                      .bodySmall
-                                                                      .fontWeight,
-                                                                  fontStyle: FlutterFlowTheme.of(
-                                                                          context)
-                                                                      .bodySmall
-                                                                      .fontStyle,
-                                                                ),
-                                                                color: FlutterFlowTheme.of(
-                                                                        context)
-                                                                    .primary,
-                                                                letterSpacing:
-                                                                    0.0,
-                                                                fontWeight: FlutterFlowTheme.of(
-                                                                        context)
-                                                                    .bodySmall
-                                                                    .fontWeight,
-                                                                fontStyle: FlutterFlowTheme.of(
-                                                                        context)
-                                                                    .bodySmall
-                                                                    .fontStyle,
-                                                              ),
-                                                        ),
-                                                      ),
-                                                  ].divide(
-                                                      SizedBox(height: 2.0)),
+                                                    row: ingredientItemItem,
+                                                    petName:
+                                                        containerScansRecord
+                                                            .petName,
+                                                  ),
                                                 );
                                               },
                                             );
                                           },
                                         ),
+                                      if (_model.concernFirst ?? true)
+                                        Builder(
+                                          builder: (context) {
+                                            final concernItem =
+                                                containerScansRecord
+                                                    .ingredientRowsByConcern
+                                                    .toList();
+
+                                            return ListView.builder(
+                                              padding: EdgeInsets.zero,
+                                              primary: false,
+                                              shrinkWrap: true,
+                                              scrollDirection: Axis.vertical,
+                                              itemCount: concernItem.length,
+                                              itemBuilder:
+                                                  (context, concernItemIndex) {
+                                                final concernItemItem =
+                                                    concernItem[
+                                                        concernItemIndex];
+                                                return wrapWithModel(
+                                                  model: _model
+                                                      .ingredientRowItem2Models
+                                                      .getModel(
+                                                    concernItemIndex.toString(),
+                                                    concernItemIndex,
+                                                  ),
+                                                  updateCallback: () =>
+                                                      safeSetState(() {}),
+                                                  child:
+                                                      IngredientRowTileWidget(
+                                                    key: Key(
+                                                      'Keykum_${concernItemIndex.toString()}',
+                                                    ),
+                                                    row: concernItemItem,
+                                                    petName:
+                                                        containerScansRecord
+                                                            .petName,
+                                                  ),
+                                                );
+                                              },
+                                            );
+                                          },
+                                        ),
+                                      Text(
+                                        'Green: a supported role. Yellow: check the reason. Red: a documented concern. Gray: not assessed yet (not harmful by default).',
+                                        style: FlutterFlowTheme.of(context)
+                                            .bodySmall
+                                            .override(
+                                              font: GoogleFonts.nunito(
+                                                fontWeight:
+                                                    FlutterFlowTheme.of(context)
+                                                        .bodySmall
+                                                        .fontWeight,
+                                                fontStyle:
+                                                    FlutterFlowTheme.of(context)
+                                                        .bodySmall
+                                                        .fontStyle,
+                                              ),
+                                              color:
+                                                  FlutterFlowTheme.of(context)
+                                                      .secondaryText,
+                                              letterSpacing: 0.0,
+                                              fontWeight:
+                                                  FlutterFlowTheme.of(context)
+                                                      .bodySmall
+                                                      .fontWeight,
+                                              fontStyle:
+                                                  FlutterFlowTheme.of(context)
+                                                      .bodySmall
+                                                      .fontStyle,
+                                            ),
+                                      ),
                                       Text(
                                         containerScansRecord.ingredientsSource,
                                         style: FlutterFlowTheme.of(context)
@@ -3534,10 +3442,9 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                                       .fontStyle,
                                             ),
                                       ),
-                                      if (_model.showAllIngredients! &&
-                                          (containerScansRecord
-                                                  .explanationsStatus ==
-                                              'pending'))
+                                      if (containerScansRecord
+                                              .explanationsStatus ==
+                                          'pending')
                                         Text(
                                           'Explanations are being added with cited sources…',
                                           style: FlutterFlowTheme.of(context)
@@ -3569,51 +3476,6 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                                         .fontStyle,
                                               ),
                                         ),
-                                      InkWell(
-                                        splashColor: Colors.transparent,
-                                        focusColor: Colors.transparent,
-                                        hoverColor: Colors.transparent,
-                                        highlightColor: Colors.transparent,
-                                        onTap: () async {
-                                          _model.showAllIngredients =
-                                              !(_model.showAllIngredients ??
-                                                  true);
-                                          safeSetState(() {});
-                                        },
-                                        child: Text(
-                                          _model.showAllIngredients!
-                                              ? 'Show less'
-                                              : 'See all ingredients and what they are',
-                                          style: FlutterFlowTheme.of(context)
-                                              .labelLarge
-                                              .override(
-                                                font: GoogleFonts.nunito(
-                                                  fontWeight:
-                                                      FlutterFlowTheme.of(
-                                                              context)
-                                                          .labelLarge
-                                                          .fontWeight,
-                                                  fontStyle:
-                                                      FlutterFlowTheme.of(
-                                                              context)
-                                                          .labelLarge
-                                                          .fontStyle,
-                                                ),
-                                                color:
-                                                    FlutterFlowTheme.of(context)
-                                                        .primary,
-                                                letterSpacing: 0.0,
-                                                fontWeight:
-                                                    FlutterFlowTheme.of(context)
-                                                        .labelLarge
-                                                        .fontWeight,
-                                                fontStyle:
-                                                    FlutterFlowTheme.of(context)
-                                                        .labelLarge
-                                                        .fontStyle,
-                                              ),
-                                        ),
-                                      ),
                                     ].divide(SizedBox(height: 8.0)),
                                   ),
                                 ),
@@ -3666,7 +3528,7 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                           textBaseline: TextBaseline.alphabetic,
                                           children: [
                                             if (containerScansRecord
-                                                    .recallSeverity ==
+                                                    .recallIcon ==
                                                 'alert')
                                               Icon(
                                                 Icons.error_rounded,
@@ -3675,9 +3537,12 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                                         .error,
                                                 size: 22.0,
                                               ),
-                                            if (containerScansRecord
-                                                    .recallSeverity ==
-                                                'review')
+                                            if ((containerScansRecord
+                                                        .recallIcon ==
+                                                    'warning') ||
+                                                (containerScansRecord
+                                                        .recallIcon ==
+                                                    'error'))
                                               Icon(
                                                 Icons.warning_amber_rounded,
                                                 color:
@@ -3686,13 +3551,36 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                                 size: 22.0,
                                               ),
                                             if (containerScansRecord
-                                                    .recallSeverity ==
-                                                'info')
+                                                    .recallIcon ==
+                                                'history')
                                               Icon(
-                                                Icons.verified_outlined,
+                                                Icons.history_rounded,
                                                 color:
                                                     FlutterFlowTheme.of(context)
-                                                        .success,
+                                                        .secondaryText,
+                                                size: 22.0,
+                                              ),
+                                            if (containerScansRecord
+                                                    .recallIcon ==
+                                                'searched')
+                                              Icon(
+                                                Icons.manage_search_rounded,
+                                                color:
+                                                    FlutterFlowTheme.of(context)
+                                                        .secondaryText,
+                                                size: 22.0,
+                                              ),
+                                            if ((containerScansRecord
+                                                        .recallIcon ==
+                                                    'unknown') ||
+                                                (containerScansRecord
+                                                        .recallIcon ==
+                                                    ''))
+                                              Icon(
+                                                Icons.help_outline_rounded,
+                                                color:
+                                                    FlutterFlowTheme.of(context)
+                                                        .secondaryText,
                                                 size: 22.0,
                                               ),
                                             Expanded(
@@ -3847,6 +3735,86 @@ class _ScanResultPageWidgetState extends State<ScanResultPageWidget> {
                                                             .bodySmall
                                                             .fontStyle,
                                                   ),
+                                                  letterSpacing: 0.0,
+                                                  fontWeight:
+                                                      FlutterFlowTheme.of(
+                                                              context)
+                                                          .bodySmall
+                                                          .fontWeight,
+                                                  fontStyle:
+                                                      FlutterFlowTheme.of(
+                                                              context)
+                                                          .bodySmall
+                                                          .fontStyle,
+                                                ),
+                                          ),
+                                        if (_model.showRecall! &&
+                                            (containerScansRecord
+                                                    .recallCoverage !=
+                                                ''))
+                                          Text(
+                                            containerScansRecord.recallCoverage,
+                                            style: FlutterFlowTheme.of(context)
+                                                .bodySmall
+                                                .override(
+                                                  font: GoogleFonts.nunito(
+                                                    fontWeight:
+                                                        FlutterFlowTheme.of(
+                                                                context)
+                                                            .bodySmall
+                                                            .fontWeight,
+                                                    fontStyle:
+                                                        FlutterFlowTheme.of(
+                                                                context)
+                                                            .bodySmall
+                                                            .fontStyle,
+                                                  ),
+                                                  color: FlutterFlowTheme.of(
+                                                          context)
+                                                      .secondaryText,
+                                                  letterSpacing: 0.0,
+                                                  fontWeight:
+                                                      FlutterFlowTheme.of(
+                                                              context)
+                                                          .bodySmall
+                                                          .fontWeight,
+                                                  fontStyle:
+                                                      FlutterFlowTheme.of(
+                                                              context)
+                                                          .bodySmall
+                                                          .fontStyle,
+                                                ),
+                                          ),
+                                        if (valueOrDefault<bool>(
+                                          _model.showRecall! &&
+                                              ((containerScansRecord
+                                                          .recallIcon ==
+                                                      'searched') ||
+                                                  (containerScansRecord
+                                                          .recallIcon ==
+                                                      'history')),
+                                          false,
+                                        ))
+                                          Text(
+                                            'No match in these sources is not a safety guarantee.',
+                                            style: FlutterFlowTheme.of(context)
+                                                .bodySmall
+                                                .override(
+                                                  font: GoogleFonts.nunito(
+                                                    fontWeight:
+                                                        FlutterFlowTheme.of(
+                                                                context)
+                                                            .bodySmall
+                                                            .fontWeight,
+                                                    fontStyle:
+                                                        FlutterFlowTheme.of(
+                                                                context)
+                                                            .bodySmall
+                                                            .fontStyle,
+                                                  ),
+                                                  color: FlutterFlowTheme.of(
+                                                          context)
+                                                      .secondaryText,
                                                   letterSpacing: 0.0,
                                                   fontWeight:
                                                       FlutterFlowTheme.of(

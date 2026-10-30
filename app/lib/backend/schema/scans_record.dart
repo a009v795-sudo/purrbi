@@ -542,6 +542,97 @@ class ScansRecord extends FirestoreRecord {
   List<String> get missingForScore => _missingForScore ?? const [];
   bool hasMissingForScore() => _missingForScore != null;
 
+  // "ratingColor" field.
+  String? _ratingColor;
+  String get ratingColor => _ratingColor ?? '';
+  bool hasRatingColor() => _ratingColor != null;
+
+  // "coverageText" field.
+  String? _coverageText;
+  String get coverageText => _coverageText ?? '';
+  bool hasCoverageText() => _coverageText != null;
+
+  // "criticalConcerns" field.
+  List<String>? _criticalConcerns;
+  List<String> get criticalConcerns => _criticalConcerns ?? const [];
+  bool hasCriticalConcerns() => _criticalConcerns != null;
+
+  // "productSpeciesSet" field.
+  List<String>? _productSpeciesSet;
+  List<String> get productSpeciesSet => _productSpeciesSet ?? const [];
+  bool hasProductSpeciesSet() => _productSpeciesSet != null;
+
+  // "speciesBasis" field.
+  String? _speciesBasis;
+  String get speciesBasis => _speciesBasis ?? '';
+  bool hasSpeciesBasis() => _speciesBasis != null;
+
+  // "speciesConfirmed" field.
+  bool? _speciesConfirmed;
+  bool get speciesConfirmed => _speciesConfirmed ?? false;
+  bool hasSpeciesConfirmed() => _speciesConfirmed != null;
+
+  // "speciesNote" field.
+  String? _speciesNote;
+  String get speciesNote => _speciesNote ?? '';
+  bool hasSpeciesNote() => _speciesNote != null;
+
+  // "speciesLine" field.
+  String? _speciesLine;
+  String get speciesLine => _speciesLine ?? '';
+  bool hasSpeciesLine() => _speciesLine != null;
+
+  // "categoryBasis" field.
+  String? _categoryBasis;
+  String get categoryBasis => _categoryBasis ?? '';
+  bool hasCategoryBasis() => _categoryBasis != null;
+
+  // "packageSizeText" field.
+  String? _packageSizeText;
+  String get packageSizeText => _packageSizeText ?? '';
+  bool hasPackageSizeText() => _packageSizeText != null;
+
+  // "recallIcon" field.
+  String? _recallIcon;
+  String get recallIcon => _recallIcon ?? '';
+  bool hasRecallIcon() => _recallIcon != null;
+
+  // "recallCoverage" field.
+  String? _recallCoverage;
+  String get recallCoverage => _recallCoverage ?? '';
+  bool hasRecallCoverage() => _recallCoverage != null;
+
+  // "recallMatchBasis" field.
+  String? _recallMatchBasis;
+  String get recallMatchBasis => _recallMatchBasis ?? '';
+  bool hasRecallMatchBasis() => _recallMatchBasis != null;
+
+  // "assessmentVersion" field.
+  String? _assessmentVersion;
+  String get assessmentVersion => _assessmentVersion ?? '';
+  bool hasAssessmentVersion() => _assessmentVersion != null;
+
+  // "scopeVersion" field.
+  String? _scopeVersion;
+  String get scopeVersion => _scopeVersion ?? '';
+  bool hasScopeVersion() => _scopeVersion != null;
+
+  // "labelPhotoCount" field.
+  int? _labelPhotoCount;
+  int get labelPhotoCount => _labelPhotoCount ?? 0;
+  bool hasLabelPhotoCount() => _labelPhotoCount != null;
+
+  // "ingredientRows" field.
+  List<IngredientRowStruct>? _ingredientRows;
+  List<IngredientRowStruct> get ingredientRows => _ingredientRows ?? const [];
+  bool hasIngredientRows() => _ingredientRows != null;
+
+  // "ingredientRowsByConcern" field.
+  List<IngredientRowStruct>? _ingredientRowsByConcern;
+  List<IngredientRowStruct> get ingredientRowsByConcern =>
+      _ingredientRowsByConcern ?? const [];
+  bool hasIngredientRowsByConcern() => _ingredientRowsByConcern != null;
+
   DocumentReference get parentReference => reference.parent.parent!;
 
   void _initializeFields() {
@@ -700,6 +791,30 @@ class ScansRecord extends FirestoreRecord {
     _recallCheckedLabel = snapshotData['recallCheckedLabel'] as String?;
     _scoreMinPossible = castToType<int>(snapshotData['scoreMinPossible']);
     _missingForScore = getDataList(snapshotData['missingForScore']);
+    _ratingColor = snapshotData['ratingColor'] as String?;
+    _coverageText = snapshotData['coverageText'] as String?;
+    _criticalConcerns = getDataList(snapshotData['criticalConcerns']);
+    _productSpeciesSet = getDataList(snapshotData['productSpeciesSet']);
+    _speciesBasis = snapshotData['speciesBasis'] as String?;
+    _speciesConfirmed = snapshotData['speciesConfirmed'] as bool?;
+    _speciesNote = snapshotData['speciesNote'] as String?;
+    _speciesLine = snapshotData['speciesLine'] as String?;
+    _categoryBasis = snapshotData['categoryBasis'] as String?;
+    _packageSizeText = snapshotData['packageSizeText'] as String?;
+    _recallIcon = snapshotData['recallIcon'] as String?;
+    _recallCoverage = snapshotData['recallCoverage'] as String?;
+    _recallMatchBasis = snapshotData['recallMatchBasis'] as String?;
+    _assessmentVersion = snapshotData['assessmentVersion'] as String?;
+    _scopeVersion = snapshotData['scopeVersion'] as String?;
+    _labelPhotoCount = castToType<int>(snapshotData['labelPhotoCount']);
+    _ingredientRows = getStructList(
+      snapshotData['ingredientRows'],
+      IngredientRowStruct.fromMap,
+    );
+    _ingredientRowsByConcern = getStructList(
+      snapshotData['ingredientRowsByConcern'],
+      IngredientRowStruct.fromMap,
+    );
   }
 
   static Query<Map<String, dynamic>> collection([DocumentReference? parent]) =>
@@ -821,6 +936,20 @@ Map<String, dynamic> createScansRecordData({
   String? recallSeverity,
   String? recallCheckedLabel,
   int? scoreMinPossible,
+  String? ratingColor,
+  String? coverageText,
+  String? speciesBasis,
+  bool? speciesConfirmed,
+  String? speciesNote,
+  String? speciesLine,
+  String? categoryBasis,
+  String? packageSizeText,
+  String? recallIcon,
+  String? recallCoverage,
+  String? recallMatchBasis,
+  String? assessmentVersion,
+  String? scopeVersion,
+  int? labelPhotoCount,
 }) {
   final firestoreData = mapToFirestore(
     <String, dynamic>{
@@ -905,6 +1034,20 @@ Map<String, dynamic> createScansRecordData({
       'recallSeverity': recallSeverity,
       'recallCheckedLabel': recallCheckedLabel,
       'scoreMinPossible': scoreMinPossible,
+      'ratingColor': ratingColor,
+      'coverageText': coverageText,
+      'speciesBasis': speciesBasis,
+      'speciesConfirmed': speciesConfirmed,
+      'speciesNote': speciesNote,
+      'speciesLine': speciesLine,
+      'categoryBasis': categoryBasis,
+      'packageSizeText': packageSizeText,
+      'recallIcon': recallIcon,
+      'recallCoverage': recallCoverage,
+      'recallMatchBasis': recallMatchBasis,
+      'assessmentVersion': assessmentVersion,
+      'scopeVersion': scopeVersion,
+      'labelPhotoCount': labelPhotoCount,
     }.withoutNulls,
   );
 
@@ -1025,7 +1168,26 @@ class ScansRecordDocumentEquality implements Equality<ScansRecord> {
         e1?.recallSeverity == e2?.recallSeverity &&
         e1?.recallCheckedLabel == e2?.recallCheckedLabel &&
         e1?.scoreMinPossible == e2?.scoreMinPossible &&
-        listEquality.equals(e1?.missingForScore, e2?.missingForScore);
+        listEquality.equals(e1?.missingForScore, e2?.missingForScore) &&
+        e1?.ratingColor == e2?.ratingColor &&
+        e1?.coverageText == e2?.coverageText &&
+        listEquality.equals(e1?.criticalConcerns, e2?.criticalConcerns) &&
+        listEquality.equals(e1?.productSpeciesSet, e2?.productSpeciesSet) &&
+        e1?.speciesBasis == e2?.speciesBasis &&
+        e1?.speciesConfirmed == e2?.speciesConfirmed &&
+        e1?.speciesNote == e2?.speciesNote &&
+        e1?.speciesLine == e2?.speciesLine &&
+        e1?.categoryBasis == e2?.categoryBasis &&
+        e1?.packageSizeText == e2?.packageSizeText &&
+        e1?.recallIcon == e2?.recallIcon &&
+        e1?.recallCoverage == e2?.recallCoverage &&
+        e1?.recallMatchBasis == e2?.recallMatchBasis &&
+        e1?.assessmentVersion == e2?.assessmentVersion &&
+        e1?.scopeVersion == e2?.scopeVersion &&
+        e1?.labelPhotoCount == e2?.labelPhotoCount &&
+        listEquality.equals(e1?.ingredientRows, e2?.ingredientRows) &&
+        listEquality.equals(
+            e1?.ingredientRowsByConcern, e2?.ingredientRowsByConcern);
   }
 
   @override
@@ -1133,7 +1295,25 @@ class ScansRecordDocumentEquality implements Equality<ScansRecord> {
         e?.recallSeverity,
         e?.recallCheckedLabel,
         e?.scoreMinPossible,
-        const ListEquality().hash(e?.missingForScore)
+        const ListEquality().hash(e?.missingForScore),
+        e?.ratingColor,
+        e?.coverageText,
+        const ListEquality().hash(e?.criticalConcerns),
+        const ListEquality().hash(e?.productSpeciesSet),
+        e?.speciesBasis,
+        e?.speciesConfirmed,
+        e?.speciesNote,
+        e?.speciesLine,
+        e?.categoryBasis,
+        e?.packageSizeText,
+        e?.recallIcon,
+        e?.recallCoverage,
+        e?.recallMatchBasis,
+        e?.assessmentVersion,
+        e?.scopeVersion,
+        e?.labelPhotoCount,
+        const ListEquality().hash(e?.ingredientRows),
+        const ListEquality().hash(e?.ingredientRowsByConcern)
       ]);
 
   @override

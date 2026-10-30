@@ -5,6 +5,7 @@ import '/backend/schema/structs/index.dart';
 import '/components/bullet_text_widget.dart';
 import '/components/finding_row_widget.dart';
 import '/components/highlight_row_widget.dart';
+import '/components/ingredient_row_tile_widget.dart';
 import '/flutter_flow/ff_builtin_enums.dart';
 import '/flutter_flow/flutter_flow_icon_button.dart';
 import '/flutter_flow/flutter_flow_theme.dart';
@@ -46,8 +47,12 @@ class ScanResultPageModel extends FlutterFlowModel<ScanResultPageWidget> {
 
   bool? showRecall = false;
 
+  bool? concernFirst = false;
+
   ///  State fields for stateful widgets in this page.
 
+  // Stores action output result for [Backend Call - Read Document] action in ScanResultPage widget.
+  ScansRecord? openedScan;
   // Model for MainAppbar.
   late MainAppbarModel mainAppbarModel;
   bool isDataUploading_frontUpload = false;
@@ -72,6 +77,12 @@ class ScanResultPageModel extends FlutterFlowModel<ScanResultPageWidget> {
   late FlutterFlowDynamicModels<FindingRowModel> findingRowItem1Models;
   // Models for BulletTextItem1.
   late FlutterFlowDynamicModels<BulletTextModel> bulletTextItem1Models;
+  // Models for IngredientRowItem1.
+  late FlutterFlowDynamicModels<IngredientRowTileModel>
+      ingredientRowItem1Models;
+  // Models for IngredientRowItem2.
+  late FlutterFlowDynamicModels<IngredientRowTileModel>
+      ingredientRowItem2Models;
   // Models for FindingRowItem2.
   late FlutterFlowDynamicModels<FindingRowModel> findingRowItem2Models;
   // Models for BulletTextItem2.
@@ -92,6 +103,10 @@ class ScanResultPageModel extends FlutterFlowModel<ScanResultPageWidget> {
         FlutterFlowDynamicModels(() => HighlightRowModel());
     findingRowItem1Models = FlutterFlowDynamicModels(() => FindingRowModel());
     bulletTextItem1Models = FlutterFlowDynamicModels(() => BulletTextModel());
+    ingredientRowItem1Models =
+        FlutterFlowDynamicModels(() => IngredientRowTileModel());
+    ingredientRowItem2Models =
+        FlutterFlowDynamicModels(() => IngredientRowTileModel());
     findingRowItem2Models = FlutterFlowDynamicModels(() => FindingRowModel());
     bulletTextItem2Models = FlutterFlowDynamicModels(() => BulletTextModel());
     bulletTextItem3Models = FlutterFlowDynamicModels(() => BulletTextModel());
@@ -106,6 +121,8 @@ class ScanResultPageModel extends FlutterFlowModel<ScanResultPageWidget> {
     highlightRowItem2Models.dispose();
     findingRowItem1Models.dispose();
     bulletTextItem1Models.dispose();
+    ingredientRowItem1Models.dispose();
+    ingredientRowItem2Models.dispose();
     findingRowItem2Models.dispose();
     bulletTextItem2Models.dispose();
     bulletTextItem3Models.dispose();
