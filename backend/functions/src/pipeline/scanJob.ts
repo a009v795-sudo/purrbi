@@ -620,7 +620,9 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
     job.diagnosticNotes.push('Kept what earlier research verified, because research under the current rules didn’t finish; it is tried again.');
   }
   if (keptIdentity.sources?.length) {
-    const kept = fillMissing(facts, keptIdentity);
+    // (What the full restore above already brought back is not added twice.)
+    const have = new Set(facts.classificationSignals.map((c) => `${c.source} ${c.text}`));
+    const kept = fillMissing(facts, { ...keptIdentity, classificationSignals: (keptIdentity.classificationSignals ?? []).filter((c) => !have.has(`${c.source} ${c.text}`)) });
     if (kept.filled.length) {
       facts = kept.facts;
       scope = scopeOf(facts, origin);

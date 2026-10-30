@@ -103,8 +103,10 @@ export function dropStaleImageReads(
 
 /**
  * The name and brand an earlier research method took from a page that showed this barcode: they tell research
- * what to search for, and stay the product's identity until research under the current method gives it. Other
- * facts of that method are read again (it could verify a fact on another page than the one that proved the product).
+ * what to search for, and stay the product's identity until research under the current method gives it, with
+ * what that page's own words said it is (its name and product type, as the current method reads them too). Who
+ * it is for and the other facts of that method are read again (it could read them elsewhere on a page, or on
+ * another page than the one that proved the product).
  */
 export function supersededIdentity(superseded: Partial<ProductFacts> | undefined): Partial<ProductFacts> {
   const tied = (f: { source: SourceRef } | undefined) => f?.source.matchConfidence === 'exact_barcode';
@@ -114,6 +116,7 @@ export function supersededIdentity(superseded: Partial<ProductFacts> | undefined
     ...(tied(superseded.productName) ? { productName: superseded.productName } : {}),
     ...(tied(superseded.brand) ? { brand: superseded.brand } : {}),
     sources: (superseded.sources ?? []).filter((x) => ids.has(x.sourceId)),
+    classificationSignals: (superseded.classificationSignals ?? []).filter((c) => ids.has(c.source) && !/^intended for /.test(c.text)),
   };
 }
 

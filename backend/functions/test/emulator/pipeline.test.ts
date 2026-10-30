@@ -141,7 +141,7 @@ const sources: Sources = {
     researchOpts.push({ knownName: o.knownName, knownBrand: o.knownBrand });
     if (identityPage && o.barcode === BC.unknown) {
       const page = { sourceId: `web:teststore.example:${o.gtin14}`, sourceType: 'retailer_or_web' as const, sourceName: 'teststore.example', url: 'https://teststore.example/dog-trt', retrievedAt: NOW.toISOString(), matchConfidence: 'exact_barcode' as const, readerVersion: RESEARCH_VERSION };
-      return { facts: { productName: { value: 'TEST FIXTURE Dog Trt Frz Dr Wld Salmn', source: page }, brand: { value: 'TESTBRAND', source: page }, classificationSignals: [] }, sources: [page], discarded: [], model: 'mock' };
+      return { facts: { productName: { value: 'TEST FIXTURE Dog Trt Frz Dr Wld Salmn', source: page }, brand: { value: 'TESTBRAND', source: page }, classificationSignals: [{ text: 'treat', source: page.sourceId, kind: 'research' as const }, { text: 'intended for cats', source: page.sourceId, kind: 'research' as const }] }, sources: [page], discarded: [], model: 'mock' };
     }
     if (researchThrows) throw new SourceError('OpenAI', 'timeout', 'no response within 60000 ms (mocked)');
     if (pagesDown) return { facts: null, sources: [], discarded: ['barcode search: could not fetch https://testbrand.example/lamb to verify it (HTTP 429)'], model: 'mock', fetchFailed: true };
@@ -1148,6 +1148,10 @@ describe('fallbacks before asking the owner for photos', () => {
     expect(s.brand).toBe('TESTBRAND');
     expect(s.productFound).toBe(true);
     expect(s.diagnosticNotes.join(' ')).toMatch(/Kept the product’s product name and brand from teststore\.example, which shows this barcode/);
+    expect(s.productCategory).toBe('treat'); // what that page's own words said it is
+    // Who it is for is read again: the retailer's title says dogs (unconfirmed); the earlier method's "intended for cats" is not taken.
+    expect(s.productSpeciesSet).toEqual(['dog']);
+    expect(s.speciesConfirmed).toBe(false);
     expect((await db.doc(`products/${gtin}`).get()).data()!.facts.productName.value).toBe('TEST FIXTURE Dog Trt Frz Dr Wld Salmn'); // the shared record keeps it
   });
   it('each photo request says why its information is missing: a provider error, a search not made, nothing on the sources', async () => {
