@@ -17,9 +17,9 @@ import { httpBytes, httpJson, httpRequest, SourceError } from '../util/http';
 import type { BarcodeHint } from './barcodeLookup';
 import { altTextIngredientLists, documentFacts, markupGtins, nameOnPage, nameTokens, nutritionDocLinks, pageText, parseShopifyProduct, pdfSafety, productHeading, shopifyProductUrl } from './pageEvidence';
 
-export const RESEARCH_VERSION = 'research-2.0.0'; // 2.0.0: alt text, markup and Shopify barcodes, linked nutrition documents, a manufacturer follow-up, catalogue abbreviations, package sizes
+export const RESEARCH_VERSION = 'research-2.1.0'; // 2.1.0: a page tied to the product names it by its own heading; a web page's sentence that names no species, life stage or standard is not a feeding statement. 2.0.0: alt text, markup and Shopify barcodes, linked nutrition documents, a manufacturer follow-up, catalogue abbreviations, package sizes
 /** Research results still used as they were saved (older ones are read again: they could take who a product is for from a retailer's title). */
-export const RESEARCH_RESULTS_IN_USE: ReadonlySet<string> = new Set([RESEARCH_VERSION]);
+export const RESEARCH_RESULTS_IN_USE: ReadonlySet<string> = new Set([RESEARCH_VERSION, 'research-2.0.0']);
 
 const nullableString = { type: ['string', 'null'] };
 const SCHEMA = {
@@ -186,6 +186,8 @@ interface ResearchOptions {
   knownName?: string;
   knownBrand?: string;
   knownIngredients?: string[]; // from the database record: a page with another recipe is not used
+  /** Where `knownIngredients` come from, as the notes name it (default: the database record). */
+  knownIngredientsFrom?: string;
   knownSpecies?: string; // cat, dog, cat_and_dog or unknown, from the product's other evidence
   /** A barcode database's title and brand: only what to search for, never a fact. */
   hint?: BarcodeHint | null;
@@ -219,6 +221,8 @@ function mergeResearch(base: Partial<ProductFacts>, extra: Partial<ProductFacts>
     if (k === 'classificationSignals' || k === 'sources' || v === undefined) continue;
     if ((out as Record<string, unknown>)[k] === undefined) (out as Record<string, unknown>)[k] = v;
   }
+  // A clear feeding statement from a page tied to the product replaces one that names nothing.
+  if (strong && base.adequacy?.value.type === 'unclear' && extra.adequacy && extra.adequacy.value.type !== 'unclear') out.adequacy = extra.adequacy;
   const a = base.guaranteedAnalysis;
   const b = extra.guaranteedAnalysis;
   if (a && b) {
@@ -298,7 +302,8 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
           'Catalogue titles abbreviate words (Trt = treat, Frz Dr = freeze dried, Wld = wild): search for the full product name on the brand’s website.',
           `Report what that page shows${still.length ? `, especially the ${still.join(', ')}` : ''}. ${ask}`,
         ].join(' ');
-        const r2 = await researchAttempt({ ...opts, knownName: trustedName, knownBrand: mBrand, knownSpecies: species ?? 'unknown', knownIngredients: found.facts.ingredients?.value ?? opts.knownIngredients }, user, 'manufacturer');
+        const firstList = found.facts.ingredients ? `the list on ${found.sources[0]?.sourceName ?? 'the first page'}` : undefined;
+        const r2 = await researchAttempt({ ...opts, knownName: trustedName, knownBrand: mBrand, knownSpecies: species ?? 'unknown', knownIngredients: found.facts.ingredients?.value ?? opts.knownIngredients, knownIngredientsFrom: firstList ?? opts.knownIngredientsFrom }, user, 'manufacturer');
         model = r2.model;
         discarded.push(...r2.discarded.map((d) => `manufacturer page: ${d}`));
         if (r2.facts) {
@@ -329,6 +334,13 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
   }
   return { ...found, discarded, model, fetchFailed, calls };
 }
+
+/** The product's name as the page's own main heading prints it (its first h1). */
+const ownHeading = (p: { html: string }): string =>
+  pageText(/<h1\b[^>]*>([\s\S]{0,400}?)<\/h1>/i.exec(p.html)?.[1] ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 200);
 
 const speciesOf = (f: Partial<ProductFacts>): ProductSpecies | undefined => {
   const t = (f.classificationSignals ?? []).find((c) => /^intended for (cats and dogs|cats|dogs)$/.test(c.text))?.text;
@@ -585,10 +597,11 @@ async function researchAttempt(opts: ResearchOptions, user: string, mode: Mode):
   // variant), and nothing from the page is used.
   const recipe = compareRecipes(opts.knownIngredients ?? [], listedOnPage ? parsed.map((x) => x.name) : []);
   const { compared, same } = recipe;
+  const refList = opts.knownIngredientsFrom ?? 'the database record';
   if (compared >= 3 && same < Math.ceil(compared * 0.6)) {
-    return { facts: null, sources: [], discarded: [...discarded, `the page lists another recipe: ${same} of the first ${compared} ingredients match the database record in order (page: ${parsed.slice(0, 5).map((x) => x.name).join(', ')}; record: ${(opts.knownIngredients ?? []).slice(0, 5).join(', ')}), so nothing from it was used`], model };
+    return { facts: null, sources: [], discarded: [...discarded, `the page lists another recipe: ${same} of the first ${compared} ingredients match ${refList} in order (page: ${parsed.slice(0, 5).map((x) => x.name).join(', ')}; known: ${(opts.knownIngredients ?? []).slice(0, 5).join(', ')}), so nothing from it was used`], model };
   }
-  if (compared >= 3) discarded.push(`recipe check: ${same} of the first ${compared} ingredients match the database record in order${recipe.unmatched.length ? ` (not matched: ${recipe.unmatched.slice(0, 3).join(', ')})` : ''}`);
+  if (compared >= 3) discarded.push(`recipe check: ${same} of the first ${compared} ingredients match ${refList} in order${recipe.unmatched.length ? ` (not matched: ${recipe.unmatched.slice(0, 3).join(', ')})` : ''}`);
   const sameRecipe = compared >= 5 && same >= Math.ceil(compared * 0.8);
   // Strong identity: the page shows this barcode (in its text, as its markup's one barcode, or as the
   // Shopify variant it shows), or the same recipe. A barcode among a page's several sizes or variants, or
@@ -598,7 +611,7 @@ async function researchAttempt(opts: ResearchOptions, user: string, mode: Mode):
   const verified: string[] = [];
   if (page.barcode) verified.push(`${host || 'The page'} shows this product’s barcode${page.barcode === 'text' ? '' : page.barcode === 'markup' ? ' in its page data' : ' in its product record'}.`);
   if (id === 'family') verified.push(`${host || 'The page'} lists this barcode among ${page.family} barcodes of the product’s sizes or variants, not as the one shown.`);
-  if (sameRecipe) verified.push(`Same recipe on ${host || 'the page'}: ${same} of the first ${compared} ingredients match the database record in order (${parsed.slice(0, 4).map((x) => x.name).join(', ')} …).`);
+  if (sameRecipe) verified.push(`Same recipe on ${host || 'the page'}: ${same} of the first ${compared} ingredients match ${refList} in order (${parsed.slice(0, 4).map((x) => x.name).join(', ')} …).`);
   const knownSpecies = opts.knownSpecies && opts.knownSpecies !== 'unknown' ? (opts.knownSpecies as ProductSpecies) : null;
   if (!strongIdentity && !knownSpecies) {
     return { facts: null, sources: [], discarded: [...discarded, `${host || 'the page'} matches only ${id === 'family' ? 'as one of several sizes or variants' : 'by brand and name'} (${compared >= 3 ? 'too few matching ingredients' : 'no ingredient list to compare'}), and it is not yet known whether this product is for cats or dogs, so nothing from it was used`], model };
@@ -619,8 +632,12 @@ async function researchAttempt(opts: ResearchOptions, user: string, mode: Mode):
 
   if (data.adequacy_statement_verbatim && has(page, wordsKey(data.adequacy_statement_verbatim).split(' ').slice(0, 10).join(' '))) {
     const adequacy = parseAdequacyStatement(data.adequacy_statement_verbatim);
-    // From a weak match only the feeding purpose (intermittent or supplemental feeding) is taken.
-    if (adequacy && (!nameLevel || adequacy.type === 'intermittent')) facts.adequacy = { value: adequacy, source };
+    // A web page's sentence that names no species, life stage or standard ("complete and balanced nutrition …
+    // for everyday feeding") is marketing copy, not its feeding statement: the manufacturer's statement, its
+    // nutrition document or the label is still looked for. From a weak match only the feeding purpose
+    // (intermittent or supplemental feeding) is taken.
+    if (adequacy?.type === 'unclear') discarded.push('adequacy statement: the page’s sentence names no species, life stage or standard, so it is not taken as the feeding statement');
+    else if (adequacy && (!nameLevel || adequacy.type === 'intermittent')) facts.adequacy = { value: adequacy, source };
   } else if (data.adequacy_statement_verbatim) discarded.push('adequacy statement: not found on the cited page');
 
   // Who it is for, as this page's own product heading says it (the site's menus and other products' tiles
@@ -651,6 +668,12 @@ async function researchAttempt(opts: ResearchOptions, user: string, mode: Mode):
   // The page's name is shown only when it says no less about who the product is for.
   const nameSpecies = shownName ? detectSpecies(` ${wordsKey(shownName)} `) : 'unknown';
   if (shownName && (!nameLevel || nameSpecies === 'unknown' || (knownSpecies && covers(nameSpecies, knownSpecies)))) facts.productName = { value: shownName, source };
+  // When the answer's copy of the name is not on the page, a page tied to this product (barcode or recipe)
+  // names it in its own heading, when that heading names the brand.
+  else if (!shownName && !nameLevel) {
+    const own = ownHeading(page);
+    if (own && brand && ` ${wordsKey(own)} `.includes(` ${wordsKey(brand)} `)) facts.productName = { value: own, source };
+  }
 
   // The package size only from a page tied to this barcode (a page listing several sizes' barcodes doesn't say which this is).
   const sizeText = data.package_size_verbatim && has(page, data.package_size_verbatim) ? data.package_size_verbatim : page.title;
@@ -741,7 +764,6 @@ async function researchAttempt(opts: ResearchOptions, user: string, mode: Mode):
     .filter((t): t is string => !!t)
     .map((t) => ({ text: t, source: source.sourceId, kind: 'research' as const }));
   const sources = [source, ...(docSource ? [docSource] : [])];
-  const h1 = page.barcode ? (/<h1\b[^>]*>([\s\S]{0,400}?)<\/h1>/i.exec(page.html)?.[1] ?? '') : '';
-  const pageTitle = pageText(h1).trim().slice(0, 200);
+  const pageTitle = page.barcode ? ownHeading(page) : '';
   return { facts, sources, discarded, model, verified, identity, ...(pageTitle ? { pageTitle } : {}), ...(analysisNote ? { analysisNote } : {}) };
 }

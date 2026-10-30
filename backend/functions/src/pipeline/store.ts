@@ -47,8 +47,8 @@ export interface Enrichment {
   databaseImagesAt?: Date | null;
   databaseImages?: { read: string[]; skipped: string[]; failed?: string[]; version?: string };
   researchAt?: Date | null;
-  /** outcome "fetch_failed": no candidate page could be reached; tried again after a few hours, not a 30-day negative */
-  research?: { filled: string[]; discarded: string[]; source: string; version?: string; outcome?: 'done' | 'fetch_failed'; species?: string };
+  /** outcome "fetch_failed": no candidate page could be reached; "hint_failed": nothing found while the barcode database (the search words) didn't answer. Both are tried again after a few hours, never a 30-day negative */
+  research?: { filled: string[]; discarded: string[]; source: string; version?: string; outcome?: 'done' | 'fetch_failed' | 'hint_failed'; species?: string };
 }
 
 export interface StoredProduct {

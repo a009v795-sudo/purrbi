@@ -156,8 +156,40 @@ describe('research 2.0', () => {
     expect(r.verified).toEqual([
       'companionpetfoodsupply.com shows this product’s barcode.',
       'wellnesspetfood.com shows this product’s barcode in its page data.',
-      'Same recipe on wellnesspetfood.com: 10 of the first 10 ingredients match the database record in order (Tuna, Tuna Broth, Water Sufficient for Processing, Mackerel …).',
+      'Same recipe on wellnesspetfood.com: 10 of the first 10 ingredients match the list on companionpetfoodsupply.com in order (Tuna, Tuna Broth, Water Sufficient for Processing, Mackerel …).',
     ]);
+  });
+  it('Wellness can, as the live research answered it (2026-10-30, trace a5113208-1f0): names not printed on the pages, and marketing copy offered as the feeding statement', async () => {
+    const answers = [
+      // The answer's name is not on the retailer's page, and its "adequacy statement" is the page's marketing sentence.
+      modelAnswer({ product_name: 'Wellness Signature Selects Tuna and Salmon Canned Cat Food', brand: 'Wellness', intended_for: 'cats', ingredients_verbatim: WELLNESS_INGREDIENTS.replace('Choline Chloride, Minerals [', 'Choline Chloride], Minerals ['), calorie_statement_verbatim: '70 kcal/2.8 oz can, 133 kcal/5.3 oz can', adequacy_statement_verbatim: 'Complete and balanced nutrition comes in convenient serving sizes for everyday feeding.', source_urls: ['https://www.companionpetfoodsupply.com/shop/wellness-tuna-salmon-28oz.htm'] }),
+      modelAnswer({ product_name: 'Wellness CORE Signature Selects Skipjack Tuna Wet Cat Food', brand: 'Wellness', intended_for: 'cats', source_urls: ['https://www.wellnesspetfood.com/product-catalog/wellness-core-signature-selects-flaked-skipjack-tuna-wild-salmon-in-broth/'] }),
+    ];
+    let call = 0;
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.startsWith('https://api.openai.com/')) return openAi(answers[call++]);
+      if (url.includes('companionpetfoodsupply')) return new Response(RETAILER_PAGE, { status: 200 });
+      if (url.includes('nutrient-profile.pdf')) return new Response(pdfWith(NUTRIENT_PROFILE_LINES), { status: 200, headers: { 'content-type': 'application/pdf' } });
+      return new Response(MANUFACTURER_PAGE, { status: 200 });
+    }));
+    const r = await researchProduct({ apiKey: 'k', model: 'm', gtin14: '00076344060048', barcode: '076344060048', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-10-30T00:00:00Z') });
+    // The name as the manufacturer's own heading prints it (it replaces the retailer's heading).
+    expect(r.facts?.productName).toMatchObject({ value: 'Wellness CORE Signature Selects Flaked Skipjack Tuna & Wild Salmon Entrée in Broth', source: { sourceName: 'wellnesspetfood.com' } });
+    // The marketing sentence is not the feeding statement; the manufacturer's nutrition document gives it.
+    expect(r.discarded).toContain('barcode search: adequacy statement: the page’s sentence names no species, life stage or standard, so it is not taken as the feeding statement');
+    expect(r.facts?.adequacy?.value).toMatchObject({ type: 'complete', species: 'cat', lifeStages: ['adult_maintenance'] });
+    expect(r.facts?.adequacy?.source.sourceName).toBe('wellnesspetfood.com nutrition document (PDF)');
+  });
+  it('a page tied to the product names it by its heading only when the heading names the brand', async () => {
+    const page = (h1: string) => `<html><head><title>x</title></head><body><h1>${h1}</h1><p>UPC 076344060048</p><p>Ingredients Tuna, Tuna Broth, Water, Mackerel, Salmon</p></body></html>`;
+    for (const [h1, expected] of [['Product details', undefined], ['Wellness Signature Skipjack - Tuna &amp; Wild Salmon 2.8oz', 'Wellness Signature Skipjack - Tuna & Wild Salmon 2.8oz']] as const) {
+      vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+        if (url.startsWith('https://api.openai.com/')) return openAi(modelAnswer({ product_name: 'Something Else Entirely', brand: 'Wellness', intended_for: 'cats', ingredients_verbatim: 'Tuna, Tuna Broth, Water, Mackerel, Salmon', source_urls: ['https://shop.example/p'] }));
+        return new Response(page(h1), { status: 200 });
+      }));
+      const r = await researchProduct({ apiKey: 'k', model: 'm', gtin14: '00076344060048', barcode: '076344060048', knownSpecies: 'cat', knownBrand: 'Wellness', userAgent: 'test', now: new Date('2026-10-30T00:00:00Z') });
+      expect(r.facts?.productName?.value).toBe(expected);
+    }
   });
   it('salmon treat: a retailer’s "Dog Trt" listing, then the manufacturer’s dog-and-cat page matched by its written-out name', async () => {
     const retailer = '<html><head><title>A Better Treat Dog Trt Frz Dr Wld Salmn – Blossom Goods</title></head><body><h1>A Better Treat Dog Trt Frz Dr Wld Salmn</h1><p>6 x 1.5 oz</p><p>A Better Treat presents Dog Trt Frz Dr Wld Salmn UPC: 850063633017</p></body></html>';

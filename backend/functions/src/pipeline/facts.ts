@@ -7,9 +7,10 @@ type FactKey = 'productName' | 'brand' | 'imageUrl' | 'ingredientsText' | 'ingre
 export const FACT_KEYS: FactKey[] = ['productName', 'brand', 'imageUrl', 'ingredientsText', 'ingredients', 'guaranteedAnalysis', 'calories', 'adequacy', 'feedingDirections', 'activeIngredients', 'packageSize'];
 
 /**
- * Fills fields that `base` lacks from `extra`. Existing facts are never overwritten, with one exception:
+ * Fills fields that `base` lacks from `extra`. Existing facts are never overwritten, with two exceptions:
  * an analysis without the required protein, fat and fiber guarantees (e.g. one row verified on a web page)
- * gives way to a fuller one, so a partial reading never blocks the label photo that completes it.
+ * gives way to a fuller one, so a partial reading never blocks the label photo that completes it; and a
+ * feeding statement that names no species, life stage or standard gives way to one that does.
  */
 export function fillMissing(base: ProductFacts, extra: Partial<ProductFacts>): { facts: ProductFacts; filled: string[] } {
   const facts: ProductFacts = { ...base, classificationSignals: [...base.classificationSignals], sources: [...base.sources] };
@@ -18,7 +19,8 @@ export function fillMissing(base: ProductFacts, extra: Partial<ProductFacts>): {
   const fuller = partialAnalysis(facts.guaranteedAnalysis) && !!extra.guaranteedAnalysis && (hasCoreGuaranteedAnalysis(extra.guaranteedAnalysis.value) || extra.guaranteedAnalysis.value.length > facts.guaranteedAnalysis!.value.length);
   for (const k of FACT_KEYS) {
     const v = extra[k];
-    if (v && (!facts[k] || (k === 'guaranteedAnalysis' && fuller))) {
+    const clearer = k === 'adequacy' && facts.adequacy?.value.type === 'unclear' && !!extra.adequacy && extra.adequacy.value.type !== 'unclear';
+    if (v && (!facts[k] || (k === 'guaranteedAnalysis' && fuller) || clearer)) {
       (facts as unknown as Record<string, unknown>)[k] = v;
       filled.push(k);
     }
@@ -99,6 +101,22 @@ export function dropStaleImageReads(
   return { facts: out, dropped, setAside: [], ...(superseded.sources!.length ? { superseded } : {}) };
 }
 
+/**
+ * The name and brand an earlier research method took from a page that showed this barcode: they tell research
+ * what to search for, and stay the product's identity until research under the current method gives it. Other
+ * facts of that method are read again (it could verify a fact on another page than the one that proved the product).
+ */
+export function supersededIdentity(superseded: Partial<ProductFacts> | undefined): Partial<ProductFacts> {
+  const tied = (f: { source: SourceRef } | undefined) => f?.source.matchConfidence === 'exact_barcode';
+  if (!superseded || (!tied(superseded.productName) && !tied(superseded.brand))) return {};
+  const ids = new Set([superseded.productName, superseded.brand].filter(tied).map((f) => f!.source.sourceId));
+  return {
+    ...(tied(superseded.productName) ? { productName: superseded.productName } : {}),
+    ...(tied(superseded.brand) ? { brand: superseded.brand } : {}),
+    sources: (superseded.sources ?? []).filter((x) => ids.has(x.sourceId)),
+  };
+}
+
 /** Facts that came from enrichment (database label images, verified web pages), to carry over when the database record is re-fetched. */
 export function enrichmentFacts(facts: ProductFacts | undefined): Partial<ProductFacts> {
   if (!facts) return {};
@@ -151,7 +169,7 @@ export interface FieldStatus {
 }
 export interface RetrievalContext {
   /** Research under the current method, as saved (this run's or an earlier one's). */
-  research?: { outcome?: 'done' | 'fetch_failed'; discarded: string[]; source: string; at?: Date | null };
+  research?: { outcome?: 'done' | 'fetch_failed' | 'hint_failed'; discarded: string[]; source: string; at?: Date | null };
   /** Why research did not run when it was wanted and none under the current method is saved. */
   researchNotRun?: 'quota' | 'ai_budget' | 'switched_off' | 'saved_evidence' | 'error';
   /** Database label images that could not be read: definitive (`skipped`) or technical (`failed`), by panel. */
@@ -170,9 +188,13 @@ export function retrievalStatus(purpose: PhotoPurpose, ctx: RetrievalContext): F
   const r = ctx.research;
   const panel = (x: string) => x.split(/[,:]/)[0].trim();
   if (r?.outcome === 'fetch_failed') return out('source_unavailable', 'The manufacturer’s and retailers’ pages couldn’t be reached; Purrbi tries again later.');
+  if (r?.outcome === 'hint_failed') return out('source_unavailable', 'The barcode database didn’t answer, so the search had only the barcode to go on and found nothing; Purrbi tries again later.');
   if (!r && ctx.researchNotRun === 'error') return out('source_unavailable', 'Purrbi’s search for the manufacturer’s page didn’t work just now; it tries again later.');
   if (ctx.images?.failed?.some((x) => panel(x) === purpose)) return out('not_read', 'The database’s label image of this panel couldn’t be read just now; Purrbi tries again later.');
   if (r) {
+    // The only page found was not this product: said as such, for every panel.
+    if (r.discarded.some((d) => /does not show this product’s barcode or its brand and name/.test(d)) && !r.source)
+      return out('rejected', 'The page the search found doesn’t show this barcode or this product’s name, so nothing from it was used.');
     const notes = r.discarded.filter((d) => PANEL_WORDS[purpose].test(d) || /nothing from it was used/.test(d));
     const weak = notes.find((d) => /match(?:es|ed) only/.test(d));
     const variant = notes.find((d) => /another variant/.test(d));

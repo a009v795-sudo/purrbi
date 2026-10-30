@@ -1,7 +1,7 @@
 # Purrbi assessment methodology
 
 Version: `assessment-3.0.0` overall, made of `purrbi-score-3.0.0` (score), `scope-3.0.0` (classification), `verdict-2.1.0` (verdict),
-`kb-2026-10-28-draft` (ingredient notes), `label-extract-2.3.0` (label reader), `research-2.0.0` (web research), `explain-2.0.0` (claim-checked explanations).
+`kb-2026-10-28-draft` (ingredient notes), `label-extract-2.3.0` (label reader), `research-2.1.0` (web research), `explain-2.0.0` (claim-checked explanations).
 A saved result records `assessmentVersion` and its parts (`scoreVersion`, `kbVersion`, `scopeVersion`); the shared product record its
 classification version; each fact read from a label, page or document its reader's version; each explanation its own. When the app opens
 a result saved under an older `assessmentVersion` it asks for a re-check (section 10), so a known bad classification is corrected without
@@ -281,7 +281,7 @@ A result that uses the owner's photo before it is tied to the barcode says "Labe
 
 ## 10. Retrieval before photos, and keeping results current
 
-**Research `research-2.0.0`** (`sources/research.ts`, `pageEvidence.ts`). When the pet databases lack something, research looks for it before
+**Research `research-2.1.0`** (`sources/research.ts`, `pageEvidence.ts`). When the pet databases lack something, research looks for it before
 any photo is asked for:
 - With no name or brand from any database, a public barcode database (UPCitemdb's free lookup, `BARCODE_LOOKUP_ENABLED`) is asked for the
   product's title, only to tell research what to search for; nothing from it is shown or used as a fact. Its failure is recorded as such.
@@ -293,7 +293,13 @@ any photo is asked for:
   same recipe in the same order (at least 5 ingredients compared, 80% matching, with the brand on the page). A barcode that is one of several on
   a page (sizes or flavours) or a trusted name in the product's heading is weak: such a page gives only what a weak match may give (below), and
   nothing at all while it is unknown whether the product is for cats or dogs. Downloads are bounded and the research step stops after 200 s,
-  keeping what was verified; when the AI budget runs out before the manufacturer follow-up, what the first page verified is kept. After a retailer's page,
+  keeping what was verified; when the AI budget runs out before the manufacturer follow-up, what the first page verified is kept.
+- The name shown is the one the page prints: the answer's copy when it is on the page, otherwise the heading of a page tied to the product
+  (by barcode or recipe) when that heading names the brand. A web page's sentence that names no species, life stage or standard ("complete
+  and balanced nutrition … for everyday feeding") is not its feeding statement, so the manufacturer's statement or nutrition document is still
+  sought; a clear statement from any source replaces an unclear one.
+- When the barcode database (search words for research) does not answer and nothing is found, that is an outage: research is tried again
+  after 12 hours and the result says so. After a retailer's page,
   the manufacturer's own page is sought for what is missing; it may be matched by brand and the product name with catalogue abbreviations
   written out ("Dog Trt Frz Dr Wld Salmn" = "freeze dried wild salmon … treat"). From such a name-level match only what does not vary between
   package sizes is used: who it is for (only when it includes the species already known), the feeding statement, and a single-ingredient list
@@ -311,7 +317,10 @@ repeated paid processing), explanations are checked under the current rules, the
 owner chose "Continue without photos"), and the result is saved with a note saying it was re-checked. Re-checks have their own daily quota per
 owner (40); past it, the saved evidence is used and the result keeps its old version, so the re-check happens on a later opening.
 - Research saved by an earlier method is kept until research under the current method has returned: a provider error, quota, switch or time
-  limit never turns a known product into an unknown one, and such a result keeps its old version so it is re-checked later. A run that cannot
+  limit never turns a known product into an unknown one, and such a result keeps its old version so it is re-checked later. The name and
+  brand an earlier method took from a page that showed the barcode are research's search words and stay the product's identity until research
+  gives them (a web search that happens to find nothing does not erase a known product); its other facts are read again, because the earlier
+  method could verify a fact on another page than the one that proved the product. A run that cannot
   re-read sources (a photo, a pet change) never removes saved research, and every write to the shared record is conditional on the record the
   run read: when another job changed it meanwhile, the newer record is kept.
 - A result made under newer rules than the backend's (a later release, before a rollback) is left as it is. A late or duplicate job never

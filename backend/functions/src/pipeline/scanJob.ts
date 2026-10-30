@@ -33,7 +33,7 @@ import { SourceError } from '../util/http';
 import { rematchAnalysis } from '../domain/nutrition';
 import { ASSESSMENT_VERSION, MAX_CACHE_LOOKUPS, MAX_NEW_TERMS, olderAssessment, RESEARCH_TIME_LIMIT_MS, SCAN_STATUS, STEP8_LATEST_START_MS, STUCK_AFTER_MS, WORKING_STATUSES, type ErrorCode, type RuntimeConfig } from './config';
 import { corroborateLabel } from './corroborate';
-import { dropStaleImageReads, enrichmentFacts, fillMissing, labelToFacts, missingInfo, retrievalStatus, type PhotoRequest, type RetrievalContext } from './facts';
+import { dropStaleImageReads, enrichmentFacts, fillMissing, labelToFacts, missingInfo, retrievalStatus, supersededIdentity, type PhotoRequest, type RetrievalContext } from './facts';
 import { explanationFields, highlightFields, ingredientRowFields, jobFields, resultFields, type JobInfo } from './serialize';
 import {
   consumeAiBudget,
@@ -393,6 +393,17 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   let rewriteProduct = stale.dropped.length > 0 || stale.setAside.length > 0 || facts.sources.length + facts.classificationSignals.length < before;
   if (stale.dropped.length || facts.sources.length + facts.classificationSignals.length < before) job.diagnosticNotes.push(`Dropped ${stale.dropped.join(', ') || 'statements'} taken from database label images or web pages under older rules; they are read again.`);
   job.diagnosticNotes.push(...stale.setAside.map((n) => `${n[0].toUpperCase()}${n.slice(1)}.`));
+  // The name and brand an earlier research method took from a page showing this barcode: search words for
+  // research now, and the product's identity until research under the current method gives it.
+  const keptIdentity = supersededIdentity(stale.superseded);
+  // A web page's sentence that names no species, life stage or standard (marketing copy) is not a feeding
+  // statement; one saved before research 2.1.0 is set aside, so the manufacturer's statement or the label is sought.
+  if (facts.adequacy?.value.type === 'unclear' && (facts.adequacy.source.sourceType === 'manufacturer' || facts.adequacy.source.sourceType === 'retailer_or_web')) {
+    const { adequacy: _marketing, ...rest } = facts;
+    facts = rest as ProductFacts;
+    rewriteProduct = true;
+    job.diagnosticNotes.push(`Set aside a sentence from ${_marketing.source.sourceName} that names no species, life stage or standard: it is not a feeding statement.`);
+  }
   // A saved database analysis that cannot be per 100 g (saved before this check existed) is dropped too.
   const unusable = facts.guaranteedAnalysis?.source.sourceType === 'database' ? implausibleAnalysis(facts.guaranteedAnalysis.value) : null;
   if (unusable) {
@@ -516,7 +527,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   const researchDue =
     ageDays(meta.enrichment.researchAt, now) > config.productFreshDays ||
     meta.enrichment.research?.version !== RESEARCH_VERSION ||
-    (meta.enrichment.research?.outcome === 'fetch_failed' && ageDays(meta.enrichment.researchAt, now) * 24 >= 12) ||
+    ((meta.enrichment.research?.outcome === 'fetch_failed' || meta.enrichment.research?.outcome === 'hint_failed') && ageDays(meta.enrichment.researchAt, now) * 24 >= 12) ||
     // A search made while it was unknown who the product is for could not use pages matched by brand and name.
     (meta.enrichment.research?.species === 'unknown' && scope.species !== 'unknown' && !!meta.enrichment.research.filled && meta.enrichment.research.filled.length === 0);
   // A page already used is searched again only after a new research method (which may read more of it), and only while something is missing.
@@ -531,15 +542,17 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       // With no name or brand from any database, a barcode database's title tells research what to search
       // for (a hint only: nothing from it is shown or used as a fact). Its failure is noted, never "unknown".
       let hint: BarcodeHint | null = null;
-      if (!facts.productName && !facts.brand && config.barcodeLookupEnabled !== false && deps.sources.barcodeHint) {
+      let hintFailed = false;
+      if (!facts.productName && !facts.brand && !keptIdentity.productName && !keptIdentity.brand && config.barcodeLookupEnabled !== false && deps.sources.barcodeHint) {
         try {
           hint = await deps.sources.barcodeHint(gtin, config.userAgent);
           if (hint) job.evidenceNotes.push(`${hint.source} lists this barcode as “${hint.title}”${hint.brand ? ` (${hint.brand})` : ''}; Purrbi searched for that product and used only what a page proved.`);
         } catch (err) {
+          hintFailed = true;
           job.diagnosticNotes.push(`Barcode database not checked: ${err instanceof SourceError ? (err.kind === 'rate_limited' ? 'it is limiting requests' : err.kind === 'timeout' ? 'it didn’t answer in time' : `it failed (${err.status ? `HTTP ${err.status}` : err.kind})`) : errorDetail((err as Error).message)}`);
         }
       }
-      const r = await deps.sources.research({ apiKey: config.openaiApiKey(), model: config.researchModel, gtin14: gtin, barcode: o.barcode.expanded ?? o.barcode.digits, knownName: facts.productName?.value, knownBrand: facts.brand?.value, knownIngredients: facts.ingredients?.value, knownSpecies: scope.species, hint, userAgent: config.userAgent, now, beforeAiCall: () => consumeAiBudget(db, config.limits, now), deadline: (job.clockStart ?? Date.now()) + RESEARCH_TIME_LIMIT_MS });
+      const r = await deps.sources.research({ apiKey: config.openaiApiKey(), model: config.researchModel, gtin14: gtin, barcode: o.barcode.expanded ?? o.barcode.digits, knownName: facts.productName?.value ?? keptIdentity.productName?.value, knownBrand: facts.brand?.value ?? keptIdentity.brand?.value, knownIngredients: facts.ingredients?.value, knownSpecies: scope.species, hint, userAgent: config.userAgent, now, beforeAiCall: () => consumeAiBudget(db, config.limits, now), deadline: (job.clockStart ?? Date.now()) + RESEARCH_TIME_LIMIT_MS });
       // Pages that could not be reached are a technical failure, not an answer.
       researchReturned = !!r.facts || r.fetchFailed !== true;
       let filled: string[] = [];
@@ -555,7 +568,9 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       const src = r.sources[0];
       meta.enrichment.researchAt = now;
       const unreachable = !r.facts && r.fetchFailed === true;
-      meta.enrichment.research = { filled, discarded: r.discarded, source: src ? `${src.sourceName} (${src.sourceType})` : '', version: RESEARCH_VERSION, outcome: unreachable ? 'fetch_failed' : 'done', species: scope.species };
+      // Nothing found while the barcode database (the search words) didn't answer is tried again soon, like unreachable pages.
+      const hintOutage = !r.facts && hintFailed;
+      meta.enrichment.research = { filled, discarded: r.discarded, source: src ? `${src.sourceName} (${src.sourceType})` : '', version: RESEARCH_VERSION, outcome: unreachable ? 'fetch_failed' : hintOutage ? 'hint_failed' : 'done', species: scope.species };
       metaChanged = true;
       const pageKind = src?.sourceType === 'manufacturer' ? 'manufacturer page' : 'web page';
       if (r.facts && r.verified?.length) job.evidenceNotes.push(...r.verified);
@@ -572,7 +587,9 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
             ? 'No further label details could be verified on that page.'
             : unreachable
               ? 'The manufacturer’s or retailers’ pages couldn’t be reached to check them, so nothing was added; Purrbi tries again later.'
-              : 'Searched the manufacturer’s and retailers’ pages; nothing could be verified against a page, so nothing was added.',
+              : hintOutage
+                ? 'The barcode database didn’t answer, so the search had only the barcode to go on and found nothing; Purrbi tries again later.'
+                : 'Searched the manufacturer’s and retailers’ pages; nothing could be verified against a page, so nothing was added.',
       );
       job.diagnosticNotes.push(...r.discarded.slice(0, 4).map((d) => `Research (${r.model}): ${d}`));
       log('research', { filled, discarded: r.discarded });
@@ -593,6 +610,14 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
     scope = scopeOf(facts, origin);
     recheckPending = recheckPending || (config.aiEnabled && config.researchEnabled);
     job.diagnosticNotes.push('Kept what earlier research verified, because research under the current rules didn’t finish; it is tried again.');
+  }
+  if (keptIdentity.sources?.length) {
+    const kept = fillMissing(facts, keptIdentity);
+    if (kept.filled.length) {
+      facts = kept.facts;
+      scope = scopeOf(facts, origin);
+      job.diagnosticNotes.push(`Kept the product’s ${kept.filled.map(fieldLabel).join(' and ')} from ${keptIdentity.sources[0].sourceName}, which shows this barcode (read under earlier rules).`);
+    }
   }
 
   // 3. Save public facts (never the owner's private label data) and the enrichment bookkeeping.
