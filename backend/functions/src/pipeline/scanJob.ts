@@ -524,7 +524,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   if (olderReads) job.diagnosticNotes.push(`${olderReads} label photo reading${olderReads === 1 ? ' was' : 's were'} made by an older label reader and not used; the photo is asked for again if still needed.`);
   for (const e of current) {
     if (e.stage === 'disputed') {
-      job.evidenceNotes.push(`A label photo was not used: ${e.conflicts?.[0] ?? 'it conflicts with this barcode’s record'}. Check that it shows this package.`);
+      job.evidenceNotes.push(`A label photo was not used: ${e.conflicts?.[0] ?? 'it conflicts with this barcode’s record'}. Check that it shows this package; if it does, retake it straight on, in good light.`);
       continue;
     }
     if (e.stage === 'verified' && config.promoteLabelPhotos !== false) continue; // already in the shared facts above

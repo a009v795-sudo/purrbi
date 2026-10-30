@@ -99,7 +99,8 @@ export function corroborateLabel(label: ValidatedLabel, record: ProductFacts | n
   }
 
   if (conflicts.length) {
-    return { stage: 'disputed', agreements, conflicts, note: `Not used: ${conflicts[0]}. Check that the photo shows this package.` };
+    // A glare or a fold can make both readings misread the same digit, so a retake is the other way out.
+    return { stage: 'disputed', agreements, conflicts, note: `Not used: ${conflicts[0]}. Check that the photo shows this package; if it does, retake it straight on, in good light.` };
   }
   if (tied) return { stage: 'verified', agreements, conflicts, note: `Matched to this product: ${agreements[0]}.` };
   if (agreements.length) return { stage: 'corroborated', agreements, conflicts, note: `Partly matched: ${agreements[0]}; the product itself is not yet confirmed.` };

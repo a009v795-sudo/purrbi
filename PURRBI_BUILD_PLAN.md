@@ -71,7 +71,7 @@ References (read-only): Moxis FlutterFlow `moxis-one-x51584` (pulled and export,
 4. ~~Google Cloud Shell: `backend/tools/gcp/setup-dev-access.sh`~~ — **done 2026-10-29** (re-run after IAM propagation retries; Cloud Billing API enabled; the default build identity's Editor role removed and replaced with the Cloud Build builder role).
 5. ~~Deploy and live tests~~ — **done 2026-10-29**: `deploy-backend` runs (all verified), two `live-e2e` runs, live app demos (`TEST_RESULTS.md`).
 6. ~~Repository secret `FIREBASE_GOOGLE_SERVICES_JSON`~~ — **done 2026-10-29**; `android-apk` run 40920027599 built the installable APK.
-7. **Next — new OpenAI key (blocking AI features):** at ~22:35 UTC on 2026-10-29 OpenAI started answering the deployed backend with HTTP 401 "Your API key has been invalidated". Create a new key in the OpenAI dashboard (API keys → Create new secret key), then in Google Cloud console → Security → Secret Manager → `OPENAI_API_KEY` → **+ New version**, paste it there (never in chat), and say "secret saved"; Purrbi then redeploys so the functions pick up the new version.
+7. ~~New OpenAI key~~ — **done 2026-10-30**: the owner saved a new version of `OPENAI_API_KEY`; deploy 40979447691 picked it up; live calls answered **200** (trace `f8f55c79-54a`).
 8. **Then — device test:** on the Android phone, **uninstall the earlier Purrbi build first** (its signing key differs, so the new APK cannot install over it), then install `app-release.apk` from the latest `android-apk` run's artifact and try a camera scan (also cancel one), repeated taps on the camera button, a label photo, and 099482480882.
 
 ## FlutterFlow changes so far (main)
