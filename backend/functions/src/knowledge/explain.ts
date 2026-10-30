@@ -81,6 +81,8 @@ const PLAIN = new Set([
   'water', 'broth', 'chicken broth', 'beef broth', 'fish broth', 'rice', 'brown rice', 'white rice', 'oats', 'oatmeal', 'barley', 'corn',
   'wheat', 'potatoes', 'potato', 'sweet potatoes', 'sweet potato', 'carrots', 'carrot', 'peas', 'pumpkin', 'spinach', 'apples', 'apple',
   'blueberries', 'cranberries', 'salt', 'sugar', 'liver', 'chicken liver', 'beef liver', 'chicken fat', 'beef fat', 'fish oil', 'salmon oil',
+  // Processing liquids: Purrbi's role table says what they are (water or broth for moisture and flavour).
+  'water sufficient for processing', 'water for processing', 'tuna broth', 'turkey broth', 'salmon broth', 'vegetable broth', 'bone broth',
 ]);
 
 export const explanationKey = (species: string, kind: ExplainKind, term: string) =>
