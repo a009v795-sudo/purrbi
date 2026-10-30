@@ -47,7 +47,8 @@ describe('barcode', () => {
 describe('ingredients', () => {
   it('keeps label order and nested sub-ingredients', () => {
     const list = parseIngredientList('Ingredients: Chicken, Chicken Fat (preserved with Mixed Tocopherols), Vitamins (Vitamin E Supplement, Niacin), Taurine.');
-    expect(list.map((i) => i.name)).toEqual(['Chicken', 'Chicken Fat (preserved with Mixed Tocopherols)', 'Vitamins (Vitamin E Supplement, Niacin)', 'Taurine']);
+    expect(list.map((i) => i.name)).toEqual(['Chicken', 'Chicken Fat (preserved with Mixed Tocopherols)', 'Vitamins', 'Taurine']);
+    expect(list[2].labelText).toBe('Vitamins (Vitamin E Supplement, Niacin)'); // a blend's list is in its children
     expect(list[1].subIngredients).toEqual(['preserved with mixed tocopherols']);
     expect(list[2].subIngredients).toEqual(['vitamin e supplement', 'niacin']);
     expect(list.map((i) => i.position)).toEqual([1, 2, 3, 4]);

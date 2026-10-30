@@ -14,17 +14,19 @@ export const KB_VERSION = 'kb-2026-10-28-draft';
 
 export type KbStatus = 'concern' | 'caution' | 'info' | 'positive';
 
-interface KbSource {
+export interface KbSource {
   title: string;
   url: string;
 }
 
-interface KbEntry {
+export interface KbEntry {
   id: string;
   terms: string[];
   exclude?: string[];
   status: Partial<Record<Species, KbStatus>>;
   note: Partial<Record<Species | 'both', string>>;
+  /** A concern's or caution's one-line reason (at most 90 characters), for the ingredient row. */
+  short?: Partial<Record<Species | 'both', string>>;
   sources: KbSource[];
   reviewStatus: 'draft' | 'vet_reviewed';
 }
@@ -46,6 +48,7 @@ const ENTRIES: KbEntry[] = [
       cat: 'U.S. regulations prohibit propylene glycol in or on cat food because it affects cats’ red blood cells.',
       dog: 'A humectant used to keep soft products moist; it is permitted in dog food. The cat-food prohibition does not apply to dogs.',
     },
+    short: { cat: 'Prohibited in U.S. cat food: it harms cats’ red blood cells' },
     sources: [SRC.cfrPropyleneGlycol],
     reviewStatus: 'draft',
   },
@@ -54,6 +57,7 @@ const ENTRIES: KbEntry[] = [
     terms: ['xylitol', 'birch sugar'],
     status: { dog: 'concern' },
     note: { dog: 'Xylitol is toxic to dogs; even small amounts can cause a dangerous drop in blood sugar.' },
+    short: { dog: 'Toxic to dogs, even in small amounts' },
     sources: [SRC.fdaXylitol],
     reviewStatus: 'draft',
   },
@@ -63,6 +67,7 @@ const ENTRIES: KbEntry[] = [
     exclude: ['grape seed extract', 'grapeseed extract', 'grapeseed oil', 'grape seed oil'],
     status: { dog: 'concern' },
     note: { dog: 'Grapes and raisins can cause kidney injury in dogs; the toxic amount is unpredictable.' },
+    short: { dog: 'Can cause kidney injury in dogs' },
     sources: [SRC.aspcaPeopleFoods],
     reviewStatus: 'draft',
   },
@@ -71,6 +76,7 @@ const ENTRIES: KbEntry[] = [
     terms: ['onion', 'onions', 'onion powder', 'dehydrated onion', 'chives', 'leek', 'leeks'],
     status: { dog: 'concern', cat: 'concern' },
     note: { both: 'Onions and related Allium plants can damage red blood cells in dogs and cats.' },
+    short: { both: 'Can damage red blood cells in dogs and cats' },
     sources: [SRC.aspcaPeopleFoods],
     reviewStatus: 'draft',
   },
@@ -81,6 +87,7 @@ const ENTRIES: KbEntry[] = [
     note: {
       both: 'Garlic is an Allium; large amounts can damage red blood cells and cats are more sensitive than dogs. The amount in this product is not stated on the label.',
     },
+    short: { both: 'Large amounts can harm red blood cells; the amount isn’t stated' },
     sources: [SRC.aspcaPeopleFoods],
     reviewStatus: 'draft',
   },
@@ -90,6 +97,7 @@ const ENTRIES: KbEntry[] = [
     exclude: ['cocoa butter'],
     status: { dog: 'concern', cat: 'concern' },
     note: { both: 'Chocolate and cocoa contain methylxanthines that are toxic to dogs and cats.' },
+    short: { both: 'Toxic to dogs and cats (methylxanthines)' },
     sources: [SRC.aspcaPeopleFoods],
     reviewStatus: 'draft',
   },
@@ -98,6 +106,7 @@ const ENTRIES: KbEntry[] = [
     terms: ['macadamia', 'macadamia nuts'],
     status: { dog: 'concern' },
     note: { dog: 'Macadamia nuts can cause weakness, vomiting and tremors in dogs.' },
+    short: { dog: 'Can cause weakness, vomiting and tremors in dogs' },
     sources: [SRC.aspcaPeopleFoods],
     reviewStatus: 'draft',
   },
@@ -106,6 +115,7 @@ const ENTRIES: KbEntry[] = [
     terms: ['caffeine', 'coffee', 'guarana'],
     status: { dog: 'concern', cat: 'concern' },
     note: { both: 'Caffeine is a methylxanthine that is toxic to dogs and cats.' },
+    short: { both: 'Toxic to dogs and cats (a methylxanthine)' },
     sources: [SRC.aspcaPeopleFoods],
     reviewStatus: 'draft',
   },
@@ -184,6 +194,27 @@ function entryFor(ing: ParsedIngredient): KbEntry | undefined {
   }
   return best;
 }
+
+/**
+ * Every curated entry listed in these normalized texts, with the longest of its terms found (an entry's
+ * exclusions respected). The ingredient rows take the most severe of them, so a concern in a qualifier or
+ * a listed part ("natural flavor (contains onion)") is never hidden by a longer harmless term.
+ */
+export function curatedEntries(texts: string[]): { entry: KbEntry; term: string }[] {
+  const out: { entry: KbEntry; term: string }[] = [];
+  for (const e of ENTRIES) {
+    let term = '';
+    for (const text of texts) {
+      if (e.exclude?.some((x) => containsTerm(text, x))) continue;
+      for (const t of e.terms) if (t.length > term.length && containsTerm(text, t)) term = t;
+    }
+    if (term) out.push({ entry: e, term });
+  }
+  return out;
+}
+
+/** The FDA's DCM investigation page: cited for pulses and potatoes as main ingredients of a dog food. */
+export const DCM_SOURCE: KbSource = SRC.fdaDcm;
 
 /**
  * Notes per ingredient for the product's species. For products whose species is unknown or both,
