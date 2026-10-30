@@ -84,10 +84,20 @@ export interface ActiveIngredient {
   per: string | null; // "chew", "tablet", "scoop", "ml"...
 }
 
+/** A package or serving size as printed ("2.8 oz", "85 g"), with its mass in grams when it is a mass. */
+export interface PackageSize {
+  amount: number;
+  unit: 'oz' | 'lb' | 'g' | 'kg' | 'ml' | 'fl oz';
+  grams: number | null;
+  text: string;
+}
+
 export interface CalorieStatement {
   kcal: number;
   per: CaloriePer;
   text?: string;
+  /** The package or piece the value is for ("per 2.8 oz can"): values for different sizes are never interchangeable. */
+  size?: PackageSize;
 }
 
 export type LifeStageClaim = 'growth' | 'adult_maintenance' | 'all_life_stages' | 'gestation_lactation';
@@ -103,6 +113,34 @@ export interface AdequacyStatement {
   style: 'aafco' | 'eu' | 'other';
 }
 
+/** Where the species a product is for comes from, strongest first. */
+export type SpeciesBasis =
+  | 'label' // the package itself (label photo or database label image)
+  | 'adequacy_statement' // the nutritional adequacy statement names the species
+  | 'manufacturer_page' // a manufacturer page shown to be this product
+  | 'database_category' // the pet database's species category tags
+  | 'database_name' // a name or label tag in the pet database record
+  | 'retailer_listing' // a retailer's title, category or tags (abbreviated or catalogue wording)
+  | 'none';
+
+export interface SpeciesEvidence {
+  /** Every species the product is for, as its evidence says (["cat", "dog"] for a dog-and-cat treat). */
+  set: Species[];
+  /** True when the strongest basis is the product's own label, its adequacy statement, its manufacturer or a pet database: a retailer's listing alone does not confirm it. */
+  confirmed: boolean;
+  basis: SpeciesBasis;
+  /** Strong sources name different species (e.g. a cat-food label and a dog-food page): unresolved, never merged. */
+  disputed: boolean;
+  note: string;
+}
+
+/** What the product type (complete food, treat, topper, supplement) rests on. */
+export type CategoryBasis =
+  | 'adequacy_statement' // "complete and balanced …" or "for intermittent or supplemental feeding"
+  | 'feeding_purpose_name' // the product is named a treat, topper, mixer or supplement
+  | 'product_type_words' // only general words such as "cat food" or "wet dog food" (unconfirmed)
+  | 'none';
+
 export interface ScopeResult {
   status: ScopeStatus;
   species: ProductSpecies;
@@ -110,6 +148,8 @@ export interface ScopeResult {
   outOfScopeKind?: OutOfScopeKind;
   reason: string;
   signals: string[]; // which inputs drove the decision (for traceability)
+  speciesEvidence?: SpeciesEvidence;
+  categoryBasis?: CategoryBasis;
 }
 
 export interface ProductFacts {
@@ -126,6 +166,8 @@ export interface ProductFacts {
   adequacy?: Fact<AdequacyStatement>;
   feedingDirections?: Fact<string>;
   activeIngredients?: Fact<ActiveIngredient[]>; // supplements: "active ingredients per chew"
+  /** The size of the package this barcode is for, as printed on a page proven to be this product or on the label. */
+  packageSize?: Fact<PackageSize>;
   /** raw classification inputs from sources (categories, labels, names), with what each one is */
   classificationSignals: ClassificationSignal[];
   /** the database record's own product type (Product Opener product_type: food, petfood, beauty, product); provenance only */
@@ -142,6 +184,60 @@ export interface ClassificationSignal {
   text: string;
   source: string;
   kind?: 'category' | 'label' | 'name' | 'research' | 'photo';
+}
+
+// ---- Ingredient assessment (one row per label entry) -----------------------
+
+export type IngredientColor = 'green' | 'yellow' | 'red' | 'gray';
+export type ClaimType = 'identity' | 'function' | 'benefit' | 'risk';
+/** Who or what a source's statement is about: a pig-nutrition page or a human food-additive review is not cat or dog evidence. */
+export type SpeciesScope = 'cat' | 'dog' | 'cat_and_dog' | 'pets' | 'animal_feed' | 'other_species' | 'people' | 'not_species_specific';
+export type EvidenceKind = 'regulation' | 'regulatory_assessment' | 'standards_body' | 'veterinary_reference' | 'peer_reviewed' | 'curated' | 'other';
+
+/** One displayed claim with the passage that supports it (claim-by-claim validation). */
+export interface ClaimSource {
+  claimType: ClaimType;
+  claim: string; // as shown: narrowed to what the passage supports
+  ingredientForm: string; // the exact ingredient or chemical form the claim is about
+  title: string;
+  url: string;
+  passage: string; // verbatim from the source
+  speciesScope: SpeciesScope;
+  evidence: EvidenceKind;
+  doseContext: string; // exposure or dose the passage refers to; '' when not stated
+  retrievedAt: string; // ISO date-time the page was fetched and checked
+  publishedAt: string; // the page's own date when it gives one, else ''
+  reviewStatus: 'automated_checks' | 'curated_unreviewed' | 'vet_reviewed';
+}
+
+export interface IngredientStatuses {
+  identity: 'established' | 'not_established';
+  role: 'explained' | 'not_explained';
+  risk: 'documented_concern' | 'documented_caution' | 'consideration' | 'none_in_reviewed_list' | 'not_assessed';
+  exposure: 'assessed' | 'not_assessed';
+  humanReview: 'performed' | 'not_performed';
+}
+
+export interface IngredientRow {
+  id: string; // "13" for a label entry, "13.2" for the second item of its group
+  position: number; // label order (1-based)
+  childIndex: number; // 0 for a label entry, 1-based within its group
+  name: string; // as printed, without a group's bracketed list
+  labelText: string; // the entry exactly as printed (traceability)
+  kind: 'single' | 'group' | 'compound' | 'child';
+  role: string;
+  color: IngredientColor;
+  reason: string; // one line: why this color
+  statuses: IngredientStatuses;
+  whatItIs: string;
+  whyUsed: string;
+  benefitsRisks: string;
+  uncertainty: string;
+  sources: ClaimSource[];
+  children: IngredientRow[];
+  concernRank: number; // red 3, yellow 2, gray 1, green 0 (for the concern-first order)
+  kbId?: string;
+  concernFor?: Species[];
 }
 
 // ---- Pets ----------------------------------------------------------------

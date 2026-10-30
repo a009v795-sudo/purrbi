@@ -1,10 +1,22 @@
 // Ingredient lists keep label order: position 1 is the first ingredient printed.
 
+export interface IngredientChild {
+  name: string; // as printed
+  normalized: string;
+  index: number; // 1-based within its group
+}
+
 export interface ParsedIngredient {
-  name: string; // as printed, trimmed
+  name: string; // as printed, trimmed; a group's bracketed list is in children, not here
+  labelText: string; // the entry exactly as printed, brackets included (traceability)
   normalized: string; // lowercase, no accents, no percentages or footnote marks
   position: number; // 1-based
   subIngredients: string[]; // normalized contents of parentheses/brackets
+  /** single: one ingredient; group: a named blend ("Vitamins [ … ]", "Minerals ( … )"); compound: an ingredient made of listed ingredients. */
+  kind: 'single' | 'group' | 'compound';
+  children: IngredientChild[];
+  /** Descriptions in parentheses that are not ingredients: "preserved with mixed tocopherols", "Vitamin K". */
+  qualifiers: string[];
 }
 
 const LEADING_LABEL = /^\s*(ingredients?|composition|ingr[ée]dients|zutaten|ingredientes)\s*[:：-]\s*/i;
@@ -73,7 +85,7 @@ export function parseIngredientList(text: string | null | undefined, maxItems = 
       .flatMap((s) => s.split(/[,;]/))
       .map(normalizeIngredientName)
       .filter(Boolean);
-    result.push({ name, normalized, position: result.length + 1, subIngredients });
+    result.push({ name, labelText: name, normalized, position: result.length + 1, subIngredients, kind: 'single', children: [], qualifiers: [] });
     if (result.length >= maxItems) break;
   }
   return result;
