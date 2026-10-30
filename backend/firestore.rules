@@ -83,9 +83,10 @@ service cloud.firestore {
                     // a job that stopped without a result (no update for 6 minutes; jobs time out after 5)
                     || (resource.data.status in ['queued', 'identifying', 'researching', 'checking_alerts', 'assessing', 'processing_photo']
                         && resource.data.get('updatedAt', resource.data.get('createdAt', request.time)) < request.time - duration.value(6, 'm'))))
+          // a re-check for another pet, or of a result saved under older rules (out-of-scope results included)
           || (changedOnly(['refreshPersonalRequested', 'petId']) && data().refreshPersonalRequested == true
                 && data().petId is string && data().petId.size() <= 128
-                && resource.data.status in ['complete', 'needs_photos'])
+                && resource.data.status in ['complete', 'needs_photos', 'out_of_scope'])
         );
         allow delete: if isOwner(uid);
       }

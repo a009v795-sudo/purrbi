@@ -39,8 +39,16 @@ const ENRICHMENT_SOURCES = new Set(['database_image', 'manufacturer', 'retailer_
 /**
  * Removes enrichment made under older rules, so it is done again: facts read from database label images
  * by a label reader no longer in use, and facts or statements taken from web pages by older research rules.
+ * With `canReread` false (a run that cannot read sources again: a photo job, a pet change), nothing that
+ * would need reading again is dropped, and `kept` says what is still from older rules. `superseded` holds
+ * the web research facts dropped, so a run whose new research cannot finish can put them back.
  */
-export function dropStaleImageReads(facts: ProductFacts, readersInUse: ReadonlySet<string>, researchInUse?: ReadonlySet<string>): { facts: ProductFacts; dropped: string[]; setAside: string[] } {
+export function dropStaleImageReads(
+  facts: ProductFacts,
+  readersInUse: ReadonlySet<string>,
+  researchInUse?: ReadonlySet<string>,
+  canReread = true,
+): { facts: ProductFacts; dropped: string[]; setAside: string[]; kept?: string[]; superseded?: Partial<ProductFacts> } {
   // What label reader 2.1.0 read, as the current rules use it. An analysis with a row it may have misread:
   // a database image's is read again (dropped); a matched label photo's, which cannot be read again, keeps
   // only its plain rows. An ingredient list it let run into an analysis is cut again.
@@ -49,13 +57,13 @@ export function dropStaleImageReads(facts: ProductFacts, readersInUse: ReadonlyS
   const kept = ga && from21(ga) ? rowsInUse21(ga.value) : null;
   if (ga && kept && kept.length < ga.value.length) {
     const out: ProductFacts = { ...facts };
-    const reread = ga.source.sourceType === 'database_image';
+    const reread = ga.source.sourceType === 'database_image' && canReread;
     if (reread || !kept.length) delete out.guaranteedAnalysis;
     else out.guaranteedAnalysis = { ...ga, value: kept };
-    const rest = dropStaleImageReads(out, readersInUse, researchInUse);
+    const rest = dropStaleImageReads(out, readersInUse, researchInUse, canReread);
     const n = ga.value.length - kept.length;
     const note = `${n} analysis row${n === 1 ? '' : 's'} from ${ga.source.sourceName} that the earlier label reader may have misread ${n === 1 ? 'was' : 'were'} set aside${reread ? '; the image is read again' : ''}`;
-    return { facts: rest.facts, dropped: rest.dropped, setAside: [note, ...rest.setAside] };
+    return { ...rest, setAside: [note, ...rest.setAside] };
   }
   const list = facts.ingredientsText && from21(facts.ingredientsText) ? ingredientsInUse(facts.ingredientsText.value) : null;
   if (list && list.text !== facts.ingredientsText!.value) {
@@ -67,23 +75,28 @@ export function dropStaleImageReads(facts: ProductFacts, readersInUse: ReadonlyS
       delete out.ingredientsText;
       delete out.ingredients;
     }
-    const rest = dropStaleImageReads(out, readersInUse, researchInUse);
-    return { facts: rest.facts, dropped: rest.dropped, setAside: [`The ingredient list from ${facts.ingredientsText!.source.sourceName} was cut where its analysis starts (the earlier label reader ran on into it)`, ...rest.setAside] };
+    const rest = dropStaleImageReads(out, readersInUse, researchInUse, canReread);
+    return { ...rest, setAside: [`The ingredient list from ${facts.ingredientsText!.source.sourceName} was cut where its analysis starts (the earlier label reader ran on into it)`, ...rest.setAside] };
   }
   const stale = (s: SourceRef | undefined) =>
     (s?.sourceType === 'database_image' && !readersInUse.has(s.readerVersion ?? '')) ||
     (!!researchInUse && (s?.sourceType === 'manufacturer' || s?.sourceType === 'retailer_or_web') && !researchInUse.has(s.readerVersion ?? ''));
   const staleIds = new Set(facts.sources.filter(stale).map((s) => s.sourceId));
   if (!staleIds.size) return { facts, dropped: [], setAside: [] };
+  if (!canReread) return { facts, dropped: [], setAside: [], kept: facts.sources.filter((s) => staleIds.has(s.sourceId)).map((s) => s.sourceName) };
   const out: ProductFacts = { ...facts, sources: facts.sources.filter((s) => !staleIds.has(s.sourceId)), classificationSignals: facts.classificationSignals.filter((c) => !staleIds.has(c.source)) };
+  const isWeb = (s: SourceRef | undefined) => s?.sourceType === 'manufacturer' || s?.sourceType === 'retailer_or_web';
+  const superseded: Partial<ProductFacts> = { sources: facts.sources.filter((s) => staleIds.has(s.sourceId) && isWeb(s)), classificationSignals: facts.classificationSignals.filter((c) => staleIds.has(c.source) && isWeb(facts.sources.find((s) => s.sourceId === c.source))) };
   const dropped: string[] = [];
   for (const k of FACT_KEYS) {
-    if (stale((out[k] as { source?: SourceRef } | undefined)?.source)) {
+    const src = (out[k] as { source?: SourceRef } | undefined)?.source;
+    if (stale(src)) {
+      if (isWeb(src)) (superseded as Record<string, unknown>)[k] = out[k];
       delete (out as unknown as Record<string, unknown>)[k];
       dropped.push(k);
     }
   }
-  return { facts: out, dropped, setAside: [] };
+  return { facts: out, dropped, setAside: [], ...(superseded.sources!.length ? { superseded } : {}) };
 }
 
 /** Facts that came from enrichment (database label images, verified web pages), to carry over when the database record is re-fetched. */

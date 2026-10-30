@@ -76,6 +76,11 @@ describe('scan requests', () => {
     await assertFails(alice().doc('users/alice/scans/stalled').update({ retryRequested: true, status: 'queued' }));
     await assertSucceeds(alice().doc('users/alice/scans/done').update({ refreshPersonalRequested: true, petId: 'p2' }));
     await assertFails(bob().doc('users/alice/scans/done').update({ favorite: true }));
+    // A re-check of an out-of-scope result saved under older rules: the owner's request only.
+    await assertSucceeds(alice().doc('users/alice/scans/rejected').update({ refreshPersonalRequested: true, petId: 'p1' }));
+    await assertFails(bob().doc('users/alice/scans/rejected').update({ refreshPersonalRequested: true, petId: 'p1' }));
+    await assertFails(alice().doc('users/alice/scans/rejected').update({ refreshPersonalRequested: true, petId: 'p1', status: 'complete' }));
+    await assertFails(alice().doc('users/alice/scans/stalled').update({ refreshPersonalRequested: true, petId: 'p1' }));
   });
   it('owner can delete their own scan only', async () => {
     await assertFails(bob().doc('users/alice/scans/done').delete());

@@ -10,7 +10,7 @@ import type { Limits } from './config';
 import { SCOPE_VERSION } from '../domain/scope';
 
 export class QuotaError extends Error {
-  constructor(readonly kind: 'scans' | 'photos' | 'research' | 'ai_budget') {
+  constructor(readonly kind: 'scans' | 'photos' | 'research' | 'refreshes' | 'ai_budget') {
     super(`quota exceeded: ${kind}`);
     this.name = 'QuotaError';
   }
@@ -18,8 +18,8 @@ export class QuotaError extends Error {
 
 export const dayKey = (d: Date) => d.toISOString().slice(0, 10).replace(/-/g, '');
 
-export async function consumeQuota(db: Firestore, uid: string, kind: 'scans' | 'photos' | 'research', limits: Limits, now: Date): Promise<void> {
-  const max = kind === 'scans' ? limits.scansPerUserPerDay : kind === 'photos' ? limits.photosPerUserPerDay : limits.researchPerUserPerDay;
+export async function consumeQuota(db: Firestore, uid: string, kind: 'scans' | 'photos' | 'research' | 'refreshes', limits: Limits, now: Date): Promise<void> {
+  const max = { scans: limits.scansPerUserPerDay, photos: limits.photosPerUserPerDay, research: limits.researchPerUserPerDay, refreshes: limits.refreshesPerUserPerDay ?? limits.scansPerUserPerDay }[kind];
   const ref = db.doc(`usage/${uid}_${dayKey(now)}`);
   await db.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
@@ -64,6 +64,8 @@ export interface StoredProduct {
   lastRetrievedAt: Date | null;
   recall: RecallCheck | null;
   recallCheckedAt: Date | null;
+  /** When the record was last written: a rewrite is made only if nobody else has written it since. */
+  updateTime?: Timestamp;
 }
 
 /** Server-only bookkeeping per barcode (never readable by clients): label image links and enrichment attempts. */
@@ -109,6 +111,7 @@ export async function readProduct(db: Firestore, gtin: string): Promise<StoredPr
     lastRetrievedAt: toDate(d.lastRetrievedAt),
     recall: (d.recall as RecallCheck) ?? null,
     recallCheckedAt: toDate(d.recallCheckedAt),
+    ...(snap.updateTime ? { updateTime: snap.updateTime } : {}),
   };
 }
 
@@ -131,7 +134,11 @@ export async function writeProductMeta(db: Firestore, gtin: string, meta: Produc
   await db.doc(`productMeta/${gtin}`).set({ gtin, labelImageUrls: meta.labelImageUrls, enrichment: enrichmentDoc(meta.enrichment), updatedAt: Timestamp.fromDate(now) }, { merge: true });
 }
 
-/** Writes public-source facts only (database / verified web). Returns the facts version. */
+/**
+ * Writes public-source facts only (database / verified web). Returns the facts version, or null when the
+ * record was written by another job since it was read (that newer record is kept; this run's facts are not
+ * written over it).
+ */
 export async function writeProduct(
   db: Firestore,
   args: {
@@ -143,7 +150,7 @@ export async function writeProduct(
     traceId: string;
     retrievedAt?: Date; // when the database record was last fetched (unchanged when nothing was fetched)
   },
-): Promise<number> {
+): Promise<number | null> {
   const publicFacts: ProductFacts = stripPrivate(args.facts);
   const hash = factsHash(publicFacts);
   const version = !args.previous ? 1 : args.previous.factsHash === hash ? args.previous.factsVersion : args.previous.factsVersion + 1;
@@ -174,8 +181,9 @@ export async function writeProduct(
     updatedAt: Timestamp.fromDate(args.now),
   };
   // Each listed field is replaced whole (a plain merge would keep facts that were dropped, e.g. an
-  // implausible analysis); fields written elsewhere (recall) are kept.
-  batch.set(ref, record, { mergeFields: Object.keys(record) });
+  // implausible analysis); fields written elsewhere (recall) are kept. Only over the record this run read.
+  if (args.previous?.updateTime) batch.update(ref, record, { lastUpdateTime: args.previous.updateTime });
+  else batch.set(ref, record, { mergeFields: Object.keys(record) });
   // When the classification changes (new evidence or new rules), the earlier one is kept: an audit
   // trail in a server-only subcollection, never a silent rewrite.
   const prev = args.previous;
@@ -196,7 +204,14 @@ export async function writeProduct(
       retrievedAt: Timestamp.fromDate(new Date(s.retrievedAt)),
     });
   }
-  await batch.commit();
+  try {
+    await batch.commit();
+  } catch (err) {
+    // FAILED_PRECONDITION (9) or ALREADY_EXISTS (6): another job wrote the record meanwhile.
+    const code = (err as { code?: number | string }).code;
+    if (code === 9 || code === 6 || code === 'failed-precondition' || code === 'already-exists') return null;
+    throw err;
+  }
   return version;
 }
 

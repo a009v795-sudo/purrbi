@@ -5,6 +5,7 @@ export interface Limits {
   scansPerUserPerDay: number;
   photosPerUserPerDay: number;
   researchPerUserPerDay: number;
+  refreshesPerUserPerDay: number; // re-checks of saved results under new rules (each may re-read sources)
   aiCallsPerDayGlobal: number; // budget breaker across all users
   maxPhotoBytes: number;
   maxPhotosPerScan: number;
@@ -39,6 +40,7 @@ export const DEFAULT_LIMITS: Limits = {
   scansPerUserPerDay: 40,
   photosPerUserPerDay: 20,
   researchPerUserPerDay: 10,
+  refreshesPerUserPerDay: 40,
   aiCallsPerDayGlobal: 500,
   maxPhotoBytes: 10 * 1024 * 1024,
   maxPhotosPerScan: 6,
@@ -51,6 +53,20 @@ export const DEFAULT_LIMITS: Limits = {
  * older version when it is opened, so a known bad classification is corrected without deleting history.
  */
 export const ASSESSMENT_VERSION = 'assessment-3.0.0';
+
+/**
+ * Whether a saved result was made under older rules than these: a missing or unreadable version is older;
+ * a newer one (saved by a later release, e.g. before a rollback) is left alone, never re-assessed under
+ * older rules.
+ */
+export function olderAssessment(saved: unknown): boolean {
+  const parse = (v: unknown) => (typeof v === 'string' ? /^assessment-(\d+)\.(\d+)\.(\d+)$/.exec(v)?.slice(1).map(Number) ?? null : null);
+  const a = parse(saved);
+  const b = parse(ASSESSMENT_VERSION)!;
+  if (!a) return true;
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] < b[i];
+  return false;
+}
 
 export const SCAN_STATUS = {
   queued: 'queued',

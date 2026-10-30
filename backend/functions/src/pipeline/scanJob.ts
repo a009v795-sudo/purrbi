@@ -30,7 +30,7 @@ import { RESEARCH_RESULTS_IN_USE, RESEARCH_VERSION, researchProduct as researchI
 import { currentCalls, errorDetail, runWithCallLog } from '../util/diagnostics';
 import { SourceError } from '../util/http';
 import { rematchAnalysis } from '../domain/nutrition';
-import { ASSESSMENT_VERSION, RESEARCH_TIME_LIMIT_MS, SCAN_STATUS, STUCK_AFTER_MS, WORKING_STATUSES, type ErrorCode, type RuntimeConfig } from './config';
+import { ASSESSMENT_VERSION, olderAssessment, RESEARCH_TIME_LIMIT_MS, SCAN_STATUS, STUCK_AFTER_MS, WORKING_STATUSES, type ErrorCode, type RuntimeConfig } from './config';
 import { corroborateLabel } from './corroborate';
 import { dropStaleImageReads, enrichmentFacts, fillMissing, labelToFacts, missingInfo, type PhotoRequest } from './facts';
 import { explanationFields, highlightFields, ingredientRowFields, jobFields, resultFields, type JobInfo } from './serialize';
@@ -175,6 +175,8 @@ async function claimAndRun(deps: Deps, uid: string, scanId: string, kind: 'scan'
       startedAt: Timestamp.fromDate(deps.now()),
       updatedAt: Timestamp.fromDate(deps.now()),
       retryRequested: false,
+      // A refresh that stopped with its job (e.g. timed out) no longer blocks the next one.
+      refreshPersonalRequested: false,
       errorCode: '',
       errorMessage: '',
       errorRetryable: false,
@@ -251,6 +253,8 @@ interface AssessOptions {
   allowFetch: boolean; // false for personal refreshes and photo re-assessments: reuse stored public evidence
   allowExplain: boolean; // false for personal refreshes: explanations come from the cache only
   skipPhotos: boolean;
+  /** The saved result's version is kept (a re-check that could not use the sources, e.g. its quota was used up). */
+  keepVersion?: boolean;
 }
 
 interface PublicEvidence {
@@ -374,10 +378,16 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   const evidence = await publicEvidence(deps, job, o, stored, now);
   let { facts, origin, fetchedPublic } = evidence;
   const notes = evidence.notes;
-  // Label images read by an older label reader are dropped (and read again below when allowed).
+  // Label images read by an older label reader, and web pages read by an older research method, are dropped
+  // and read again below; a run that cannot read sources again (a photo, a pet change) keeps them, and its
+  // result is not marked current, so the owner's next opening checks it again with the sources.
   const before = facts.sources.length + facts.classificationSignals.length;
-  const stale = dropStaleImageReads(facts, LABEL_READINGS_IN_USE, RESEARCH_RESULTS_IN_USE);
+  const canReread = o.allowFetch && config.aiEnabled;
+  const stale = dropStaleImageReads(facts, LABEL_READINGS_IN_USE, RESEARCH_RESULTS_IN_USE, canReread);
   facts = stale.facts;
+  // (With AI switched off nothing could be read again, so the result is current as it is.)
+  let recheckPending = !!stale.kept?.length && config.aiEnabled;
+  if (stale.kept?.length) job.diagnosticNotes.push(`Kept what ${[...new Set(stale.kept)].slice(0, 3).join(', ')} gave under older rules; it is read again at the next full check.`);
   let rewriteProduct = stale.dropped.length > 0 || stale.setAside.length > 0 || facts.sources.length + facts.classificationSignals.length < before;
   if (stale.dropped.length || facts.sources.length + facts.classificationSignals.length < before) job.diagnosticNotes.push(`Dropped ${stale.dropped.join(', ') || 'statements'} taken from database label images or web pages under older rules; they are read again.`);
   job.diagnosticNotes.push(...stale.setAside.map((n) => `${n[0].toUpperCase()}${n.slice(1)}.`));
@@ -438,7 +448,8 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
     }
   }
   // Enrichment runs for every product not affirmatively out of scope, wherever its record is filed.
-  const aiOk = o.allowFetch && config.aiEnabled && scope.status !== 'out_of_scope';
+  // (A product whose earlier research was set aside is searched again even if, without it, it looks out of scope.)
+  const aiOk = o.allowFetch && config.aiEnabled && (scope.status !== 'out_of_scope' || !!stale.superseded);
   // Label images in the database answer missing panels and, while it is unresolved what the product is, the front.
   // When the product type is unclear, the nutrition panel (its feeding statement says complete or complementary) helps too.
   const typeUnclear = scope.status === 'unknown' || scope.category === 'unknown';
@@ -507,7 +518,9 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
     // A search made while it was unknown who the product is for could not use pages matched by brand and name.
     (meta.enrichment.research?.species === 'unknown' && scope.species !== 'unknown' && !!meta.enrichment.research.filled && meta.enrichment.research.filled.length === 0);
   // A page already used is searched again only after a new research method (which may read more of it), and only while something is missing.
-  if (aiOk && config.researchEnabled && stillMissing && (!hasWeb || meta.enrichment.research?.version !== RESEARCH_VERSION) && researchDue) {
+  let researchReturned = false;
+  const researchWanted = (stillMissing || scope.status === 'out_of_scope') && (!hasWeb || meta.enrichment.research?.version !== RESEARCH_VERSION) && researchDue;
+  if (aiOk && config.researchEnabled && researchWanted) {
     await setStatus(deps, o.uid, o.scanId, SCAN_STATUS.researching, 'Looking for the manufacturer’s label information', 40);
     try {
       await consumeQuota(db, o.uid, 'research', config.limits, now);
@@ -523,6 +536,8 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
         }
       }
       const r = await deps.sources.research({ apiKey: config.openaiApiKey(), model: config.researchModel, gtin14: gtin, barcode: o.barcode.expanded ?? o.barcode.digits, knownName: facts.productName?.value, knownBrand: facts.brand?.value, knownIngredients: facts.ingredients?.value, knownSpecies: scope.species, hint, userAgent: config.userAgent, now, beforeAiCall: () => consumeAiBudget(db, config.limits, now), deadline: (job.clockStart ?? Date.now()) + RESEARCH_TIME_LIMIT_MS });
+      // Pages that could not be reached are a technical failure, not an answer.
+      researchReturned = !!r.facts || r.fetchFailed !== true;
       let filled: string[] = [];
       if (r.facts) {
         // "Active ingredients" are a supplement's; a food page's additive list is not used as such.
@@ -565,13 +580,27 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
     }
     scope = scopeOf(facts, origin);
   }
+  // What an older research method verified stays until research under the current one has run: a provider
+  // error, a quota or budget stop, or research switched off never turns a known product into an unknown one.
+  // Unless research is switched off, the result is not marked current, so it is tried again.
+  if (stale.superseded && !researchReturned && researchWanted) {
+    facts = fillMissing(facts, stale.superseded).facts;
+    scope = scopeOf(facts, origin);
+    recheckPending = recheckPending || (config.aiEnabled && config.researchEnabled);
+    job.diagnosticNotes.push('Kept what earlier research verified, because research under the current rules didn’t finish; it is tried again.');
+  }
 
   // 3. Save public facts (never the owner's private label data) and the enrichment bookkeeping.
   let factsVersion = stored?.factsVersion ?? 0;
   // A saved classification that no longer holds (new evidence or rules) is updated, with its audit entry.
   const reclassified = !!stored && (stored.scope !== scope.status || stored.species !== scope.species || stored.category !== scope.category || stored.scopeVersion !== SCOPE_VERSION);
   if (reclassified && stored?.scope === 'out_of_scope' && scope.status !== 'out_of_scope') job.evidenceNotes.push('An earlier classification of this product as “not a cat or dog product” was reviewed against the product’s own evidence and replaced; the earlier one is kept in its history.');
-  if ((fetchedPublic || rewriteProduct || reclassified || !stored) && facts.sources.length) factsVersion = await writeProduct(db, { facts, scope, origin, previous: stored, now, traceId: job.traceId, retrievedAt: job.productCache === 'miss' ? now : (stored?.lastRetrievedAt ?? now) });
+  if ((fetchedPublic || rewriteProduct || reclassified || !stored) && facts.sources.length) {
+    const written = await writeProduct(db, { facts, scope, origin, previous: stored, now, traceId: job.traceId, retrievedAt: job.productCache === 'miss' ? now : (stored?.lastRetrievedAt ?? now) });
+    // Another job wrote the product meanwhile: its record is kept (this run's result still uses what it read).
+    if (written === null) job.diagnosticNotes.push('The shared product record changed while this was checked; the newer record was kept.');
+    else factsVersion = written;
+  }
   if (metaChanged) await writeProductMeta(db, gtin, meta, now);
   const contributor = createHash('sha256').update(o.uid).digest('hex').slice(0, 16);
   for (const p of promoted) await recordContribution(db, gtin, { ...p, contributor, traceId: job.traceId, now });
@@ -712,9 +741,14 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       updatedAt: Timestamp.fromDate(now),
     };
     superseded = await db.runTransaction(async (tx) => {
-      const newer = ((await tx.get(ref)).get('assessmentInputsAt') as Timestamp | undefined)?.toMillis() ?? 0;
+      const snap = await tx.get(ref);
+      const newer = (snap.get('assessmentInputsAt') as Timestamp | undefined)?.toMillis() ?? 0;
       if (newer > inputsAt.getTime()) return true;
-      tx.update(ref, fields);
+      // A result still resting on evidence read under older rules keeps its earlier version: the app asks for
+      // the re-check again when the owner next opens it.
+      const saved = snap.get('assessmentVersion') as string | undefined;
+      const version = recheckPending || o.keepVersion ? (olderAssessment(saved) ? (saved ?? '') : '') : ASSESSMENT_VERSION;
+      tx.update(ref, { ...fields, assessmentVersion: version, refreshPersonalRequested: false });
       return false;
     });
   } catch (err) {
@@ -1039,17 +1073,38 @@ export async function handleScanUpdate(deps: Deps, uid: string, scanId: string, 
     await ref.update({ status: SCAN_STATUS.complete, statusMessage: 'Assessment ready (some information is missing)', completedAt: Timestamp.fromDate(deps.now()), updatedAt: Timestamp.fromDate(deps.now()) });
     return;
   }
-  if (rising('refreshPersonalRequested') && [SCAN_STATUS.complete, SCAN_STATUS.needsPhotos].includes(after.status as never)) {
+  // A result saved under older rules (the app asks for a re-check when it opens one) is assessed again in
+  // full, out-of-scope results included: the product's evidence is re-read where its saved record is out of
+  // date (bounded by the same per-product freshness as a scan) and explanations are checked under the current
+  // rules. A pet change on a current result only re-runs the assessment on the saved evidence. A result made
+  // by newer rules than these (a later release, before a rollback) is left as it is.
+  const stale = olderAssessment(after.assessmentVersion);
+  const statuses: string[] = stale ? [SCAN_STATUS.complete, SCAN_STATUS.needsPhotos, SCAN_STATUS.outOfScope] : [SCAN_STATUS.complete, SCAN_STATUS.needsPhotos];
+  if (rising('refreshPersonalRequested') && statuses.includes(after.status as string)) {
     const job = newJob('refresh', (after.traceId as string) || randomUUID().slice(0, 12), deps.now());
-    // A result saved under older rules (the app asks for a refresh when it opens one) is assessed again in
-    // full: the product's evidence is re-read where its saved record is out of date (bounded by the same
-    // per-product freshness as a scan) and explanations are checked under the current rules. A pet change on
-    // a current result only re-runs the assessment on the saved evidence.
-    const stale = after.assessmentVersion !== ASSESSMENT_VERSION;
-    if (stale) job.evidenceNotes.push(`Re-checked under Purrbi’s current rules (${ASSESSMENT_VERSION}); the earlier result was made under ${typeof after.assessmentVersion === 'string' && after.assessmentVersion ? after.assessmentVersion : 'older rules'}.`);
+    if (!stale && after.assessmentVersion !== ASSESSMENT_VERSION) {
+      deps.log.info('refresh of a result made by newer rules left alone', { uid, scanId, version: after.assessmentVersion });
+      await ref.update({ refreshPersonalRequested: false });
+      return;
+    }
+    // Re-checks have their own daily quota: past it, the saved evidence is used and the result keeps its
+    // version, so the full re-check happens on a later opening.
+    let fetch = stale;
+    if (stale) {
+      try {
+        await consumeQuota(deps.db, uid, 'refreshes', deps.config.limits, deps.now());
+      } catch (err) {
+        if (!(err instanceof QuotaError)) throw err;
+        fetch = false;
+        job.diagnosticNotes.push('Re-check under the current rules postponed: today’s re-checks are used up.');
+      }
+    }
+    if (fetch) job.evidenceNotes.push(`Re-checked under Purrbi’s current rules (${ASSESSMENT_VERSION}); the earlier result was made under ${typeof after.assessmentVersion === 'string' && after.assessmentVersion ? after.assessmentVersion : 'older rules'}.`);
     await runWithCallLog(async () => {
       try {
-        await runAssessment(deps, job, { uid, scanId, barcode, petId: (after.petId as string) ?? null, allowFetch: stale, allowExplain: stale, skipPhotos: after.skipPhotos === true || after.status === SCAN_STATUS.complete });
+        // A full re-check asks for the photos the current rules need (only the owner's own "continue without
+        // photos" is kept); a pet change on a current result keeps the result's status.
+        await runAssessment(deps, job, { uid, scanId, barcode, petId: (after.petId as string) ?? null, allowFetch: fetch, allowExplain: fetch, skipPhotos: fetch ? after.skipPhotos === true : after.skipPhotos === true || after.status === SCAN_STATUS.complete, keepVersion: stale && !fetch });
         await ref.update({ refreshPersonalRequested: false });
       } catch (err) {
         // The earlier result stays: the scan is never left "assessing".

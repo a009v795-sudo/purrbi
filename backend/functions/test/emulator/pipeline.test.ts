@@ -8,7 +8,7 @@ import { LABEL_EXTRACTION_VERSION, type ValidatedLabel } from '../../src/ai/labe
 import { gs1CheckDigit, type NormalizedBarcode } from '../../src/domain/barcode';
 import type { ProductFacts, RecallCheck } from '../../src/domain/types';
 import { EXPLAIN_VERSION, explanationKey } from '../../src/knowledge/explain';
-import { DEFAULT_LIMITS, type RuntimeConfig } from '../../src/pipeline/config';
+import { ASSESSMENT_VERSION, DEFAULT_LIMITS, type RuntimeConfig } from '../../src/pipeline/config';
 import { handleScanUpdate, processPhoto, processScan, type Deps, type Sources } from '../../src/pipeline/scanJob';
 import type { OpenFactsDb, OpenFactsLookup } from '../../src/sources/openFacts';
 import { RESEARCH_VERSION } from '../../src/sources/research';
@@ -38,6 +38,7 @@ let verdictMode: 'ok' | 'invalid' | 'fail' = 'ok';
 let labelPatch: Partial<ValidatedLabel> | null = null; // changes the mocked reading of a label panel
 let imagesDown = false; // the database's image host fails (technical failure)
 let pagesDown = false; // research names pages that cannot be reached
+let researchThrows = false; // the research model call fails (provider error)
 let explainUnverified: string | null = null; // every explanation comes back unverified, with this reason
 let verdictInputs: string[] = [];
 
@@ -112,6 +113,7 @@ const sources: Sources = {
   },
   async research(o) {
     calls.research = (calls.research ?? 0) + 1;
+    if (researchThrows) throw new SourceError('OpenAI', 'timeout', 'no response within 60000 ms (mocked)');
     if (pagesDown) return { facts: null, sources: [], discarded: ['barcode search: could not fetch https://testbrand.example/lamb to verify it (HTTP 429)'], model: 'mock', fetchFailed: true };
     if (o.barcode === BC.misfiled) {
       const page = { sourceId: `web:teststore.example:${o.gtin14}`, sourceType: 'retailer_or_web' as const, sourceName: 'teststore.example', url: 'https://teststore.example/grain-free-chicken-pea-dog-food', retrievedAt: NOW.toISOString(), matchConfidence: 'brand_and_product' as const, readerVersion: RESEARCH_VERSION };
@@ -244,6 +246,7 @@ beforeEach(async () => {
   labelPatch = null;
   imagesDown = false;
   pagesDown = false;
+  researchThrows = false;
   explainUnverified = null;
   await fetch(`http://${process.env.FIRESTORE_EMULATOR_HOST}/emulator/v1/projects/demo-purrbi/databases/(default)/documents`, { method: 'DELETE' });
   await db.doc('users/u1/pets/cat1').set({ name: 'Miso', species: 'cat', birthDate: Timestamp.fromDate(new Date('2022-01-01')), allergiesStatus: 'reported', allergies: ['chicken'], profileVersion: 2 });
@@ -1069,5 +1072,107 @@ describe('fallbacks before asking the owner for photos', () => {
     await processScan(deps({ researchEnabled: true }), 'u1', again.id);
     expect(calls.research).toBe(2); // webOnly once, unknown once: the failed search is not repeated
     expect((await read(again)).status).toBe('needs_photos');
+  });
+});
+
+describe('saved results under older rules', () => {
+  // A product identified only by an earlier research method (research-1.7.0), as many were before this release.
+  async function researchedUnder17() {
+    const ref = await newScan('u1', BC.webOnly);
+    await processScan(deps({ researchEnabled: true }), 'u1', ref.id);
+    const gtin = (await read(ref)).gtin;
+    const v17 = <T extends Record<string, unknown>>(x: T) => ({ ...x, readerVersion: 'research-1.7.0' });
+    const facts = (await db.doc(`products/${gtin}`).get()).data()!.facts;
+    facts.sources = facts.sources.map((x: Record<string, unknown>) => (x.sourceType === 'manufacturer' ? v17(x) : x));
+    for (const k of ['ingredientsText', 'ingredients', 'guaranteedAnalysis', 'adequacy']) facts[k].source = v17(facts[k].source);
+    await db.doc(`products/${gtin}`).update({ facts });
+    await db.doc(`productMeta/${gtin}`).update({ 'enrichment.research.version': 'research-1.7.0' });
+    await ref.update({ assessmentVersion: 'assessment-2.4.0' });
+    return { ref, gtin };
+  }
+  const refresh = async (ref: FirebaseFirestore.DocumentReference, d = deps({ researchEnabled: true }), petId = 'cat2') => {
+    const before = await read(ref);
+    await ref.update({ refreshPersonalRequested: true, petId });
+    await handleScanUpdate(d, 'u1', ref.id, before, await read(ref));
+    return read(ref);
+  };
+  it('a provider error during the re-check keeps what earlier research verified, and the result is checked again later', async () => {
+    const { ref, gtin } = await researchedUnder17();
+    const known = await read(ref);
+    researchThrows = true;
+    const s = await refresh(ref);
+    expect(calls.research).toBe(2);
+    expect(s.productFound).toBe(true);
+    expect(s.productName).toBe(known.productName);
+    expect(s.scoreText).toBe(known.scoreText);
+    expect(s.assessmentVersion).toBe('assessment-2.4.0'); // not marked current: asked for again
+    expect(s.diagnosticNotes.join(' ')).toMatch(/Kept what earlier research verified/);
+    expect((await db.doc(`products/${gtin}`).get()).data()!.facts.guaranteedAnalysis.source.readerVersion).toBe('research-1.7.0'); // the shared record isn't stripped
+    // Research works again: the next opening re-checks it under the current method.
+    researchThrows = false;
+    const t = await refresh(ref);
+    expect(calls.research).toBe(3);
+    expect(t.assessmentVersion).toBe(ASSESSMENT_VERSION);
+    expect((await db.doc(`products/${gtin}`).get()).data()!.facts.guaranteedAnalysis.source.readerVersion).toBe(RESEARCH_VERSION);
+  });
+  it('a pet change cannot read sources again: it keeps the earlier research in the shared record and leaves the result to be re-checked', async () => {
+    const { ref, gtin } = await researchedUnder17();
+    await ref.update({ assessmentVersion: ASSESSMENT_VERSION }); // a current result whose product record still holds 1.7.0 facts
+    const s = await refresh(ref, deps({ researchEnabled: true }), 'cat1');
+    expect(calls.research).toBe(1); // no re-read in a pet change
+    expect(s.petName).toBe('Miso');
+    expect(s.productFound).toBe(true);
+    expect(s.assessmentVersion).toBe(''); // asked for again with the sources
+    expect((await db.doc(`products/${gtin}`).get()).data()!.facts.adequacy.source.readerVersion).toBe('research-1.7.0');
+  });
+  it('re-checks have their own daily quota: past it, the saved evidence is used and the version kept', async () => {
+    const { ref } = await researchedUnder17();
+    await db.doc(`usage/u1_${NOW.toISOString().slice(0, 10).replace(/-/g, '')}`).set({ refreshes: DEFAULT_LIMITS.refreshesPerUserPerDay }, { merge: true });
+    const s = await refresh(ref);
+    expect(calls.research).toBe(1);
+    expect(s.assessmentVersion).toBe('assessment-2.4.0');
+    expect(s.diagnosticNotes.join(' ')).toMatch(/re-checks are used up/);
+  });
+  it('a result made by newer rules is left as it is', async () => {
+    const ref = await newScan('u1', BC.treat, 'cat2');
+    await processScan(deps(), 'u1', ref.id);
+    await ref.update({ assessmentVersion: 'assessment-9.0.0', personalState: 'from-a-newer-release' });
+    const s = await refresh(ref);
+    expect(s.personalState).toBe('from-a-newer-release');
+    expect(s.assessmentVersion).toBe('assessment-9.0.0');
+    expect(s.refreshPersonalRequested).toBe(false);
+  });
+  it('an out-of-scope result saved under older rules is checked again', async () => {
+    const ref = await newScan('u1', BC.misfiled);
+    await processScan(deps({ researchEnabled: true }), 'u1', ref.id);
+    const fresh = await read(ref);
+    expect(fresh.scope).toBe('supported');
+    // As an earlier release left it: "food for people".
+    await ref.update({ status: 'out_of_scope', scope: 'out_of_scope', assessmentVersion: 'assessment-2.4.0' });
+    const s = await refresh(ref);
+    expect(s.scope).toBe('supported');
+    expect(s.status).not.toBe('out_of_scope');
+    expect(s.assessmentVersion).toBe(ASSESSMENT_VERSION);
+  });
+  it('a full re-check asks for the photos the current rules need, unless the owner chose to continue without them', async () => {
+    const ref = await newScan('u1', BC.ingrImage, 'cat2');
+    await processScan(deps(), 'u1', ref.id);
+    const fresh = await read(ref);
+    expect(fresh.status).toBe('needs_photos');
+    await ref.update({ status: 'complete', photoRequests: [], assessmentVersion: 'assessment-2.4.0' });
+    const s = await refresh(ref, deps());
+    expect(s.status).toBe('needs_photos');
+    expect(s.photoRequests.length).toBeGreaterThan(0);
+    await ref.update({ status: 'complete', skipPhotos: true, assessmentVersion: 'assessment-2.4.0' });
+    const skipped = await refresh(ref, deps());
+    expect(skipped.status).toBe('complete');
+  });
+  it('a refresh that stopped with its job no longer blocks the next one', async () => {
+    const ref = await newScan('u1', BC.treat, 'cat2');
+    await ref.update({ status: 'researching', refreshPersonalRequested: true, retryRequested: true, updatedAt: Timestamp.fromDate(new Date(NOW.getTime() - 10 * 60000)) });
+    await processScan(deps(), 'u1', ref.id, 'retry');
+    const s = await read(ref);
+    expect(s.status).toBe('complete');
+    expect(s.refreshPersonalRequested).toBe(false);
   });
 });
