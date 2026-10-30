@@ -737,7 +737,8 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       const size = Math.max(1, config.limits.explanationsPerCall);
       const batches: ExplainRequest[][] = [];
       for (let i = 0; i < explain.missing.length; i += size) batches.push(explain.missing.slice(i, i + size));
-      for (let i = 0; i < batches.length; i++) await consumeAiBudget(db, config.limits, deps.now());
+      // Each batch makes two model calls: the cited explanations and the separate support check.
+      for (let i = 0; i < batches.length * 2; i++) await consumeAiBudget(db, config.limits, deps.now());
       const settled = await Promise.allSettled(batches.map((terms) => deps.sources.explain({ apiKey: config.openaiApiKey(), model: config.explainModel, species, terms, userAgent: config.userAgent, now: deps.now() })));
       const failed = settled.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
       if (failed.length === settled.length) throw failed[0].reason;
@@ -853,7 +854,8 @@ function explainRequests(general: GeneralAssessment, parsed: ParsedIngredient[])
   const curated = new Set(general.ingredientNotes.filter((n) => n.explanationKind !== 'none').map((n) => normalizeIngredientName(n.name)));
   for (const i of parsed.slice(0, 20)) if (i.kind !== 'group' && !curated.has(normalizeIngredientName(i.name))) add(i.name);
   for (const i of parsed) for (const c of i.children) add(c.name);
-  return out.slice(0, 40);
+  // Bounded per scan (each term is explained once per species for every product, so later scans reuse them).
+  return out.slice(0, 24);
 }
 
 /** The claims that passed claim-by-claim checks, by term, for the ingredient rows. */
@@ -865,7 +867,8 @@ function applyExplanations(general: GeneralAssessment, byKey: Map<string, CitedE
   let applied = 0;
   for (const n of general.ingredientNotes) {
     const e = byKey.get(explanationKey(species, 'ingredient', n.name));
-    if (e?.status === 'verified' && n.explanationKind === 'none') {
+    // Only an identity or function claim makes the legacy one-line explanation (a benefit or risk claim alone has none).
+    if (e?.status === 'verified' && e.summary && n.explanationKind === 'none') {
       Object.assign(n, { explanation: e.summary, explanationKind: 'cited_ai', explanationSourceTitle: e.sourceTitle, explanationSourceUrl: e.sourceUrl, explanationQuote: e.quote });
       // The role from the verified page fills in only where Purrbi's own role table has none.
       if (!n.role && e.role) Object.assign(n, { role: normalizeRole(e.role), roleSource: 'cited_ai' });
@@ -874,8 +877,11 @@ function applyExplanations(general: GeneralAssessment, byKey: Map<string, CitedE
   }
   for (const a of general.supplement?.actives ?? []) {
     const e = byKey.get(explanationKey(species, 'active', a.name));
-    if (e?.status === 'verified' && a.evidence !== 'cited') {
-      Object.assign(a, { evidence: 'cited', note: e.summary, sourceTitle: e.sourceTitle, sourceUrl: e.sourceUrl, quote: e.quote });
+    // For a supplement's active ingredient the evidence on its effect is the point: a checked benefit claim
+    // (with its scope) comes first, else what it is.
+    const best = e?.status === 'verified' ? (e.claims.find((c) => c.claimType === 'benefit') ?? e.claims[0]) : undefined;
+    if (best && a.evidence !== 'cited') {
+      Object.assign(a, { evidence: 'cited', note: best.claim, sourceTitle: best.title, sourceUrl: best.url, quote: best.passage });
       applied++;
     }
   }

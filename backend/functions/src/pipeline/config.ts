@@ -42,7 +42,7 @@ export const DEFAULT_LIMITS: Limits = {
   aiCallsPerDayGlobal: 500,
   maxPhotoBytes: 10 * 1024 * 1024,
   maxPhotosPerScan: 6,
-  explanationsPerCall: 8,
+  explanationsPerCall: 4, // up to three claims per term must fit the model's output limit
 };
 
 /**

@@ -138,6 +138,9 @@ describe('server-only collections', () => {
     await assertFails(alice().doc('productMeta/00036000291452').set({ enrichment: {} }));
     await assertFails(alice().doc('knowledge/cat_ingredient_rice-flour').get());
     await assertFails(alice().doc('knowledge/cat_ingredient_rice-flour').set({ status: 'verified', summary: 'forged' }));
+    // the audit trail of withdrawn explanations is server-only too
+    await assertFails(alice().doc('knowledgeAudit/cat_ingredient_sunflower-oil__explain-1.2.0').get());
+    await assertFails(alice().doc('knowledgeAudit/cat_ingredient_sunflower-oil__explain-1.2.0').set({ reasons: ['forged'] }));
   });
 });
 

@@ -167,10 +167,17 @@ const sources: Sources = {
         summary: '', role: '', sourceTitle: '', sourceUrl: '', quote: '', reason: explainUnverified!, checkedAt: ((o as { now?: Date }).now ?? NOW).toISOString(), model: 'mock', version: EXPLAIN_VERSION, claims: [], rejected: [], judgeModel: 'mock',
       }));
     }
+    // As explain.ts returns them: a verified explanation has at least one claim that passed every check
+    // (an active ingredient's is about its effect; an ingredient's says what it is).
     return o.terms.map((t) => ({
       key: explanationKey(o.species, t.kind, t.term), term: t.term, kind: t.kind, species: o.species, status: 'verified' as const,
       summary: `TEST FIXTURE explanation of ${t.term}.`, role: 'test role', sourceTitle: 'TEST FIXTURE source', sourceUrl: 'https://www.fda.gov/test-fixture',
-      quote: 'TEST FIXTURE quote copied from the cited page.', reason: '', checkedAt: NOW.toISOString(), model: 'mock', version: EXPLAIN_VERSION, claims: [], rejected: [], judgeModel: 'mock',
+      quote: 'TEST FIXTURE quote copied from the cited page.', reason: '', checkedAt: NOW.toISOString(), model: 'mock', version: EXPLAIN_VERSION, rejected: [], judgeModel: 'mock',
+      claims: [{
+        claimType: t.kind === 'active' ? 'benefit' as const : 'identity' as const, claim: `TEST FIXTURE explanation of ${t.term}.`, ingredientForm: t.term,
+        title: 'TEST FIXTURE source', url: 'https://www.fda.gov/test-fixture', passage: 'TEST FIXTURE quote copied from the cited page.',
+        speciesScope: 'pets' as const, evidence: 'regulatory_assessment' as const, doseContext: '', retrievedAt: NOW.toISOString(), publishedAt: '', reviewStatus: 'automated_checks' as const,
+      }],
     }));
   },
   async verdict(o) {
