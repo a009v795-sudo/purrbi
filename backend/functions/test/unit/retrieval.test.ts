@@ -314,6 +314,8 @@ describe('barcode-only research (tests A/B/C, 2026-10-30)', () => {
     expect(r.facts).toBeNull();
     expect(bodies).toHaveLength(1); // nothing named: no second search
     expect(bodies[0]).toContain('Pages print it as \\"099482481087\\", \\"0099482481087\\", \\"0 99482 48108 7\\"');
+    // The digits alone first (trace 11f7cc1e-842: "Wellness product 076344886570" found wellness clinics).
+    expect(bodies[0]).toContain('Search the barcode\'s digits alone first, in quotes (\\"099482481087\\"), with no other word');
     expect(bodies[0]).toContain('A catalogue, price list or search-results page is not the product’s page');
   });
   it('B: a price list showing the barcode ends no search; the name its answer gave is searched for, and only a page showing the barcode is used', async () => {

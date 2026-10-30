@@ -615,7 +615,8 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
                 ? 'The barcode database wasn’t available, so the search had only the barcode to go on and found nothing; Purrbi tries again later.'
                 : 'Searched the manufacturer’s and retailers’ pages; nothing could be verified against a page, so nothing was added.',
       );
-      job.diagnosticNotes.push(...r.discarded.slice(0, 4).map((d) => `Research (${r.model}): ${d}`));
+      // Every step's outcome up to twelve (the trace of trace 11f7cc1e-842 stopped before the page that mattered).
+      job.diagnosticNotes.push(...r.discarded.slice(0, 12).map((d) => `Research (${r.model}): ${d}`));
       log('research', { filled, discarded: r.discarded });
     } catch (err) {
       // Research is optional: keep going with what we have.

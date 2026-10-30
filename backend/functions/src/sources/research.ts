@@ -17,9 +17,9 @@ import { httpBytes, httpJson, httpRequest, SourceError } from '../util/http';
 import type { BarcodeHint } from './barcodeLookup';
 import { altTextIngredientLists, documentFacts, markupGtins, nameOnPage, nameTokens, nutritionDocLinks, pageText, parseShopifyProduct, pdfSafety, productHeading, shopifyProductUrl, textGtins } from './pageEvidence';
 
-export const RESEARCH_VERSION = 'research-2.5.0'; // 2.5.0: the search's result pages are checked site by site (each site's first result, then its second), after every search of the run, at most eight. 2.4.0: a page printing other barcodes besides this one is a listing, not the product's page; each analysis value must be printed after its nutrient's name; the manufacturer's page is sought by the answer's name when no other is known. Results of 2.3.0 are not used (one took another variant's analysis). 2.3.0: the search's own result pages are recorded and checked by Purrbi for the barcode; the first that shows it is read from Purrbi's copy. 2.2.0: the barcode is searched in the forms pages print it; a page tied to the barcode that shows nothing about the product (a price list) ends no search, and what such an answer named is searched for next; a barcode with other numbers beside it is still found. 2.1.0: a page tied to the product names it by its own heading; a web page's sentence that names no species, life stage or standard is not a feeding statement. 2.0.0: alt text, markup and Shopify barcodes, linked nutrition documents, a manufacturer follow-up, catalogue abbreviations, package sizes
+export const RESEARCH_VERSION = 'research-2.6.0'; // 2.6.0: the barcode's digits are searched alone first. 2.5.0: the search's result pages are checked site by site (each site's first result, then its second), after every search of the run, at most eight. 2.4.0: a page printing other barcodes besides this one is a listing, not the product's page; each analysis value must be printed after its nutrient's name; the manufacturer's page is sought by the answer's name when no other is known. Results of 2.3.0 are not used (one took another variant's analysis). 2.3.0: the search's own result pages are recorded and checked by Purrbi for the barcode; the first that shows it is read from Purrbi's copy. 2.2.0: the barcode is searched in the forms pages print it; a page tied to the barcode that shows nothing about the product (a price list) ends no search, and what such an answer named is searched for next; a barcode with other numbers beside it is still found. 2.1.0: a page tied to the product names it by its own heading; a web page's sentence that names no species, life stage or standard is not a feeding statement. 2.0.0: alt text, markup and Shopify barcodes, linked nutrition documents, a manufacturer follow-up, catalogue abbreviations, package sizes
 /** Research results still used as they were saved (older ones are read again: they could take who a product is for from a retailer's title). */
-export const RESEARCH_RESULTS_IN_USE: ReadonlySet<string> = new Set([RESEARCH_VERSION, 'research-2.4.0', 'research-2.2.0', 'research-2.1.0', 'research-2.0.0']); // not 2.3.0
+export const RESEARCH_RESULTS_IN_USE: ReadonlySet<string> = new Set([RESEARCH_VERSION, 'research-2.5.0', 'research-2.4.0', 'research-2.2.0', 'research-2.1.0', 'research-2.0.0']); // not 2.3.0
 
 const nullableString = { type: ['string', 'null'] };
 const SCHEMA = {
@@ -302,7 +302,14 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
   const brand = opts.knownBrand ?? opts.hint?.brand;
   // Shops and distributors list a UPC-A as 12 or 13 digits; the package prints it spaced under the bars.
   const forms = printedForms(opts.gtin14);
-  const printed = forms.length > 1 ? `Pages print it as ${forms.map((f) => `"${f}"`).join(', ')}: search for each form (shops list it as UPC, EAN or GTIN).` : '';
+  // The digits alone first: a brand in the query finds other businesses of that name ("Wellness product
+  // 076344886570" found wellness clinics, trace 11f7cc1e-842).
+  const printed = [
+    `Search the barcode's digits alone first, in quotes ("${forms[0]}"), with no other word: a brand name in the query finds other businesses of that name.`,
+    forms.length > 1 ? `Pages print it as ${forms.map((f) => `"${f}"`).join(', ')}: search for each form (shops list it as UPC, EAN or GTIN).` : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
   const attempts: { label: string; mode: Mode; user: string }[] = [
     { label: 'barcode search', mode: 'barcode', user: [`Barcode (GTIN/UPC/EAN): ${opts.barcode}.`, printed, opts.knownBrand ? `Brand (from a database record): ${opts.knownBrand}.` : '', opts.knownName ? `Product name (from a database record): ${opts.knownName}.` : '', hint, ask].filter(Boolean).join(' ') },
     // A brand alone is no search ("Wellness 076344886570" finds other businesses, trace 56bd298f-a6a): a name is needed.
