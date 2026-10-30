@@ -13,3 +13,6 @@ ui-debug.log*
 .secret.local
 .env.local
 *-report.json
+
+# Agent worktrees (local tooling, never committed)
+.claude/worktrees/
