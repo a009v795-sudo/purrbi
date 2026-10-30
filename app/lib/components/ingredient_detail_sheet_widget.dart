@@ -384,7 +384,7 @@ class _IngredientDetailSheetWidgetState
                       mainAxisAlignment:
                           (FFMainAxisAlignment.start).flutterValue,
                       crossAxisAlignment:
-                          (FFCrossAxisAlignment.center).flutterValue,
+                          (FFCrossAxisAlignment.start).flutterValue,
                       textBaseline: TextBaseline.alphabetic,
                       children: [
                         Container(
