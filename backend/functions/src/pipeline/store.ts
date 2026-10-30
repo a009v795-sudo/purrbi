@@ -289,12 +289,11 @@ export async function readExplanations(db: Firestore, keys: string[], now: Date)
  * written meanwhile is left alone). One batch; when a record already exists (another scan withdrew it at
  * the same moment), each is tried again on its own.
  */
-async function withdrawExplanations(db: Firestore, snaps: DocumentSnapshot[], now: Date): Promise<void> {
-  const at = Timestamp.fromDate(now);
-  const writes = snaps.map((snap) => {
-    const e = snap.data() as CitedExplanation;
-    const oldVersion = String(e.version ?? 'unversioned');
-    const record = {
+/** The audit record of an explanation that was shown, as it was shown (claims included when it had them). */
+function auditRecord(db: Firestore, snap: DocumentSnapshot, at: Timestamp) {
+  const e = snap.data() as CitedExplanation;
+  const oldVersion = String(e.version ?? 'unversioned');
+  const record = {
       key: snap.id,
       term: e.term ?? '',
       kind: e.kind ?? '',
@@ -307,32 +306,72 @@ async function withdrawExplanations(db: Firestore, snaps: DocumentSnapshot[], no
       oldQuote: e.quote ?? '',
       oldModel: e.model ?? '',
       oldCheckedAt: e.checkedAt ?? '',
+      ...(Array.isArray(e.claims) && e.claims.length ? { oldClaims: e.claims } : {}),
+      ...(Array.isArray(e.rejected) && e.rejected.length ? { oldRejected: e.rejected } : {}),
       withdrawnAt: at,
       supersededBy: EXPLAIN_VERSION,
       reasons: auditLegacyExplanation(e),
     };
-    return { snap, record, ref: db.doc(`knowledgeAudit/${`${snap.id}__${oldVersion}`.replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 700)}`) };
-  });
+  return { record, oldVersion, ref: db.doc(`knowledgeAudit/${`${snap.id}__${oldVersion}`.replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 700)}`) };
+}
+
+async function withdrawExplanations(db: Firestore, snaps: DocumentSnapshot[], now: Date): Promise<void> {
+  const at = Timestamp.fromDate(now);
+  const writes = snaps.map((snap) => ({ snap, ...auditRecord(db, snap, at) }));
+  // The withdrawn entry's version is set aside too ("withdrawn explain-1.2.0"), so the sweep below moves on past it.
   const add = (batch: WriteBatch, w: (typeof writes)[number]) =>
-    batch.create(w.ref, w.record).update(w.snap.ref, { withdrawnAt: at, supersededBy: EXPLAIN_VERSION }, { lastUpdateTime: w.snap.updateTime! });
+    batch.create(w.ref, w.record).update(w.snap.ref, { withdrawnAt: at, supersededBy: EXPLAIN_VERSION, version: `withdrawn ${w.oldVersion}` }, { lastUpdateTime: w.snap.updateTime! });
   try {
     const batch = db.batch();
     for (const w of writes) add(batch, w);
     await batch.commit();
   } catch {
-    if (writes.length > 1) await Promise.all(writes.map((w) => add(db.batch(), w).commit().catch(() => undefined)));
+    // One at a time, each tried twice (a record that already exists was written by another scan at the same moment).
+    await Promise.all(writes.map(async (w) => { for (let i = 0; i < 2; i++) { try { await add(db.batch(), w).commit(); return; } catch { /* next try */ } } }));
   }
 }
 
-export async function writeExplanations(db: Firestore, items: CitedExplanation[]): Promise<void> {
+/**
+ * Explanations made under earlier rules that no scan asks for any more (a term now explained by Purrbi's own
+ * role table, a term past a scan's limit) are found by a small sweep: each that was shown is withdrawn with
+ * its audit record; one that was never shown is removed. Best-effort, a few entries per call.
+ */
+export async function sweepLegacyExplanations(db: Firestore, now: Date, limit = 10): Promise<number> {
+  const snaps = (await db.collection('knowledge').where('version', '<', EXPLAIN_VERSION).orderBy('version').limit(limit).get()).docs.filter((d) => !String(d.get('version') ?? '').startsWith('withdrawn '));
+  const shown = snaps.filter((d) => d.get('status') === 'verified' && !d.get('withdrawnAt'));
+  if (shown.length) await withdrawExplanations(db, shown, now);
+  const never = snaps.filter((d) => !shown.includes(d));
+  if (never.length) {
+    const batch = db.batch();
+    for (const d of never) batch.delete(d.ref, { lastUpdateTime: d.updateTime });
+    await batch.commit().catch(() => undefined);
+  }
+  return snaps.length;
+}
+
+export async function writeExplanations(db: Firestore, items: CitedExplanation[], now = new Date()): Promise<void> {
   if (!items.length) return;
-  const files = items.filter((e) => FILE_REASON.test(e.reason ?? ''));
-  const before = files.length ? await db.getAll(...files.map((e) => db.doc(`knowledge/${e.key}`))) : [];
+  const before = await db.getAll(...items.map((e) => db.doc(`knowledge/${e.key}`)));
   // Counted under the current rules only: a new method starts the file backoff again.
   const attempts = new Map(before.filter((d) => d.exists && d.get('version') === EXPLAIN_VERSION && FILE_REASON.test(String(d.get('reason') ?? ''))).map((d) => [d.id, Number(d.get('attempts') ?? 1)]));
-  const batch = db.batch();
-  for (const e of items) batch.set(db.doc(`knowledge/${e.key}`), FILE_REASON.test(e.reason ?? '') ? { ...e, attempts: (attempts.get(e.key) ?? 0) + 1 } : e);
-  await batch.commit();
+  // An explanation shown under earlier rules that is overwritten now gets its audit record in the same write.
+  const at = Timestamp.fromDate(now);
+  const legacy = before.filter((d) => d.exists && d.get('version') !== EXPLAIN_VERSION && d.get('status') === 'verified' && !d.get('withdrawnAt')).map((d) => auditRecord(db, d, at));
+  const existing = legacy.length ? new Set((await db.getAll(...legacy.map((l) => l.ref))).filter((d) => d.exists).map((d) => d.id)) : new Set<string>();
+  const write = async (audit: boolean) => {
+    const batch = db.batch();
+    if (audit) for (const l of legacy) if (!existing.has(l.ref.id)) batch.create(l.ref, l.record);
+    for (const e of items) batch.set(db.doc(`knowledge/${e.key}`), FILE_REASON.test(e.reason ?? '') ? { ...e, attempts: (attempts.get(e.key) ?? 0) + 1 } : e);
+    await batch.commit();
+  };
+  try {
+    await write(true);
+  } catch (err) {
+    // ALREADY_EXISTS: another scan wrote the audit record meanwhile.
+    const code = (err as { code?: number | string }).code;
+    if (code === 6 || code === 'already-exists') await write(false);
+    else throw err;
+  }
 }
 
 // ---- verdicts (per owner, cached by their input) ---------------------------------

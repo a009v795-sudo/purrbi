@@ -108,7 +108,9 @@ describe('deterministic checks', () => {
     expect(formMatch('Natural Flavors', { passage: fx('natural flavours') }).match).toBe('exact');
     expect(formMatch('Dried Beet Pulp', { passage: fx('beet pulp') }).match).toBe('synonym');
     expect(formMatch('L-Lysine', { passage: fx('lysine') }).match).toBe('synonym');
-    expect(formMatch('Guar Gum', { passage: fx('no ingredient'), before: fx('guar gum') }).match).toBe('exact');
+    // The sentence before counts only when the passage refers back to it ("It is …").
+    expect(formMatch('Guar Gum', { passage: 'It is used to thicken wet foods.', before: fx('guar gum') }).match).toBe('exact');
+    expect(formMatch('Guar Gum', { passage: fx('carrageenan'), after: fx('guar gum') }).match).toBe('different');
     expect(formMatch('Sunflower Oil', { passage: fx('sunflower meal') })).toEqual({ match: 'related', named: 'sunflower meal' });
     expect(formMatch('Calcium Iodate', { passage: fx('potassium iodide') }).match).toBe('different');
     // A label in another language is matched by its English name.
@@ -354,7 +356,8 @@ describe('explanations made under the earlier rules', () => {
       oldSourceTitle: SUNFLOWER.title, oldSourceUrl: SUNFLOWER.url, oldQuote: SUNFLOWER.passage, supersededBy: EXPLAIN_VERSION, reasons: ['the passage names sunflower seeds, not sunflower oil'],
     });
     expect((audit.withdrawnAt as Timestamp).toDate()).toEqual(NOW);
-    expect(m.docs.get('knowledge/cat_ingredient_sunflower-oil')).toMatchObject({ version: 'explain-1.2.0', supersededBy: EXPLAIN_VERSION });
+    // Its version is set aside, so the sweep of earlier explanations moves on past it.
+    expect(m.docs.get('knowledge/cat_ingredient_sunflower-oil')).toMatchObject({ version: 'withdrawn explain-1.2.0', supersededBy: EXPLAIN_VERSION });
     // Read again before it is made again: still missing, and not withdrawn a second time.
     expect((await readExplanations(m.db, keys, NOW)).has('cat_ingredient_sunflower-oil')).toBe(false);
     expect(m.commits).toHaveLength(1);
@@ -380,5 +383,70 @@ describe('explanations made under the earlier rules', () => {
     down.fail(10);
     expect((await readExplanations(down.db, keys, NOW)).size).toBe(0);
     expect(down.commits).toEqual([]);
+  });
+});
+
+describe('review of the claim checks (2026-10-30)', () => {
+  const page = (body: string, title = 'TEST FIXTURE page about dogs', url = 'https://vcahospitals.com/test-fixture/x') => readPage(fixturePage(title, body), url);
+  it('a quote is matched with its numbers: a changed percentage is not the page’s passage', () => {
+    const p = page('In feeding trials, diets with up to 2% guar gum were well tolerated by adult dogs.');
+    // A misquoted number is never stored or shown: the passage is the page's own sentence, and the claim fails on it.
+    expect(quoteOnPage(p, 'diets with up to 20% guar gum were well tolerated by adult dogs')).toBe('In feeding trials, diets with up to 2% guar gum were well tolerated by adult dogs.');
+    expect(quoteOnPage(p, 'diets with up to 2% guar gum were well tolerated by adult dogs')).toBe('In feeding trials, diets with up to 2% guar gum were well tolerated by adult dogs.');
+    const r = checkClaim({ term: 'Guar Gum', species: 'dog', page: p, now: NOW, claim: { claim_type: 'risk', claim: 'Diets with up to 20% guar gum were well tolerated by adult dogs.', citation_url: 'https://vcahospitals.com/test-fixture/x', citation_title: 'TEST FIXTURE', citation_passage: 'diets with up to 20% guar gum were well tolerated by adult dogs', ingredient_words_in_passage: 'guar gum', source_is_about: 'dogs', dose_or_exposure: 'up to 20% of the diet' } });
+    expect(r.ok).toBe(false);
+  });
+  it('the passage is the page’s whole sentence, so a negation or condition is never cut off', () => {
+    const myth = page('It is a myth that carrageenan causes intestinal cancer in cats; no study in cats has shown this.', 'TEST FIXTURE page about cats');
+    expect(quoteOnPage(myth, 'carrageenan causes intestinal cancer in cats')).toBe('It is a myth that carrageenan causes intestinal cancer in cats; no study in cats has shown this.');
+    const only = page('Guar gum is safe for cats only at the low amounts used to thicken food.', 'TEST FIXTURE page about cats');
+    expect(quoteOnPage(only, 'Guar gum is safe for cats')).toBe('Guar gum is safe for cats only at the low amounts used to thicken food.');
+  });
+  it('a longer substance name is another form: oil cake, oil meal, extract', () => {
+    expect(formMatch('Sunflower Oil', { passage: 'Sunflower oil cake is a protein-rich by-product of oil extraction.' }).match).not.toBe('exact');
+    expect(formMatch('Soybean Oil', { passage: 'Soybean oil meal is a common plant protein source in dog foods.' }).match).not.toBe('exact');
+    expect(formMatch('Rosemary', { passage: 'Rosemary extract is used as a natural preservative.' }).match).not.toBe('exact');
+    expect(formMatch('Green Tea', { passage: 'Green tea extract has been linked to liver injury in dogs.' }).match).not.toBe('exact');
+    expect(formMatch('Sunflower Oil', { passage: 'Sunflower oil is a source of linoleic acid.' }).match).toBe('exact');
+  });
+  it('vitamin E the nutrient and mixed tocopherols the preservative are not each other’s synonyms', () => {
+    expect(formMatch('Vitamin E Supplement', { passage: 'Mixed tocopherols are used as natural preservatives.' }).match).not.toBe('synonym');
+    expect(formMatch('Mixed Tocopherols', { passage: 'Vitamin E (alpha-tocopherol) is an essential nutrient.' }).match).not.toBe('synonym');
+    expect(formMatch('Mixed Tocopherols', { passage: 'Tocopherols are added as preservatives to keep fats fresh.' }).match).toBe('synonym');
+  });
+  it('an English name that is another form of the label’s own words is not its translation', () => {
+    expect(formMatch('Sunflower Oil', { passage: 'Sunflower seeds are a source of methionine.' }, 'sunflower seeds').match).not.toBe('synonym');
+    expect(formMatch('Huile de tournesol', { passage: 'Sunflower oil is a source of linoleic acid.' }, 'sunflower oil').match).toBe('synonym');
+  });
+  it('other pets are not cats or dogs; hot dogs are not dogs; the model’s title can only make the scope stricter', () => {
+    const scope = (title: string, url: string, passage: string) => sourceScope({ title, url, passage }).scope;
+    expect(scope('Vitamin D3 and Calcium for Pet Reptiles', 'https://vcahospitals.com/test-fixture/reptiles', 'Vitamin D3 supplementation helps pet reptiles kept indoors absorb calcium.')).toBe('other_species');
+    expect(scope('Carrageenan in processed meats', 'https://www.ncbi.nlm.nih.gov/pmc/articles/test-fixture', 'Carrageenan is used in hot dogs and other processed meats.')).not.toBe('dog');
+    // A passing mention of another animal in a passage about cats does not make it a page about that animal.
+    expect(scope('Nutrition in Cats', 'https://www.merckvetmanual.com/test-fixture/nutrition-in-cats', 'Unlike dogs and pigs, cats cannot make enough taurine and must get it from their food.')).not.toBe('other_species');
+    expect(scope('TEST FIXTURE', 'https://vcahospitals.com/test-fixture/lamb', 'Lamb meal, made from sheep, is often used as a novel protein in diets for dogs.')).toBe('dog');
+    // eCFR animal-feed parts are animal-feed evidence.
+    expect(scope('21 CFR 573.620', 'https://www.ecfr.gov/current/title-21/chapter-I/subchapter-E/part-573/section-573.620', 'Menadione dimethylpyrimidinol bisulfite may be safely used in animal feed as a nutritional supplement source of vitamin K activity.')).toBe('animal_feed');
+    // "Pets" in general support no benefit or risk for cats or dogs.
+    expect(scopeProblem('benefit', 'It helps pets absorb calcium.', 'It helps pets kept indoors absorb calcium.', { scope: 'pets', about: 'pets', adj: 'pet' }, 'dog')).toMatch(/pets in general/);
+    // A page about people (no species in its title or passage) is not made a cat page by the model's own title for it.
+    const p = readPage(fixturePage('LiverTox: Menadione', 'Menadione given in high doses has caused liver injury.'), 'https://www.ncbi.nlm.nih.gov/books/test-fixture-livertox-menadione/');
+    const r = checkClaim({ term: 'Menadione Sodium Bisulfite Complex', species: 'cat', page: p, now: NOW, claim: { claim_type: 'risk', claim: 'Menadione given in high doses has caused liver injury.', citation_url: 'https://www.ncbi.nlm.nih.gov/books/test-fixture-livertox-menadione/', citation_title: 'Menadione toxicity in cats', citation_passage: 'Menadione given in high doses has caused liver injury.', ingredient_words_in_passage: 'menadione', source_is_about: 'cats', dose_or_exposure: 'high doses' } });
+    expect(r).toMatchObject({ ok: false, reason: expect.stringMatching(/does not say it is about cats, dogs or pets/) });
+  });
+  it('product-naming rules are recognised by their structure, and ordinary passages are not', () => {
+    for (const t of [
+      'If it says beef, chicken or mackerel, the food must be true to its major ingredients, and it cannot rely on less expensive byproducts.',
+      'For example, in "Mackerel Dinner for Cats," mackerel must be at least 25% of the product.',
+      'A product labeled "Cat Food with Mackerel" must contain at least 3% mackerel.',
+      'Products such as "Mackerel Cat Food" must consist of at least 95 percent mackerel, not counting water.',
+    ]) expect([t, isNamingRule(t)]).toEqual([t, true]);
+    for (const t of ['Despite the word meal in the name, chicken meal is a concentrated source of protein for dogs.', 'An amino acid named taurine must be supplied in the diet of cats.'])
+      expect([t, isNamingRule(t)]).toEqual([t, false]);
+  });
+  it('a dose hidden in a name (D3, B12, omega-3) is still an invented number', () => {
+    const p = page('Cholecalciferol (vitamin D3) is toxic to dogs even at low doses.');
+    const r = checkClaim({ term: 'Vitamin D3 Supplement', species: 'dog', page: p, now: NOW, claim: { claim_type: 'risk', claim: 'Vitamin D3 supplement is toxic to dogs at doses above 3 mg/kg.', citation_url: 'https://vcahospitals.com/test-fixture/x', citation_title: 'TEST FIXTURE', citation_passage: 'Cholecalciferol (vitamin D3) is toxic to dogs even at low doses.', ingredient_words_in_passage: 'vitamin D3', source_is_about: 'dogs', dose_or_exposure: null } });
+    expect(r).toMatchObject({ ok: false, reason: expect.stringMatching(/number that is not in the passage \(3\)/) });
   });
 });

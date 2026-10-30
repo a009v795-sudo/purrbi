@@ -69,7 +69,17 @@ function visibleText(html: string): string {
   );
 }
 
-const quoteKey = (q: string) => normalizeIngredientName(q).replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+/** Case, accents, punctuation and markup gaps do not matter; numbers (with their decimals) and per cent signs do: "2% guar gum" is not "20% guar gum". */
+const quoteKey = (q: string) =>
+  q
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/(\d)[.,](?=\d)/g, '$1d')
+    .replace(/\bper ?cent\b|%/g, ' pct ')
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 
 export interface FetchedPage {
   finalUrl: string;
@@ -78,6 +88,7 @@ export interface FetchedPage {
   key: string; // the whole page, normalised like quoteKey
   sentences: string[]; // sentences of 25–600 characters, to find a passage in
   all: string[]; // every sentence and heading in page order, for the sentences around a passage
+  allKeys?: string[]; // quoteKey of each of `all`
 }
 
 /** What fetching a cited page gave: the page, a file Purrbi cannot read as a page (a PDF), or why it could not be fetched. */
@@ -163,18 +174,34 @@ export function readPage(html: string, finalUrl: string): FetchedPage {
     key: quoteKey(text).slice(0, 600000),
     sentences: all.filter((x) => x.length >= 25 && x.length <= 600),
     all,
+    allKeys: all.map(quoteKey),
   };
 }
 
 /**
- * The passage as it appears on the page: the model's text when it is there word for word (ignoring case
- * and punctuation), otherwise the page's own sentence (or two sentences) containing nearly all of its
- * words, or null.
+ * The page's own whole sentence (or the fewest consecutive sentences, up to four) that contain a quote: a
+ * fragment never stands for its sentence ("carrageenan causes cancer in cats" out of "It is a myth that
+ * carrageenan causes cancer in cats").
+ */
+function containingSentences(page: FetchedPage, q: string): string | null {
+  const keys = page.allKeys ?? page.all.map(quoteKey);
+  for (let len = 1; len <= 4; len++) {
+    for (let i = 0; i + len <= keys.length; i++) {
+      if (` ${keys.slice(i, i + len).join(' ')} `.includes(` ${q} `)) return page.all.slice(i, i + len).join(' ');
+    }
+  }
+  return null;
+}
+
+/**
+ * The passage as the page prints it, never the model's copy: the page's whole sentence(s) containing the
+ * quote word for word (ignoring case and punctuation, but not numbers), otherwise the page's own sentence
+ * (or two sentences) containing nearly all of its words, or null.
  */
 export function quoteOnPage(page: FetchedPage, quote: string): string | null {
   const q = quoteKey(quote);
   if (!q) return null;
-  if (page.key.includes(q)) return quote;
+  if (page.key.includes(q)) return containingSentences(page, q);
   const words = q.split(' ');
   const wanted = new Set(words);
   const closest = (candidates: string[]) => {
@@ -252,6 +279,11 @@ function matchWords(text: string): string[] {
 }
 
 const hasPhrase = (hay: string[], needle: string[]) => needle.length > 0 && hay.some((_, i) => needle.every((w, j) => hay[i + j] === w));
+/** Nouns that make another product of a named plant or animal: "sunflower oil cake", "soybean oil meal", "rosemary extract". */
+const DERIVATIVE = new Set(['oil', 'cake', 'meal', 'extract', 'seed', 'hull', 'protein', 'isolate', 'concentrate', 'fiber', 'flour', 'juice', 'germ', 'bran', 'gluten', 'starch', 'hydrolysate', 'pulp', 'molasse', 'lecithin', 'leaf', 'root']);
+/** The label's words as a phrase of their own: not followed by a word that makes it another product. */
+const namesForm = (hay: string[], needle: string[]) =>
+  needle.length > 0 && hay.some((_, i) => needle.every((w, j) => hay[i + j] === w) && !(DERIVATIVE.has(hay[i + needle.length] ?? '') && !needle.includes(hay[i + needle.length])));
 
 /**
  * Other names for the same substance or form, by label form. A related form (the seeds for the oil, juice
@@ -265,7 +297,8 @@ const SYNONYMS: [string[], string[]][] = [
   [['pyridoxine hydrochloride', 'pyridoxine hcl'], ['pyridoxine', 'vitamin b6']],
   [['riboflavin supplement', 'riboflavin'], ['riboflavin', 'vitamin b2']],
   [['vitamin d3 supplement', 'vitamin d3'], ['cholecalciferol', 'vitamin d3']],
-  [['vitamin e supplement', 'vitamin e'], ['vitamin e', 'tocopherol', 'alpha tocopheryl acetate', 'alpha tocopherol']],
+  // Vitamin E the nutrient (alpha-tocopherol, its acetate) is not the mixed tocopherols used as a preservative.
+  [['vitamin e supplement', 'vitamin e'], ['vitamin e', 'alpha tocopheryl acetate', 'dl alpha tocopheryl acetate', 'tocopheryl acetate', 'alpha tocopherol']],
   [['vitamin a supplement', 'vitamin a acetate', 'vitamin a'], ['vitamin a', 'retinyl acetate']],
   [['vitamin b12 supplement', 'vitamin b12'], ['vitamin b12', 'cobalamin', 'cyanocobalamin']],
   [['niacin supplement', 'niacin'], ['niacin', 'vitamin b3', 'nicotinic acid']],
@@ -282,7 +315,7 @@ const SYNONYMS: [string[], string[]][] = [
   [['xanthan gum'], ['e 415']],
   [['carrageenan'], ['e 407']],
   [['natural flavor', 'natural flavoring'], ['natural flavor', 'natural flavoring']],
-  [['mixed tocopherols'], ['tocopherols']],
+  [['mixed tocopherols'], ['natural tocopherols', 'tocopherols + preservative', 'tocopherols + preserved']],
 ];
 const SYNONYM_WORDS = SYNONYMS.map(([forms, names]) => [forms.map(matchWords), names] as const);
 
@@ -318,7 +351,9 @@ function synonymsOf(form: string[]): string[] {
 }
 
 const synonymIn = (zone: string[], name: string) =>
-  name.includes(' + ') ? name.split(' + ').every((part) => hasPhrase(zone, matchWords(part))) : hasPhrase(zone, matchWords(name));
+  name.includes(' + ') ? name.split(' + ').every((part) => hasPhrase(zone, matchWords(part))) : namesForm(zone, matchWords(name));
+/** A passage that refers back to what the sentence before it named ("It is used …"), so that sentence counts too. */
+const REFERS_BACK = /^\s*(it|its|this|these|they|them|such|the ingredient|the additive|the compound)\b/i;
 
 /** Phrases in the passage around the ingredient's own words, aligned to its length: "sunflower seeds" for "sunflower oil". */
 function namedNear(passage: string, want: string[]): string[] {
@@ -350,10 +385,15 @@ export interface FormResult {
  */
 export function formMatch(term: string, zones: { passage: string; before?: string; after?: string }, englishName = ''): FormResult {
   const own = matchWords(baseForm(term));
-  const english = matchWords(baseForm(englishName));
-  const texts = [zones.passage, zones.before ?? '', zones.after ?? ''];
+  // The English name counts only as a translation of a label in another language: one that shares a
+  // distinctive word with the label ("sunflower seeds" for "Sunflower Oil") is another form, not its name.
+  const distinctive = (ws: string[]) => ws.filter((w) => w.length >= 3 && !STOP.has(w) && !GENERIC.has(w));
+  const englishRaw = matchWords(baseForm(englishName));
+  const english = distinctive(englishRaw).some((w) => own.includes(w)) ? [] : englishRaw;
+  // The sentences around the passage count only when the passage refers back to them ("It is …").
+  const texts = [zones.passage, ...(REFERS_BACK.test(zones.passage) ? [zones.before ?? ''] : []), zones.after && REFERS_BACK.test(zones.after) ? zones.after : ''];
   const words = texts.map(matchWords);
-  if (words.some((z) => hasPhrase(z, own))) return { match: 'exact', named: baseForm(term) };
+  if (words.some((z) => namesForm(z, own))) return { match: 'exact', named: baseForm(term) };
   const names = [...synonymsOf(own), ...(english.length && english.join(' ') !== own.join(' ') ? [english.join(' '), ...synonymsOf(english)] : [])];
   for (const name of names) if (words.some((z) => synonymIn(z, name))) return { match: 'synonym', named: name.replace(' + ', ' ') };
   for (const text of texts) {
@@ -392,6 +432,10 @@ const OTHER_SPECIES: { about: string; adj: string; words: string[] }[] = [
   { about: 'horses', adj: 'horse', words: ['horse', 'horses', 'equine', 'equines', 'foal', 'foals', 'pony', 'ponies'] },
   { about: 'farmed fish', adj: 'aquaculture', words: ['aquaculture', 'fish farming', 'farmed fish', 'fish feed'] },
   { about: 'laboratory animals', adj: 'laboratory-animal', words: ['rat', 'rats', 'mouse', 'mice', 'rodent', 'rodents', 'laboratory animal', 'laboratory animals'] },
+  { about: 'birds', adj: 'bird', words: ['bird', 'birds', 'avian', 'parrot', 'parrots', 'budgie', 'budgies', 'cockatiel', 'cockatiels', 'canary', 'canaries', 'pet bird', 'pet birds'] },
+  { about: 'reptiles', adj: 'reptile', words: ['reptile', 'reptiles', 'lizard', 'lizards', 'tortoise', 'tortoises', 'turtle', 'turtles', 'snake', 'snakes', 'bearded dragon', 'bearded dragons', 'iguana', 'iguanas'] },
+  { about: 'small mammals', adj: 'small-mammal', words: ['rabbit', 'rabbits', 'ferret', 'ferrets', 'hamster', 'hamsters', 'chinchilla', 'chinchillas', 'gerbil', 'gerbils', 'small mammal', 'small mammals', 'exotic pet', 'exotic pets'] },
+  { about: 'aquarium fish', adj: 'aquarium-fish', words: ['aquarium', 'aquariums', 'ornamental fish', 'koi', 'goldfish'] },
 ];
 /** After an animal's name, these make it an ingredient ("poultry fat", "porcine plasma", "pig ears") or a poison ("rat bait"), not who the page is about. */
 const INGREDIENT_NOUNS =
@@ -400,9 +444,14 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const NUTRITION = /\b(nutrition|nutritional|nutrient|nutrients|diet|diets|dietary|feeding|requirement|requirements)\b/;
 const FOOD_ADDITIVE = /\bfood additives?\b/;
 const HUMAN_MARKERS = /\be \d{3}[a-z]?\b|\b1333 2008\b|\bhuman consumers?\b|\badi\b|\bacceptable daily intake\b|\bdietary exposure\b/;
-const FEED = /\bfeed additives?\b|\ball animal species\b|\btarget species\b|\banimal nutrition\b|\bfeedap\b/;
+const FEED = /\bfeed additives?\b|\ball animal species\b|\btarget species\b|\banimal nutrition\b|\bfeedap\b|\banimal feeds?\b|\banimal foods?\b|\bfeed and drinking water\b|\bin feed for animals\b/;
+/** eCFR Title 21 parts 570–589 (food additives and substances for animal food), FDA's animal-food pages. */
+const FEED_PATH = /\/title-21\/[^ ]*\bpart-5(?:[78]\d)\b|\/animal-veterinary\//;
 const CAT = /\b(cats?|feline|felines|kittens?)\b/;
 const DOG = /\b(dogs?|canine|canines|pupp(?:y|ies))\b/;
+/** "Hot dogs" and "corn dogs" are foods for people. */
+const notDogs = (t: string) => t.replace(/\b(hot|corn|chili|chilli) dogs?\b/g, ' ');
+const PET_FOOD = /\bpet ?(?:foods?|feeds?|treats?)\b/;
 const PETS = /\b(pets?|pet ?foods?|companion animals?)\b/;
 /** A claim or passage that is about pets: pet food, cats or dogs. */
 const PET_WORDS = /\b(pets?|pet ?foods?|pet ?feeds?|cats?|dogs?|kittens?|pupp(?:y|ies)|feline|felines|canine|canines|companion animals?)\b/i;
@@ -428,17 +477,24 @@ export function sourceScope(s: { title: string; url: string; passage: string; in
   } catch {
     // not a link: title and passage only
   }
-  const text = plain(`${s.title} . ${path} . ${s.passage}`);
+  const text = notDogs(plain(`${s.title} . ${path} . ${s.passage}`));
+  const heading = notDogs(plain(`${s.title} . ${path}`));
+  const statement = notDogs(plain(s.passage));
   const own = new Set(matchWords(s.ingredient ?? ''));
+  // Another animal decides the scope when the page is about it, or when the passage is about it alone: a
+  // passage about cats or dogs that mentions another animal in passing ("unlike pigs, cats …", "lamb meal,
+  // made from sheep, … for dogs") stays about cats or dogs.
+  const aboutCatsOrDogs = CAT.test(statement) || DOG.test(statement);
   for (const g of OTHER_SPECIES) {
     const alts = g.words.filter((w) => !w.split(' ').some((x) => own.has(fold(x))));
-    if (alts.length && new RegExp(`\\b(?:${alts.map(escapeRe).join('|')})\\b(?!\\s+(?:s\\s+)?(?:${INGREDIENT_NOUNS})\\b)`).test(text)) {
+    const re = new RegExp(`\\b(?:${alts.map(escapeRe).join('|')})\\b(?!\\s+(?:s\\s+)?(?:${INGREDIENT_NOUNS})\\b)`);
+    if (alts.length && (re.test(heading) || (re.test(statement) && !aboutCatsOrDogs))) {
       return NUTRITION.test(text) ? { scope: 'other_species', about: `${g.adj.replace(/-/g, ' ')} nutrition`, adj: `${g.adj}-nutrition` } : { scope: 'other_species', about: g.about, adj: g.adj };
     }
   }
   if (host === 'ods.od.nih.gov') return { scope: 'people', about: 'people', adj: 'human' };
   if (/\bregulation ec no 1333 2008\b/.test(text) || (FOOD_ADDITIVE.test(text) && HUMAN_MARKERS.test(text))) return { scope: 'people', about: 'human food additives', adj: 'human food-additive' };
-  if (FEED.test(text)) return { scope: 'animal_feed', about: 'animal feed', adj: 'animal-feed' };
+  if (FEED.test(text) || (FEED_PATH.test(path) && !CAT.test(text) && !DOG.test(text) && !PET_FOOD.test(text))) return { scope: 'animal_feed', about: 'animal feed', adj: 'animal-feed' };
   const cat = CAT.test(text);
   const dog = DOG.test(text);
   if (cat && dog) return { scope: 'cat_and_dog', about: 'cats and dogs', adj: 'cat and dog' };
@@ -501,6 +557,8 @@ export function scopeProblem(type: ClaimType, claim: string, passage: string, so
   if (scope === 'people') return `${humanEvidence} cannot support a ${type} claim for cats or dogs`;
   if (scope === 'not_species_specific') return `the source does not say it is about cats, dogs or pets, which a ${type} claim needs`;
   if (scope === 'animal_feed') return type === 'risk' && SAFETY.test(claim) ? null : 'an animal-feed assessment supports safety or tolerance statements only';
+  // "Pets" in general include birds, reptiles and small mammals: only pet food speaks for cats and dogs.
+  if (scope === 'pets' && !PET_FOOD.test(plain(passage))) return `the source is about pets in general, not cats or dogs, which a ${type} claim needs`;
   if (scope === 'cat' && species === 'dog') return 'source is about cats, but this product is for dogs';
   if (scope === 'dog' && species === 'cat') return 'source is about dogs, but this product is for cats';
   return null;
@@ -508,16 +566,21 @@ export function scopeProblem(type: ClaimType, claim: string, passage: string, so
 
 // ---- 5. product-naming rules -------------------------------------------------------------------------
 
+// What a product's name or label title must contain, by the rule's structure (FDA and AAFCO wording): the
+// name "must …"; a title in quotes, or what a product is labeled, called or says, followed by what it must
+// contain or be; the 95%, 25% and 3% rules; "true to its major ingredients"; the dinner/with/flavor rules.
 const NAMING = [
   /\bthe (?:product )?names? (?:must|should|has to|have to|needs? to|cannot|can ?not|may not|may only)\b/,
-  /\bproduct names?\b/,
-  /\b(?:in|of) (?:the|a) (?:product s )?name\b/,
-  /\bnamed\b[^.]{0,80}\b(?:must|at least|percent|rule)\b/,
-  /\b(?:95|25|3) ?(?:%|percent)[^.]{0,120}\b(?:name|named|title)\b/,
-  /\b(?:name|named|title)\b[^.]{0,120}\b(?:95|25|3) ?(?:%|percent)/,
-  /\bwith rule\b/,
-  /\bflavou?r rule\b/,
-  /\b(?:dinner|entree|platter|formula|recipe|nuggets) rule\b/,
+  /\bproduct names?\b[^.]{0,120}\b(?:must|at least|percent)\b/,
+  /\b(?:products?|foods?|treats?|labels?|cans?|bags?)\b[^.]{0,40}\b(?:labell?ed|called|named|titled|says|reads)\b[^.]{0,80}\bmust (?:contain|consist|include|be at least|be true|have)\b/,
+  /\b(?:if|when) (?:it|the label|the product|the name) (?:says|reads|is called)\b[^.]{0,120}\bmust\b/,
+  /\btrue to its (?:major|main) ingredients?\b/,
+  // (quotes are gone by now: "Mackerel Cat Food" must consist of at least 95 percent mackerel)
+  /\bmust (?:contain|consist of|include|be|make up) (?:at least )?(?:95|25|3) ?(?:%|percent)\b/,
+  /\b(?:dinner|entree|platter|formula|recipe|nuggets|flavou?r)\b[^.]{0,80}\bmust\b[^.]{0,40}\b\d+ ?(?:%|percent)/,
+  /\b(?:95|25|3) ?(?:%|percent)[^.]{0,120}\b(?:name|named|title|labell?ed|called)\b/,
+  /\b(?:name|named|title|labell?ed|called)\b[^.]{0,120}\b(?:95|25|3) ?(?:%|percent)/,
+  /\b(?:with|flavou?r|dinner|entree|platter|formula|recipe|nuggets) rule\b/,
 ];
 export const NAMING_REASON = 'a product-naming rule, not about an ingredient-list entry';
 
@@ -572,7 +635,8 @@ function amounts(text: string): string[] {
 
 /** Amounts a claim states that its passage (or the label form) does not: an invented number. */
 export function inventedNumbers(claim: string, passage: string, term = ''): string[] {
-  const have = new Set([...`${passage} ${term}`.matchAll(NUM)].map((m) => canonNumber(m[0])));
+  // Only the passage's (and label's) amounts count: the 3 of "vitamin D3" or "omega-3" is not a dose.
+  const have = new Set(amounts(`${passage} ${term}`));
   return [...new Set(amounts(claim).filter((n) => !have.has(n)))];
 }
 
@@ -637,7 +701,10 @@ export function checkClaim(o: { term: string; englishName?: string; species: Exp
   if (form.match !== 'exact' && form.match !== 'synonym') return reject(formReason(o.term, form, englishName), 'substance');
   const invented = inventedNumbers(text, shown, o.term);
   if (invented.length) return reject(`the claim has a number that is not in the passage (${invented.join(', ')})`, 'substance');
-  let source = sourceScope({ title: `${page.title} . ${c.citation_title ?? ''}`, url: finalUrl, passage: shown, ingredient: `${o.term} ${englishName}` });
+  // The page's own title decides; the model's title for it can only make the scope stricter (another animal or people).
+  let source = sourceScope({ title: page.title, url: finalUrl, passage: shown, ingredient: `${o.term} ${englishName}` });
+  const byTitle = c.citation_title ? sourceScope({ title: c.citation_title, url: '', passage: '', ingredient: `${o.term} ${englishName}` }) : null;
+  if (byTitle && (byTitle.scope === 'other_species' || byTitle.scope === 'people') && stricterScope(source.scope, byTitle.scope, o.species) !== source.scope) source = byTitle;
   if (finalUrl !== url) {
     const cited = sourceScope({ title: '', url, passage: '', ingredient: `${o.term} ${englishName}` });
     if (stricterScope(source.scope, cited.scope, o.species) !== source.scope) source = cited;
@@ -712,7 +779,7 @@ const JUDGE_SYSTEM = [
   'supported: yes when the passage, read with the sentences around it, states everything the claim says about this ingredient; partly when it supports only part of the claim; no when it does not support the claim, or supports it only for another ingredient or form.',
   'narrowed_claim: when partly, one plain sentence that says only what the passage supports about this ingredient, with no number that is not in the passage, saying where the evidence is from when it is about people or other animals; otherwise an empty string.',
   'form_match: exact when the passage names this exact ingredient or chemical form; synonym when it names the same substance another way (vitamin K3 for menadione, E 412 for guar gum); related when it names a related but different form (seeds or meal for an oil, juice or another broth for a broth, a vitamin or parent compound for one of its salts or complexes); different when it is about something else.',
-  'species_scope: who the passage’s statement is about: cat, dog, cat_and_dog, pets (pet food or companion animals in general), animal_feed (a feed-additive or feed-safety assessment for animals generally), other_species (pigs, poultry, cattle, horses, farmed fish, laboratory or other animals), people (human food, human food additives, human nutrition or health), not_species_specific (a general statement about the substance).',
+  'species_scope: who the passage’s statement is about: cat, dog, cat_and_dog, pets (pet food, or cats and dogs together with other pets; not birds, reptiles or small mammals alone, which are other_species), animal_feed (a feed-additive or feed-safety assessment for animals generally), other_species (pigs, poultry, cattle, horses, farmed fish, laboratory or other animals), people (human food, human food additives, human nutrition or health), not_species_specific (a general statement about the substance).',
   'Evidence about other species or people never supports a benefit, risk or safety claim for cats or dogs, and a human food-additive evaluation never supports a claim about pet food or feed. A rule about what a product’s name must contain does not support a claim about an ingredient in the ingredient list. Feeding advice for pets with a disease does not explain an ingredient.',
   'dose_context: the dose, amount, duration or exposure the passage’s statement depends on, in its own words, or an empty string. When the claim leaves out a dose or exposure condition the passage states, answer partly and keep the condition in the narrowed claim.',
   'reason: one short sentence. Return one verdict per claim, with its id.',

@@ -51,6 +51,7 @@ import {
   saveLabelExtraction,
   saveVerdict,
   stripPrivate,
+  sweepLegacyExplanations,
   Timestamp,
   writeExplanations,
   writeProduct,
@@ -784,7 +785,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       if (failed.length === settled.length) throw failed[0].reason;
       for (const f of failed) job.diagnosticNotes.push(`Explanations not run for one batch: ${errorDetail((f.reason as Error).message)}`);
       const fresh = settled.flatMap((r) => (r.status === 'fulfilled' ? r.value : []));
-      await writeExplanations(db, fresh);
+      await writeExplanations(db, fresh, deps.now());
       applyExplanations(general, new Map(fresh.map((e) => [e.key, e])), species);
       collectClaims(fresh, claimsByTerm);
       job.explanationsNew = fresh.filter((e) => e.status === 'verified').length;
@@ -979,6 +980,8 @@ async function cachedExplanations(deps: Deps, general: GeneralAssessment, scope:
   // Nothing is paid for until it is known who the product is for (or once it is out of scope).
   const requests = scope.status === 'supported' ? explainRequests(general, parsed).slice(0, MAX_CACHE_LOOKUPS) : [];
   const empty = { requests, missing: [], cachedCount: 0, looked: new Set<string>(), verified: new Set<string>() };
+  // A few explanations from earlier rules that no scan asks for any more are withdrawn with an audit record.
+  if (scope.status === 'supported') await sweepLegacyExplanations(deps.db, now).catch(() => undefined);
   if (!requests.length) return { ...empty, status: 'not_needed' };
   const cache = await readExplanations(deps.db, requests.map((r) => explanationKey(species, r.kind, r.term)), now);
   const cachedCount = applyExplanations(general, cache, species);

@@ -10,6 +10,7 @@ import type { ProductFacts, RecallCheck } from '../../src/domain/types';
 import { EXPLAIN_VERSION, explanationKey } from '../../src/knowledge/explain';
 import { ASSESSMENT_VERSION, DEFAULT_LIMITS, type RuntimeConfig } from '../../src/pipeline/config';
 import { handleScanUpdate, processPhoto, processScan, type Deps, type Sources } from '../../src/pipeline/scanJob';
+import { writeExplanations } from '../../src/pipeline/store';
 import type { OpenFactsDb, OpenFactsLookup } from '../../src/sources/openFacts';
 import { RESEARCH_VERSION } from '../../src/sources/research';
 import { SCOPE_VERSION } from '../../src/domain/scope';
@@ -1237,5 +1238,28 @@ describe('explanations reach every row that asks for them', () => {
     expect(s.explanationsQueued).toBe(false);
     expect(s.ingredientRows.find((r: { name: string }) => r.name === 'Mannan-Oligosaccharides').sources.length).toBeGreaterThan(0);
     expect(calls.research ?? 0).toBe(0); // no source read again
+  });
+});
+
+describe('explanations shown under earlier rules all get an audit record', () => {
+  const legacy = (term: string, status: string) => ({ key: '', term, kind: 'ingredient', species: 'cat', status, summary: status === 'verified' ? 'TEST FIXTURE summary shown under the earlier rules.' : '', role: '', sourceTitle: 'TEST FIXTURE page', sourceUrl: 'https://vcahospitals.com/test-fixture', quote: 'TEST FIXTURE quote.', reason: '', checkedAt: NOW.toISOString(), model: 'mock', version: 'explain-1.2.0' });
+  it('a term no scan asks for any more (tuna broth is now in the role table) is withdrawn by the sweep; one never shown is removed', async () => {
+    await db.doc('knowledge/cat_ingredient_tuna-broth').set({ ...legacy('Tuna Broth', 'verified'), key: 'cat_ingredient_tuna-broth' });
+    await db.doc('knowledge/cat_ingredient_mystery').set({ ...legacy('Mystery', 'unverified'), key: 'cat_ingredient_mystery' });
+    const ref = await newScan('u1', BC.food, 'cat2');
+    await processScan(deps(), 'u1', ref.id);
+    const audit = await db.doc('knowledgeAudit/cat_ingredient_tuna-broth__explain-1.2.0').get();
+    expect(audit.exists).toBe(true);
+    expect(audit.get('oldSummary')).toBe('TEST FIXTURE summary shown under the earlier rules.');
+    expect((await db.doc('knowledge/cat_ingredient_tuna-broth').get()).get('version')).toBe('withdrawn explain-1.2.0');
+    expect((await db.doc('knowledge/cat_ingredient_mystery').get()).exists).toBe(false);
+  });
+  it('an earlier explanation overwritten without having been withdrawn gets its audit record in the same write', async () => {
+    await db.doc('knowledge/cat_ingredient_taurine').set({ ...legacy('Taurine', 'verified'), key: 'cat_ingredient_taurine', claims: [{ claimType: 'identity', claim: 'TEST FIXTURE claim.' }] });
+    await writeExplanations(db, [{ key: 'cat_ingredient_taurine', term: 'Taurine', kind: 'ingredient', species: 'cat', status: 'verified', claims: [], rejected: [], summary: 'TEST FIXTURE new.', role: '', sourceTitle: '', sourceUrl: '', quote: '', reason: '', checkedAt: NOW.toISOString(), model: 'mock', judgeModel: 'mock', version: EXPLAIN_VERSION }], NOW);
+    const audit = await db.doc('knowledgeAudit/cat_ingredient_taurine__explain-1.2.0').get();
+    expect(audit.exists).toBe(true);
+    expect(audit.get('oldClaims')).toHaveLength(1);
+    expect((await db.doc('knowledge/cat_ingredient_taurine').get()).get('version')).toBe(EXPLAIN_VERSION);
   });
 });
