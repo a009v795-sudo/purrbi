@@ -67,12 +67,11 @@ export function explanationFields(general: GeneralAssessment, status: string): R
 }
 
 const RESULT_LABELS: Record<ResultState, string> = {
-  strong: 'Strong label information',
-  good: 'Good label information',
-  review: 'Review the details',
-  low: 'Significant gaps or concerns',
+  strong: 'Strong',
+  good: 'Good',
+  review: 'Fair',
+  low: 'Weak',
   alert: 'Official recall match',
-  partial: 'Partial assessment',
   incomplete: 'Information incomplete',
   unresolved: 'Not yet confirmed for cats or dogs',
   out_of_scope: 'Not a cat or dog product',
@@ -109,17 +108,15 @@ export function resultFields(args: {
     outOfScopeKind: scope.outOfScopeKind ?? '',
 
     resultState: args.state,
-    resultLabel: RESULT_LABELS[args.state],
+    resultLabel: general.criticalConcerns.length && args.state === 'low' ? 'Serious concern' : RESULT_LABELS[args.state],
     scoreAvailable: general.score !== null,
     // The app shows scoreText, never score alone: an unscored result is never displayed as 0.
     score: general.score ?? 0,
-    // A partial assessment shows the range the complete label could give, never a bare number that reads as final.
-    scoreText:
-      general.score === null
-        ? general.scoreApplicable ? 'Unscored' : 'Not scored'
-        : general.scoreLabel === 'Partial assessment' && general.scoreMinPossible != null && general.scoreMaxPossible != null && general.scoreMinPossible !== general.scoreMaxPossible
-          ? `${general.scoreMinPossible}–${general.scoreMaxPossible}`
-          : String(general.score),
+    // One supported number, or none: what the score covers is shown apart from it (coverageText), never as a range.
+    scoreText: general.score === null ? (general.scoreApplicable ? 'Unscored' : 'Not scored') : String(general.score),
+    ratingColor: general.ratingColor,
+    coverageText: general.coverageText,
+    criticalConcerns: general.criticalConcerns,
     scoreMaxPossible: general.scoreMaxPossible ?? 0,
     scoreMinPossible: general.scoreMinPossible ?? 0,
     scoreCoverage: general.scoreCoverage ?? 0,

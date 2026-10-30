@@ -361,6 +361,12 @@ export interface GeneralAssessment {
   scoreMinPossible?: number | null;
   /** one line on what the score rests on and what is missing */
   scoreBasis: string;
+  /** green (strong, good), yellow (fair), red (weak or a serious concern), gray (not scored) */
+  ratingColor: 'green' | 'yellow' | 'red' | 'gray';
+  /** what the score covers, kept apart from the score: "Based on 4 of 5 parts: … (calories not found)" */
+  coverageText: string;
+  /** documented serious concerns that cap the score, each with its evidence */
+  criticalConcerns: string[];
   components: ScoreComponent[];
   findings: Finding[];
   ingredientNotes: IngredientNote[];

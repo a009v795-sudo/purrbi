@@ -21,64 +21,62 @@ describe('general score', () => {
     expect(a.methodologyVersion).toBe(METHODOLOGY_VERSION);
     expect(a.components.reduce((s, c) => s + c.maxPoints, 0)).toBe(100);
   });
-  it('scores a complete food with full evidence and explains every component', () => {
+  it('scores a complete food with full evidence as one number, and explains every part', () => {
     const f = facts();
     const a = assessGeneral(f, scopeOf(f));
     expect(a.category).toBe('complete_food');
-    expect(a.score).toBe(43 + 25 + 15 + 5 + 5); // adequacy by formulation, guarantees, calories, moisture, further guarantees
-    expect(a).toMatchObject({ scoreProvisional: false, scoreCoverage: 100, scoreLabel: 'Strong label information' });
+    // adequacy by formulation 27 + protein/fat above the cat minimums on dry matter 30 + named sources 20 + calories 10 + further guarantees 10
+    expect(a.score).toBe(97);
+    expect(a).toMatchObject({ scoreProvisional: false, scoreCoverage: 100, scoreLabel: 'Strong', ratingColor: 'green', scoreMinPossible: 97, scoreMaxPossible: 97 });
+    expect(a.components.find((c) => c.key === 'protein_fat')?.explanation).toMatch(/Protein ≈ 33.3% of dry matter \(minimum 26%\), fat ≈ 16.7% of dry matter \(minimum 9%\)/);
     expect(a.components.every((c) => c.explanation.length > 0)).toBe(true);
   });
-  it('withholds the score when an essential input is missing (never estimates)', () => {
-    const f = facts({ guaranteedAnalysis: undefined });
-    const a = assessGeneral(f, scopeOf(f));
+  it('withholds the number when an essential part is missing, naming exactly what is missing (never estimates)', () => {
+    const noGa = facts({ guaranteedAnalysis: undefined });
+    const a = assessGeneral(noGa, scopeOf(noGa));
     expect(a.score).toBeNull();
-    expect(a.missingForScore).toEqual(['guaranteed analysis (protein, fat, fiber)']);
-    expect(a.scoreWithheldReason).toMatch(/needs the guaranteed analysis/);
-    expect(a.scoreCoverage).toBeNull();
+    expect(a.scoreLabel).toBe('Not enough information to score');
+    expect(a.missingForScore).toEqual(['guaranteed analysis (protein and fat)']);
+    expect(a.scoreWithheldReason).toBe('Purrbi needs the guaranteed analysis (protein and fat) before it can score this complete food.');
+    // The adequacy statement is what makes a food complete: without it a complete food is not scored either.
+    const noAdequacy = facts({ adequacyText: '' });
+    const b = assessGeneral(noAdequacy, { ...scopeOf(noAdequacy), category: 'complete_food' });
+    expect(b.score).toBeNull();
+    expect(b.missingForScore[0]).toMatch(/nutritional adequacy/);
+    expect(b.findings.some((x) => x.kind === 'missing' && /adequacy/.test(x.text))).toBe(true);
   });
-  it('keeps coverage apart from quality: a missing adequacy statement lowers coverage, caps the score, and never counts as poor quality', () => {
-    const f = facts({ adequacyText: '' });
-    const a = assessGeneral(f, scopeOf(f));
-    // Everything that could be assessed is fully met (50 of 50), so quality is 100, capped at 74 until the statement is known.
-    expect(a).toMatchObject({ score: 74, scoreProvisional: true, scoreLabel: 'Partial assessment', scoreBand: null, scoreCoverage: 50, scoreMinPossible: 50, scoreMaxPossible: 100 });
-    expect(a.scoreBasis).toBe('Based on 50 of 100 points’ worth of label information (nutritional adequacy statement not available yet); the complete label could put it between 50 and 100. Score capped at 74 until the adequacy statement is known.');
-    expect(a.findings.find((x) => x.rule === 'G-ADEQUACY')!.kind).toBe('missing'); // shown as missing evidence, not as a fault
-    expect(overallState(a, noRecall, scopeOf(f))).toBe('partial'); // never "Information incomplete"
-    const shown = resultFields({ facts: f, scope: scopeOf(f), general: a, personal: personalize(null, f, scopeOf(f), a, noRecall, NOW), recall: noRecall, summary: [], state: 'partial', photoRequests: [], factsVersion: 1, labelEvidenceUsed: false });
-    expect(shown.scoreText).toBe('50–100'); // the range, never a bare number that reads as final
-  });
-  it('the same product scores the same quality whether or not the optional calorie statement is known', () => {
+  it('keeps coverage apart from the score: an optional part not found lowers coverage, never the score', () => {
     const full = assessGeneral(facts(), scopeOf(facts()));
-    const f = facts({ calories: undefined });
-    const a = assessGeneral(f, scopeOf(f));
-    expect(a.score).toBe(Math.round((100 * (full.score! - 15)) / 85)); // 78 of the 85 assessable points
-    expect(Math.abs(a.score! - full.score!)).toBeLessThanOrEqual(2); // missing data barely moves it: it is not a quality signal
-    expect(a).toMatchObject({ scoreProvisional: true, scoreCoverage: 85, scoreMinPossible: 78, scoreMaxPossible: 93, scoreLabel: 'Strong label information' });
-    const cal = a.components.find((c) => c.key === 'calories')!;
-    expect(cal.status).toBe('unverified');
-    expect(a.findings.find((x) => x.rule === 'G-CALORIES')!.kind).toBe('missing');
+    const noCal = facts({ calories: undefined });
+    const a = assessGeneral(noCal, scopeOf(noCal));
+    expect(a.score).toBe(Math.round((100 * 87) / 90));
+    expect(a.scoreCoverage).toBe(90);
+    expect(a.scoreProvisional).toBe(true);
+    expect(a.coverageText).toMatch(/^Based on 4 of 5 parts: .*\(calorie content statement not found\)\.$/);
+    expect(Math.abs((a.score ?? 0) - (full.score ?? 0))).toBeLessThanOrEqual(1);
   });
-  it('a documented concern for the species caps the score and leads, however complete the label (propylene glycol in a cat food)', () => {
-    const f = facts({ ingredientsText: 'Chicken, glycerin, propylene glycol, salt' });
+  it('a documented concern for the species caps the score however good the rest is (propylene glycol in a cat food); a caution never does', () => {
+    const f = facts({ ingredientsText: 'Chicken, chicken meal, brown rice, propylene glycol, chicken fat, taurine' });
     const a = assessGeneral(f, scopeOf(f));
-    expect(a.ingredientNotes.find((n) => n.name === 'propylene glycol')).toMatchObject({ status: 'concern', kbId: 'propylene_glycol', concernFor: ['cat'] });
-    expect(a).toMatchObject({ score: 20, scoreLabel: 'Documented ingredient concern', scoreBand: 'low' });
-    expect(a.scoreBasis).toMatch(/Score capped at 20: propylene glycol is a documented concern for cats\./);
-    const dog = facts({ ingredientsText: 'Chicken, glycerin, propylene glycol, salt', classificationSignals: [{ text: 'en:dog-food', source: 't' }], adequacyText: 'X is formulated to meet the nutritional levels established by the AAFCO Dog Food Nutrient Profiles for adult maintenance.' });
-    const d = assessGeneral(dog, scopeOf(dog));
-    expect(d.ingredientNotes.find((n) => n.name === 'propylene glycol')!.status).toBe('info');
-    expect(d.score).toBe(93); // not a concern for dogs: no cap
+    expect(a.score).toBeLessThanOrEqual(20);
+    expect(a).toMatchObject({ scoreLabel: 'Serious concern', ratingColor: 'red', scoreBand: 'low' });
+    expect(a.criticalConcerns[0]).toMatch(/^propylene glycol: U.S. regulations prohibit/);
+    expect(a.findings.find((x) => x.kind === 'alert')?.rule).toBe('G-KB-CONCERN');
+    const g = facts({ ingredientsText: 'Chicken, chicken meal, brown rice, chicken fat, garlic powder, taurine' });
+    expect(assessGeneral(g, scopeOf(g)).score).toBe(97);
   });
-  it('never counts ingredients as good or bad: grains, by-products, unfamiliar names and cautions do not move the score', () => {
-    const plain = assessGeneral(facts(), scopeOf(facts()));
-    const f = facts({ ingredientsText: 'Chicken by-product meal, ground yellow corn, wheat flour, brewers rice, menadione sodium bisulfite complex, taurine' });
-    expect(assessGeneral(f, scopeOf(f)).score).toBe(plain.score);
-    const g = facts({ ingredientsText: 'Chicken, garlic, garlic powder, rice' });
-    const withGarlic = assessGeneral(g, scopeOf(g));
-    expect(withGarlic.score).toBe(plain.score); // a context-dependent caution is a flag, not points
-    expect(withGarlic.findings.filter((x) => x.rule === 'G-KB-CAUTION')).toHaveLength(1); // one finding for both forms
-    expect(withGarlic.findings.find((x) => x.rule === 'G-KB-CAUTION')!.text).toMatch(/^garlic, garlic powder: /);
+  it('never scores ingredients good or bad by name: grains and by-products of a named animal do not move the score; only unnamed sources lower the naming part', () => {
+    const base = assessGeneral(facts(), scopeOf(facts()));
+    const grains = facts({ ingredientsText: 'Chicken by-product meal, corn, wheat, chicken fat, dried beet pulp, taurine' });
+    expect(assessGeneral(grains, scopeOf(grains)).score).toBe(base.score);
+    const generic = facts({ ingredientsText: 'Meat by-products, poultry fat, corn, wheat, fish meal, taurine' });
+    const g = assessGeneral(generic, scopeOf(generic));
+    expect(g.components.find((c) => c.key === 'named_sources')).toMatchObject({ points: 8, status: 'partly_met' }); // 2 of 5 named
+  });
+  it('counts a vitamin or mineral blend once: a long blend adds nothing', () => {
+    const plain = facts({ ingredientsText: 'Chicken, chicken meal, brown rice, chicken fat, dried beet pulp' });
+    const blend = facts({ ingredientsText: 'Chicken, chicken meal, brown rice, chicken fat, dried beet pulp, Vitamins [Vitamin E Supplement, Niacin, Biotin, Folic Acid, Vitamin D3 Supplement], Minerals [Zinc Proteinate, Iron Proteinate]' });
+    expect(assessGeneral(blend, scopeOf(blend)).score).toBe(assessGeneral(plain, scopeOf(plain)).score);
   });
   it('gives each ingredient its role, without changing the score', () => {
     const a = assessGeneral(facts(), scopeOf(facts()));
@@ -88,12 +86,16 @@ describe('general score', () => {
     expect(role('chicken fat')).toBe('Fat source');
     expect(role('dried beet pulp')).toBe('Fibre source');
   });
-  it('does not hold treats to complete-diet standards', () => {
-    const f = facts({ productName: { value: 'TEST FIXTURE Salmon Treats', source: SRC }, classificationSignals: [{ text: 'en:cat-treats', source: 't' }], adequacyText: 'Intended for intermittent or supplemental feeding only.' });
+  it('holds treats to treat criteria, and gives no number on the ingredient list alone', () => {
+    const f = facts({ productName: { value: 'TEST FIXTURE Salmon Treats', source: SRC }, classificationSignals: [{ text: 'en:cat-treats', source: 't' }], adequacyText: 'Intended for intermittent or supplemental feeding only.', calories: { value: [{ kcal: 3, per: 'treat' }], source: SRC } });
     const a = assessGeneral(f, scopeOf(f));
     expect(a.category).toBe('treat');
-    expect(a.components.find((c) => c.key === 'feeding_statement')).toMatchObject({ points: 25, status: 'met' });
+    expect(a.components.map((c) => c.key)).toEqual(['named_sources', 'calories', 'feeding_statement', 'core_guarantees']);
     expect(a.score).toBe(100);
+    const bare = facts({ productName: { value: 'TEST FIXTURE Salmon Treats', source: SRC }, classificationSignals: [{ text: 'en:cat-treats', source: 't' }], adequacyText: '', calories: undefined, guaranteedAnalysis: undefined, ingredientsText: 'Salmon' });
+    const b = assessGeneral(bare, scopeOf(bare));
+    expect(b.score).toBeNull();
+    expect(b.scoreWithheldReason).toBe('Purrbi needs the calorie content statement, or both the feeding statement and the guaranteed analysis before it can score this treat.');
   });
   it('gives supplements findings but no number', () => {
     const f = facts({ productName: { value: 'TEST FIXTURE Joint Supplement Chews', source: SRC }, classificationSignals: [{ text: 'en:dog-supplements', source: 't' }], adequacyText: '' });
@@ -201,13 +203,17 @@ describe('summary', () => {
     expect(s.length).toBeLessThanOrEqual(5);
     expect(s[s.length - 1]).toMatch(/not veterinary advice/);
   });
-  it('tells a partial assessment by its range, never as a score or a lower bound', () => {
-    const f = facts({ adequacyText: '' });
+  it('states one score and what it covers, or exactly what is missing — never a range', () => {
+    const f = facts({ calories: undefined });
     const scope = scopeOf(f);
     const g = assessGeneral(f, scope);
-    expect(g.scoreLabel).toBe('Partial assessment');
-    const line = buildSummary(f, scope, g, personalize(pet(), f, scope, g, noRecall, NOW), noRecall).find((x) => /label score/.test(x))!;
-    expect(line).toMatch(/^Its Purrbi label score is not final: based on \d+ of 100 points’ worth .* between \d+ and 100/);
-    expect(line).not.toMatch(/lower bound|\d+\/100/);
+    const line = buildSummary(f, scope, g, personalize(pet(), f, scope, g, noRecall, NOW), noRecall).find((x) => /Purrbi score/.test(x))!;
+    expect(line).toBe(`Its Purrbi score is ${g.score}/100 (strong), from the parts of the label found; the calorie content statement wasn’t found.`);
+    const none = facts({ guaranteedAnalysis: undefined });
+    const ns = scopeOf(none);
+    const gn = assessGeneral(none, ns);
+    const missing = buildSummary(none, ns, gn, personalize(pet(), none, ns, gn, noRecall, NOW), noRecall).join(' ');
+    expect(missing).toMatch(/Purrbi needs the guaranteed analysis \(protein and fat\)/);
+    expect(missing).not.toMatch(/between \d+ and \d+|–/);
   });
 });

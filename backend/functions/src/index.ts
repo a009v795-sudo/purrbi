@@ -26,6 +26,7 @@ setGlobalOptions({ region: REGION, serviceAccount: RUNTIME_SERVICE_ACCOUNT });
 const OPENAI_API_KEY = defineSecret('OPENAI_API_KEY');
 const AI_ENABLED = defineBoolean('AI_ENABLED', { default: true });
 const RESEARCH_ENABLED = defineBoolean('RESEARCH_ENABLED', { default: true });
+const BARCODE_LOOKUP_ENABLED = defineBoolean('BARCODE_LOOKUP_ENABLED', { default: true });
 const DATABASE_IMAGES_ENABLED = defineBoolean('DATABASE_IMAGES_ENABLED', { default: true });
 const EXPLANATIONS_ENABLED = defineBoolean('EXPLANATIONS_ENABLED', { default: true });
 const VISION_MODEL = defineString('OPENAI_VISION_MODEL', { default: 'gpt-4o-mini' });
@@ -52,6 +53,7 @@ function config(): RuntimeConfig {
     verdictModel: VERDICT_MODEL.value(),
     aiEnabled: AI_ENABLED.value(),
     researchEnabled: RESEARCH_ENABLED.value(),
+    barcodeLookupEnabled: BARCODE_LOOKUP_ENABLED.value(),
     databaseImagesEnabled: DATABASE_IMAGES_ENABLED.value(),
     explanationsEnabled: EXPLANATIONS_ENABLED.value(),
     verdictsEnabled: VERDICTS_ENABLED.value(),

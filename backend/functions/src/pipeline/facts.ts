@@ -3,8 +3,8 @@ import { ingredientsInUse, rowsInUse21, type ValidatedLabel } from '../ai/labelE
 import { hasCoreGuaranteedAnalysis } from '../domain/nutrition';
 import type { ProductCategory, ProductFacts, ScopeResult, SourceRef } from '../domain/types';
 
-type FactKey = 'productName' | 'brand' | 'imageUrl' | 'ingredientsText' | 'ingredients' | 'guaranteedAnalysis' | 'calories' | 'adequacy' | 'feedingDirections' | 'activeIngredients';
-export const FACT_KEYS: FactKey[] = ['productName', 'brand', 'imageUrl', 'ingredientsText', 'ingredients', 'guaranteedAnalysis', 'calories', 'adequacy', 'feedingDirections', 'activeIngredients'];
+type FactKey = 'productName' | 'brand' | 'imageUrl' | 'ingredientsText' | 'ingredients' | 'guaranteedAnalysis' | 'calories' | 'adequacy' | 'feedingDirections' | 'activeIngredients' | 'packageSize';
+export const FACT_KEYS: FactKey[] = ['productName', 'brand', 'imageUrl', 'ingredientsText', 'ingredients', 'guaranteedAnalysis', 'calories', 'adequacy', 'feedingDirections', 'activeIngredients', 'packageSize'];
 
 /**
  * Fills fields that `base` lacks from `extra`. Existing facts are never overwritten, with one exception:

@@ -15,11 +15,12 @@ import { normalizeBarcode, type NormalizedBarcode } from '../domain/barcode';
 import { buildHighlights } from '../domain/highlights';
 import { normalizeRole } from '../domain/roles';
 import { personalize } from '../domain/personalize';
-import { classifyScope, SCOPE_VERSION, type DatabaseOrigin } from '../domain/scope';
+import { classifyScope, SCOPE_VERSION, type DatabaseOrigin, type SpeciesClaim } from '../domain/scope';
 import { assessGeneral } from '../domain/score';
 import { buildSummary, overallState } from '../domain/summary';
-import type { GeneralAssessment, PetProfile, ProductFacts, RecallCheck, ScopeResult, SourceRef } from '../domain/types';
+import type { ClassificationSignal, GeneralAssessment, PetProfile, ProductFacts, RecallCheck, ScopeResult, SourceRef, SpeciesBasis } from '../domain/types';
 import { explainTerms as explainImpl, explanationKey, needsExplanation, type CitedExplanation, type ExplainRequest } from '../knowledge/explain';
+import { lookupBarcodeHint as barcodeHintImpl, type BarcodeHint } from '../sources/barcodeLookup';
 import { readDatabaseLabelImages as databaseImagesImpl } from '../sources/labelImages';
 import { checkRecalls as checkRecallsImpl } from '../sources/openfda';
 import { databaseGuarantees, DB_FOR_TYPE, implausibleAnalysis, lookupOpenFacts as lookupOpenFactsImpl, openFactsToFacts, type OpenFactsDb, type OpenFactsLookup } from '../sources/openFacts';
@@ -70,6 +71,7 @@ export interface Sources {
   databaseImages: (o: Parameters<typeof databaseImagesImpl>[0]) => ReturnType<typeof databaseImagesImpl>;
   explain: (o: Parameters<typeof explainImpl>[0]) => Promise<CitedExplanation[]>;
   verdict: (o: Parameters<typeof verdictImpl>[0]) => Promise<{ text: string; model: string }>;
+  barcodeHint?: (gtin14: string, userAgent: string) => Promise<BarcodeHint | null>;
 }
 
 export const realSources: Sources = {
@@ -80,6 +82,7 @@ export const realSources: Sources = {
   databaseImages: databaseImagesImpl,
   explain: explainImpl,
   verdict: verdictImpl,
+  barcodeHint: barcodeHintImpl,
 };
 
 export interface Deps {
@@ -320,6 +323,31 @@ async function publicEvidence(deps: Deps, job: JobInfo, o: AssessOptions, stored
 
 const isCategorySignal = (s: ProductFacts['classificationSignals'][number]) => s.kind === 'category' || (!s.kind && /^[a-z]{2}:[a-z0-9-]+$/.test(s.text));
 
+/** How much a name or statement says about who the product is for, from where it was found. */
+function speciesBasis(src: SourceRef | undefined, kind?: ClassificationSignal['kind']): SpeciesBasis {
+  switch (src?.sourceType) {
+    case 'user_label':
+    case 'verified_label':
+    case 'database_image':
+      return 'label';
+    case 'manufacturer':
+      return 'manufacturer_page';
+    case 'retailer_or_web':
+      return 'retailer_listing';
+    default:
+      // The pet databases (and signals saved before each signal kept its source).
+      return kind === 'category' ? 'database_category' : kind === 'photo' ? 'label' : 'database_name';
+  }
+}
+
+export function speciesClaimsOf(facts: ProductFacts): SpeciesClaim[] {
+  const byId = new Map(facts.sources.map((s) => [s.sourceId, s]));
+  return [
+    ...(facts.productName ? [{ text: facts.productName.value, basis: speciesBasis(facts.productName.source, 'name') }] : []),
+    ...facts.classificationSignals.map((c) => ({ text: c.text, basis: isCategorySignal(c) && (byId.get(c.source)?.sourceType ?? 'database') === 'database' ? ('database_category' as SpeciesBasis) : speciesBasis(byId.get(c.source), c.kind) })),
+  ];
+}
+
 /** Classifies from the product's own evidence: category tags apart, every other statement as text. */
 const scopeOf = (facts: ProductFacts, origin: DatabaseOrigin): ScopeResult =>
   classifyScope({
@@ -329,6 +357,7 @@ const scopeOf = (facts: ProductFacts, origin: DatabaseOrigin): ScopeResult =>
     texts: [facts.productName?.value ?? '', ...facts.classificationSignals.filter((s) => !isCategorySignal(s)).map((s) => s.text)],
     adequacy: facts.adequacy?.value,
     ingredientsText: facts.ingredientsText?.value,
+    speciesClaims: speciesClaimsOf(facts),
   });
 
 /** Gathers evidence, assesses and saves. Explanations not yet cached are added in a second, separate update. */
@@ -480,8 +509,18 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
     await setStatus(deps, o.uid, o.scanId, SCAN_STATUS.researching, 'Looking for the manufacturer’s label information', 40);
     try {
       await consumeQuota(db, o.uid, 'research', config.limits, now);
-      await consumeAiBudget(db, config.limits, now);
-      const r = await deps.sources.research({ apiKey: config.openaiApiKey(), model: config.researchModel, gtin14: gtin, barcode: o.barcode.expanded ?? o.barcode.digits, knownName: facts.productName?.value, knownBrand: facts.brand?.value, knownIngredients: facts.ingredients?.value, knownSpecies: scope.species, userAgent: config.userAgent, now });
+      // With no name or brand from any database, a barcode database's title tells research what to search
+      // for (a hint only: nothing from it is shown or used as a fact). Its failure is noted, never "unknown".
+      let hint: BarcodeHint | null = null;
+      if (!facts.productName && !facts.brand && config.barcodeLookupEnabled !== false && deps.sources.barcodeHint) {
+        try {
+          hint = await deps.sources.barcodeHint(gtin, config.userAgent);
+          if (hint) job.evidenceNotes.push(`${hint.source} lists this barcode as “${hint.title}”${hint.brand ? ` (${hint.brand})` : ''}; Purrbi searched for that product and used only what a page proved.`);
+        } catch (err) {
+          job.diagnosticNotes.push(`Barcode database not checked: ${err instanceof SourceError ? (err.kind === 'rate_limited' ? 'it is limiting requests' : err.kind === 'timeout' ? 'it didn’t answer in time' : `it failed (${err.status ? `HTTP ${err.status}` : err.kind})`) : errorDetail((err as Error).message)}`);
+        }
+      }
+      const r = await deps.sources.research({ apiKey: config.openaiApiKey(), model: config.researchModel, gtin14: gtin, barcode: o.barcode.expanded ?? o.barcode.digits, knownName: facts.productName?.value, knownBrand: facts.brand?.value, knownIngredients: facts.ingredients?.value, knownSpecies: scope.species, hint, userAgent: config.userAgent, now, beforeAiCall: () => consumeAiBudget(db, config.limits, now) });
       let filled: string[] = [];
       if (r.facts) {
         // "Active ingredients" are a supplement's; a food page's additive list is not used as such.
@@ -500,6 +539,9 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       const pageKind = src?.sourceType === 'manufacturer' ? 'manufacturer page' : 'web page';
       if (r.facts && r.verified?.length) job.evidenceNotes.push(...r.verified);
       if (r.analysisNote && filled.includes('guaranteedAnalysis')) job.evidenceNotes.push(r.analysisNote);
+      const doc = r.sources.find((x) => x.sourceId.startsWith('doc:'));
+      const fromDoc = filled.filter((k) => (facts[k as keyof ProductFacts] as { source?: SourceRef } | undefined)?.source?.sourceId === doc?.sourceId);
+      if (doc && fromDoc.length) job.evidenceNotes.push(`Read the ${fromDoc.map(fieldLabel).join(' and ')} from ${doc.sourceName}, linked from the product’s page.`);
       const confirmed = r.facts?.classificationSignals?.find((c) => c.kind === 'research' && /^intended for /.test(c.text))?.text;
       if (confirmed && src) job.evidenceNotes.push(`${src.sourceName} (${pageKind}) says it is ${confirmed}; checked on the page.`);
       job.evidenceNotes.push(
@@ -597,6 +639,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
     scoreLabel: general.scoreLabel,
     scoreBasis: general.scoreBasis,
     withheldReason: general.scoreWithheldReason ?? '',
+    missing: general.missingForScore,
     coverage: general.scoreCoverage,
     low: general.scoreMinPossible ?? null,
     high: general.scoreMaxPossible,
@@ -754,7 +797,7 @@ function rederive(facts: ProductFacts): ProductFacts {
 }
 
 function fieldLabel(k: string): string {
-  return ({ productName: 'product name', brand: 'brand', ingredientsText: 'ingredients', guaranteedAnalysis: 'guaranteed analysis', calories: 'calorie content', adequacy: 'adequacy statement', activeIngredients: 'active ingredients', feedingDirections: 'feeding directions', imageUrl: 'image' } as Record<string, string>)[k] ?? k;
+  return ({ productName: 'product name', brand: 'brand', ingredientsText: 'ingredients', guaranteedAnalysis: 'guaranteed analysis', calories: 'calorie content', adequacy: 'feeding statement', activeIngredients: 'active ingredients', feedingDirections: 'feeding directions', imageUrl: 'image', packageSize: 'package size' } as Record<string, string>)[k] ?? k;
 }
 
 /**

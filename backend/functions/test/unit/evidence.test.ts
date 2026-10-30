@@ -308,6 +308,8 @@ describe('manufacturer research', () => {
     <h2>Composition</h2><p>Saumon (17%), prot&eacute;ines de volaille d&eacute;shydrat&eacute;es, bl&eacute;, ma&iuml;s</p>
     <h2>Constituants analytiques</h2><p>Prot&eacute;ine : 34 %, Mati&egrave;res grasses brutes : 12,5 %, Cellulose brute : 3,5 %</p>
     <p>Aliment complet pour chats adultes st&eacute;rilis&eacute;s.</p></body></html>`;
+  // The same page naming its product's barcode in a shop widget's markup (as wellnesspetfood.com does): this product, proven.
+  const PAGE_EAN = PAGE.replace('</h1>', '</h1><div class="ps-widget" ps-sku=" 7613032759155 "></div>');
   const answer = (over: Record<string, unknown> = {}) => ({
     found: true, product_name: 'PURINA ONE® Stérilisé Croquettes au Saumon', brand: 'Purina', intended_for: 'cats', product_type: 'dry cat food',
     ingredients_verbatim: 'Saumon (17%), protéines de volaille déshydratées, blé, maïs', active_ingredients_verbatim: null,
@@ -315,24 +317,24 @@ describe('manufacturer research', () => {
     guaranteed_analysis: [{ label: 'Protéine', qualifier: 'not_stated', value: 34, unit: '%' }, { label: 'Matières grasses brutes', qualifier: 'not_stated', value: 12.5, unit: '%' }],
     calorie_statement_verbatim: null, source_urls: ['https://www.purina.fr/chat/purina-one-sterilise-saumon'], barcode_seen_on_source: false, ...over,
   });
-  const stub = (json: Record<string, unknown>) =>
+  const stub = (json: Record<string, unknown>, page = PAGE) =>
     vi.stubGlobal('fetch', vi.fn(async (url: string) => (url.startsWith('https://api.openai.com/')
       ? new Response(JSON.stringify({ output: [{ type: 'web_search_call' }, { type: 'message', content: [{ type: 'output_text', text: JSON.stringify(json), annotations: [] }] }] }), { status: 200 })
-      : new Response(PAGE, { status: 200 }))));
+      : new Response(page, { status: 200 }))));
   // The database record already establishes a cat food; the page then only has to be the same product by brand and name.
   const run = (over: Record<string, unknown> = {}) => researchProduct({ apiKey: 'k', model: 'm', gtin14: '07613032759155', barcode: '7613032759155', knownBrand: 'Purina', knownSpecies: 'cat', userAgent: 'test', now: new Date('2026-10-29T00:00:00Z'), ...over });
 
   it('verifies a page the model names without a search citation, ignoring markup, entities, ® and decimal commas', async () => {
-    stub(answer());
+    stub(answer(), PAGE_EAN);
     const r = await run();
     expect(r.discarded).toEqual([]);
-    expect(r.sources[0]).toMatchObject({ sourceType: 'manufacturer', sourceName: 'purina.fr', matchConfidence: 'brand_and_product' });
+    expect(r.sources[0]).toMatchObject({ sourceType: 'manufacturer', sourceName: 'purina.fr', matchConfidence: 'exact_barcode' });
     expect(r.facts?.productName?.value).toBe('PURINA ONE® Stérilisé Croquettes au Saumon');
     expect(r.facts?.ingredients?.value.slice(0, 2)).toEqual(['Saumon (17%)', 'protéines de volaille déshydratées']);
     expect(r.facts?.adequacy?.value).toMatchObject({ type: 'complete', species: 'cat', lifeStages: ['adult_maintenance'] });
     // The model's answer gave protein and fat; the analysis printed on the page also gives fibre ("3,5 %").
     expect(r.facts?.guaranteedAnalysis?.value.map((g) => `${g.nutrient}:${g.value}`)).toEqual(['crude_protein:34', 'crude_fat:12.5', 'crude_fiber:3.5']);
-    expect(r.verified).toEqual([]);
+    expect(r.verified).toEqual(['purina.fr shows this product’s barcode in its page data.']);
     expect(r.analysisNote).toBe('Read the analysis printed on purina.fr (3 rows).'); // shown only when the result uses it
   });
   it('reads the printed analysis only from a page shown to be this product, not from another variant fetched with it', async () => {
@@ -356,19 +358,19 @@ describe('manufacturer research', () => {
   });
   it('prefers the analysis printed on the page to an answer that disagrees with it', async () => {
     // The answer's value is nowhere on the page: the page's own analysis is used, and the note says so.
-    stub(answer({ guaranteed_analysis: [{ label: 'Protéine', qualifier: 'not_stated', value: 33, unit: '%' }] }));
+    stub(answer({ guaranteed_analysis: [{ label: 'Protéine', qualifier: 'not_stated', value: 33, unit: '%' }] }), PAGE_EAN);
     const r = await run();
     expect(r.facts?.guaranteedAnalysis?.value.map((g) => `${g.nutrient}:${g.value}`)).toEqual(['crude_protein:34', 'crude_fat:12.5', 'crude_fiber:3.5']);
     expect(r.discarded).toEqual(['barcode search: guaranteed analysis: the answer’s Protéine 33 is not on the page; the analysis printed on the page was used']);
     // The answer's value is on the page, but as another row's (fibre's 3,5 % given as protein).
-    stub(answer({ guaranteed_analysis: [{ label: 'Protéine', qualifier: 'not_stated', value: 3.5, unit: '%' }] }));
+    stub(answer({ guaranteed_analysis: [{ label: 'Protéine', qualifier: 'not_stated', value: 3.5, unit: '%' }] }), PAGE_EAN);
     const differ = await run();
     expect(differ.facts?.guaranteedAnalysis?.value.map((g) => `${g.nutrient}:${g.value}`)).toEqual(['crude_protein:34', 'crude_fat:12.5', 'crude_fiber:3.5']);
     expect(differ.discarded).toEqual(['barcode search: guaranteed analysis: the answer’s Protéine 3.5 differs from the analysis printed on the page, which was used']);
   });
   it('a value counts as on the page only where the page prints it as a number of its own', async () => {
     // "7" is printed only inside "17%" (the salmon's share), so an ash of 7 % is not on the page.
-    const plain = PAGE.replace('<h2>Constituants analytiques</h2>', '<h2>Valeurs</h2>');
+    const plain = PAGE_EAN.replace('<h2>Constituants analytiques</h2>', '<h2>Valeurs</h2>');
     vi.stubGlobal('fetch', vi.fn(async (url: string) => (url.startsWith('https://api.openai.com/')
       ? new Response(JSON.stringify({ output: [{ type: 'web_search_call' }, { type: 'message', content: [{ type: 'output_text', text: JSON.stringify(answer({ guaranteed_analysis: [...answer().guaranteed_analysis as unknown[], { label: 'Cendres brutes', qualifier: 'not_stated', value: 7, unit: '%' }] })), annotations: [] }] }] }), { status: 200 })
       : new Response(plain, { status: 200 }))));
@@ -378,7 +380,7 @@ describe('manufacturer research', () => {
   });
   it('says which analysis values were left out when others were kept', async () => {
     // A page whose analysis has no heading Purrbi recognises: only the answer's values, each checked on the page.
-    const plain = PAGE.replace('<h2>Constituants analytiques</h2>', '<h2>Valeurs</h2>');
+    const plain = PAGE_EAN.replace('<h2>Constituants analytiques</h2>', '<h2>Valeurs</h2>');
     vi.stubGlobal('fetch', vi.fn(async (url: string) => (url.startsWith('https://api.openai.com/')
       ? new Response(JSON.stringify({ output: [{ type: 'web_search_call' }, { type: 'message', content: [{ type: 'output_text', text: JSON.stringify(answer({ guaranteed_analysis: [...answer().guaranteed_analysis as unknown[], { label: 'Cendres brutes', qualifier: 'not_stated', value: 9, unit: '%' }] })), annotations: [] }] }] }), { status: 200 })
       : new Response(plain, { status: 200 }))));

@@ -1,6 +1,6 @@
 // Guaranteed analysis and calorie statements. Values are kept as stated (as-fed);
 // dry-matter figures are derived and labelled as calculated.
-import type { CalorieStatement, CaloriePer, GuaranteedAnalysisEntry, NutrientKey } from './types';
+import type { CalorieStatement, CaloriePer, GuaranteedAnalysisEntry, NutrientKey, PackageSize } from './types';
 
 // Matched on the label without accents. English (US guaranteed analysis) first, then the EU
 // "analytical constituents" terms in French, German, Spanish/Portuguese, Italian and Dutch.
@@ -155,8 +155,8 @@ const PER_PATTERNS: [RegExp, CaloriePer][] = [
   [/100 ?g\b/, '100g'],
   [/\bcup\b/, 'cup'],
   [/\bcan\b/, 'can'],
-  [/\bpouch\b/, 'pouch'],
-  [/\btray\b/, 'tray'],
+  [/\b(pouch|retort pouch)\b/, 'pouch'],
+  [/\b(tray|tub|cup pot)\b/, 'tray'],
   [/\bchew\b/, 'chew'],
   [/\btreat\b/, 'treat'],
   [/\b(piece|stick|biscuit|bar|tube)\b/, 'piece'],
@@ -176,28 +176,84 @@ const KCAL_LIMITS: Partial<Record<CaloriePer, [number, number]>> = {
 
 const UPPER_BOUND = /(<|≤|less than|fewer than|under|up to|moins de|menos de|weniger als|meno di|minder dan)\s*$/i;
 
-/** Parses statements like "3,640 kcal ME/kg; 364 kcal ME/cup" or "6 kcal per treat". */
+const OUNCE_G = 28.3495;
+const UNIT_OF: Record<string, PackageSize['unit']> = { oz: 'oz', ounce: 'oz', ounces: 'oz', 'fl oz': 'fl oz', 'fl. oz': 'fl oz', lb: 'lb', lbs: 'lb', pound: 'lb', pounds: 'lb', g: 'g', gram: 'g', grams: 'g', gr: 'g', kg: 'kg', ml: 'ml' };
+const SIZE = /(\d+(?:[.,]\d+)?)\s*-?\s*(fl\.? oz|ounces?|oz|pounds?|lbs?|grams?|gr|g|kg|ml)\b/i;
+
+function sizeOf(amount: number, rawUnit: string, text: string): PackageSize | null {
+  const unit = UNIT_OF[rawUnit.toLowerCase().replace(/\s+/g, ' ')];
+  if (!unit || !Number.isFinite(amount) || amount <= 0) return null;
+  const grams = unit === 'oz' ? amount * OUNCE_G : unit === 'lb' ? amount * 453.592 : unit === 'g' ? amount : unit === 'kg' ? amount * 1000 : null;
+  return { amount, unit, grams: grams === null ? null : Math.round(grams * 10) / 10, text: text.trim() };
+}
+
+/**
+ * The package size in a title or size field: "2.8 oz", "2.8 Ounce Can", "3 Ounce Retort Pouch", "85 g",
+ * "6 x 1.5 oz" (a case of six: the unit is 1.5 oz). Null when none is stated or several different ones are.
+ */
+export function parsePackageSize(text: string | null | undefined): PackageSize | null {
+  if (!text) return null;
+  const found = [...text.matchAll(new RegExp(`(?:(\\d+)\\s*[x×]\\s*)?${SIZE.source}`, 'gi'))]
+    .map((m) => sizeOf(Number(m[2].replace(',', '.')), m[3], m[0].replace(/^\d+\s*[x×]\s*/i, '')))
+    .filter((x): x is PackageSize => !!x);
+  const distinct = [...new Map(found.map((f) => [`${f.amount}${f.unit}`, f])).values()];
+  return distinct.length === 1 ? distinct[0] : null;
+}
+
+/** Same package: equal mass within 3% (2.8 oz = 79 g), or the same amount and unit. */
+export function samePackage(a: PackageSize | undefined | null, b: PackageSize | undefined | null): boolean {
+  if (!a || !b) return false;
+  if (a.grams !== null && b.grams !== null) return Math.abs(a.grams - b.grams) <= Math.max(a.grams, b.grams) * 0.03;
+  return a.unit === b.unit && a.amount === b.amount;
+}
+
+/**
+ * Parses statements like "3,640 kcal ME/kg; 364 kcal ME/cup", "6 kcal per treat" and package-specific
+ * values "70 kcal/2.8 oz can, 133 kcal/5.3 oz can": each value keeps the package it is for, so values
+ * for different sizes are never shown as interchangeable servings.
+ */
 export function parseCalorieText(text: string | null | undefined): CalorieStatement[] {
   if (!text) return [];
   const out: CalorieStatement[] = [];
-  const re = /(\d{1,3}(?:[,\s]\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)\s*(?:kcal|kilocalories|calories)\s*(?:me\s*)?(?:\/|per)\s*([a-z0-9 ]{1,20})/gi;
+  const re = /(\d{1,3}(?:[,\s]\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)\s*(?:kcal|kilocalories|calories)\s*(?:me\s*)?(?:\/|per)\s*((?:\d+(?:[.,]\d+)?\s*-?\s*(?:fl\.? oz|ounces?|oz|grams?|g|ml)\b\.?\s*)?[a-z][a-z ]{0,19}|\d+ ?g\b)/gi;
   for (const m of text.matchAll(re)) {
     // "<2 kcal", "less than 2 kcal", "menos de 2 kcal": an upper bound, not the calorie content.
     if (UPPER_BOUND.test(text.slice(Math.max(0, (m.index ?? 0) - 14), m.index))) continue;
     const kcal = Number(m[1].replace(/[,\s]/g, ''));
-    const perText = m[2].toLowerCase();
-    const per = PER_PATTERNS.find(([p]) => p.test(perText))?.[1] ?? 'other';
+    const perText = m[2].toLowerCase().trim();
+    const sized = /^\d/.test(perText) && !/^100 ?g\b/.test(perText) ? SIZE.exec(perText) : null;
+    const size = sized ? sizeOf(Number(sized[1].replace(',', '.')), sized[2], sized[0]) : null;
+    const rest = sized ? perText.slice(sized.index + sized[0].length) : perText;
+    let per = PER_PATTERNS.find(([p]) => p.test(rest))?.[1] ?? PER_PATTERNS.find(([p]) => p.test(perText))?.[1] ?? 'other';
+    if (size && per === 'other') per = 'piece'; // "kcal per 1.5 oz" without a container word: the stated amount
     if (!Number.isFinite(kcal)) continue;
     const limits = KCAL_LIMITS[per];
     if (limits && (kcal < limits[0] || kcal > limits[1])) continue;
-    out.push({ kcal, per, text: m[0].trim() });
+    out.push({ kcal, per, text: m[0].trim(), ...(size ? { size } : {}) });
   }
   return out;
 }
 
+const PER_WORD: Record<CaloriePer, string> = { kg: 'kg', '100g': '100 g', cup: 'cup', can: 'can', pouch: 'pouch', tray: 'tray', treat: 'treat', chew: 'chew', piece: 'piece', g: 'g', other: 'serving' };
+const sizeText = (s: PackageSize) => `${s.amount.toLocaleString('en-US')}-${s.unit === 'fl oz' ? 'fl-oz' : s.unit}`;
+
 export function describeCalories(c: CalorieStatement): string {
-  const per = { kg: 'kg', '100g': '100 g', cup: 'cup', can: 'can', pouch: 'pouch', tray: 'tray', treat: 'treat', chew: 'chew', piece: 'piece', g: 'g', other: 'serving' }[c.per];
-  return `${c.kcal.toLocaleString('en-US')} kcal per ${per}`;
+  if (c.size) return `${c.kcal.toLocaleString('en-US')} kcal per ${sizeText(c.size)} ${c.per === 'piece' || c.per === 'other' ? 'portion' : PER_WORD[c.per]}`;
+  return `${c.kcal.toLocaleString('en-US')} kcal per ${PER_WORD[c.per]}`;
+}
+
+/**
+ * The calorie statements to show for the scanned package: per kg (or 100 g) always, and of the
+ * package-specific values only the one for this package's size when it is known. Values for other sizes
+ * are left out rather than shown as interchangeable; when the size is unknown they are all kept, each
+ * with its own size.
+ */
+export function caloriesForPackage(cals: CalorieStatement[] | undefined, size: PackageSize | undefined | null): CalorieStatement[] {
+  if (!cals?.length) return [];
+  const sized = cals.filter((c) => c.size);
+  if (!size || !sized.length) return cals;
+  const match = sized.filter((c) => samePackage(c.size, size));
+  return cals.filter((c) => !c.size || match.includes(c));
 }
 
 export function describeEntry(e: GuaranteedAnalysisEntry): string {

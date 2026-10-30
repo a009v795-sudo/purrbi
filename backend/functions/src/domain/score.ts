@@ -1,24 +1,29 @@
-// Purrbi label score 2.0.0 — deterministic and versioned. It measures how well the label information
-// that is available supports the product's intended use. It is Purrbi's own methodology, not an FDA,
-// AAFCO, WSAVA or veterinary rating, and it is independent of any pet profile.
+// Purrbi product score 3.0.0 — deterministic and versioned; Purrbi's own provisional methodology (not an
+// FDA, AAFCO, WSAVA or veterinary rating; no qualified reviewer has reviewed it). It rates what the label
+// shows about the product for its intended use, independent of any pet. Documented in METHODOLOGY.md.
 //
-// Quality and coverage are kept apart:
-//  - every category has a fixed component set worth 100 points;
-//  - if an ESSENTIAL input is missing (MINIMUM_EVIDENCE) the score is withheld (never estimated);
-//  - a component without evidence is "unverified" and left out of the score: the score is the share of
-//    points earned on the components that could be assessed (quality); the points' worth that could be
-//    assessed is reported separately (coverage), with the range the complete label could give (every
-//    unverified item failed … every one met). Missing information never lowers the quality; it lowers
-//    the coverage, and below 80 the result is labelled "Partial assessment" instead of a quality band;
-//  - a complete food whose adequacy statement is unknown is capped at 74 (never "strong");
-//  - ingredients are never counted as good or bad. A documented species-specific concern (Purrbi's
-//    reviewed list) caps the score at 20 and is shown first; context-dependent cautions are flags only;
-//  - supplements get no number: their purpose, dose and evidence vary by ingredient.
+//  - Category-appropriate parts, worth 100 points per category. Each part needs evidence: a part whose
+//    evidence was not found is left out (never scored as failed), and the score is the share of points
+//    earned on the parts assessed. What the score covers is reported separately (coverage).
+//  - Essential parts must be assessed before any number is shown; a number is also shown only when the
+//    parts assessed are worth at least MIN_COVERAGE points. Otherwise the result is "not enough
+//    information" with the exact missing requirement, and the findings found so far are still shown.
+//  - Complete foods: the nutritional adequacy statement, protein and fat against the AAFCO minimums on a
+//    dry-matter basis (from the guaranteed minimums and maximum moisture, so conservative), named
+//    ingredient sources, the calorie statement and further guarantees.
+//  - Treats and toppers: named ingredient sources, the calorie statement (portion control), the feeding
+//    statement and the guaranteed analysis.
+//  - Ingredients count once each, in label order: a vitamin or mineral blend is one entry, never several
+//    "good" ones, and no ingredient is scored good or bad by its name.
+//  - A documented species-specific concern (Purrbi's reviewed list) caps the score at HAZARD_CAP, whatever
+//    else the label shows: favourable parts cannot average it away. It is counted only there (no double
+//    penalty). A context-dependent caution is shown but never caps or lowers the score.
+//  - Supplements get no number: their purpose, dose and evidence vary by ingredient.
 import { lifeStageLabel } from './adequacy';
 import { ingredientNotes, KB_VERSION } from './kb';
-import { describeCalories, findNutrient, hasCoreGuaranteedAnalysis } from './nutrition';
+import { describeCalories, dryMatterPercent, findNutrient, hasCoreGuaranteedAnalysis } from './nutrition';
 import { nutritionContext, nutritionNotes } from './nutritionContext';
-import { parseIngredientList, type ParsedIngredient } from './ingredients';
+import { normalizeIngredientName, parseIngredientList, type ParsedIngredient } from './ingredients';
 import { categoryLabel } from './scope';
 import { assessSupplement } from './supplements';
 import type {
@@ -33,23 +38,26 @@ import type {
   Species,
 } from './types';
 
-export const METHODOLOGY_VERSION = 'purrbi-score-2.0.0';
-/** Caps: a documented concern for the species, and a complete food without its adequacy statement. */
+export const METHODOLOGY_VERSION = 'purrbi-score-3.0.0';
+/** A documented concern for the product's species caps the score here. */
 export const HAZARD_CAP = 20;
-export const NO_ADEQUACY_CAP = 74;
-/** Below this coverage the result is a "Partial assessment", not a quality band. */
-export const BAND_COVERAGE = 80;
+/** A number is shown only when the parts assessed are worth at least this many points. */
+export const MIN_COVERAGE = 70;
+
+/** AAFCO minimums, % of dry matter (AAFCO Dog and Cat Food Nutrient Profiles). */
+export const AAFCO_MIN: Record<Species, Record<'adult' | 'growth', { protein: number; fat: number }>> = {
+  cat: { adult: { protein: 26, fat: 9 }, growth: { protein: 30, fat: 9 } },
+  dog: { adult: { protein: 18, fat: 5.5 }, growth: { protein: 22.5, fat: 8.5 } },
+};
 
 /**
- * Minimum evidence per category: the essential inputs without which no score is given, and the
- * optional enrichment that only changes how complete (provisional) the score is. Identity, species and
- * category come first for every category (classification). Documented in METHODOLOGY.md.
+ * Minimum evidence per category: the parts without which no number is given, and the optional ones that
+ * only change the coverage. Identity, species and category come first for every category.
  */
 export const MINIMUM_EVIDENCE: Record<'complete_food' | 'treat' | 'complementary' | 'supplement', { essential: string[]; optional: string[] }> = {
-  // The adequacy statement is not essential (databases rarely carry it); without it the score is capped at NO_ADEQUACY_CAP.
-  complete_food: { essential: ['ingredient list', 'guaranteed analysis (protein, fat, fiber)'], optional: ['nutritional adequacy statement (score capped at 74 without it)', 'calorie content statement', 'moisture guarantee', 'further guarantees'] },
-  treat: { essential: ['ingredient list or guaranteed analysis'], optional: ['feeding statement', 'calorie content statement', 'moisture guarantee', 'the other of ingredient list / guaranteed analysis'] },
-  complementary: { essential: ['ingredient list or guaranteed analysis'], optional: ['feeding statement', 'calorie content statement', 'moisture guarantee', 'the other of ingredient list / guaranteed analysis'] },
+  complete_food: { essential: ['nutritional adequacy statement', 'guaranteed analysis (protein, fat; moisture for the dry-matter comparison)', 'ingredient list'], optional: ['calorie content statement', 'further guarantees'] },
+  treat: { essential: ['ingredient list', 'calorie content statement, or both the feeding statement and the guaranteed analysis'], optional: ['feeding statement', 'guaranteed analysis'] },
+  complementary: { essential: ['ingredient list', 'calorie content statement, or both the feeding statement and the guaranteed analysis'], optional: ['feeding statement', 'guaranteed analysis'] },
   supplement: { essential: ['active ingredients or ingredient list'], optional: ['amounts per serving', 'warnings', 'quality signals'] },
 };
 
@@ -85,11 +93,11 @@ export function speciesList(s: ScopeResult['species']): Species[] {
   return ['cat', 'dog'];
 }
 
-function band(score: number): { band: GeneralAssessment['scoreBand']; label: string } {
-  if (score >= 85) return { band: 'strong', label: 'Strong label information' };
-  if (score >= 70) return { band: 'good', label: 'Good label information' };
-  if (score >= 50) return { band: 'review', label: 'Review the details' };
-  return { band: 'low', label: 'Weak label information' };
+function band(score: number): { band: GeneralAssessment['scoreBand']; label: string; color: GeneralAssessment['ratingColor'] } {
+  if (score >= 85) return { band: 'strong', label: 'Strong', color: 'green' };
+  if (score >= 70) return { band: 'good', label: 'Good', color: 'green' };
+  if (score >= 50) return { band: 'review', label: 'Fair', color: 'yellow' };
+  return { band: 'low', label: 'Weak', color: 'red' };
 }
 
 /** Documented concerns for the species, one per curated entry however many forms are listed. */
@@ -100,47 +108,130 @@ function hazards(notes: IngredientNote[]): IngredientNote[] {
 
 const speciesNames = (s: ScopeResult['species']) => (s === 'cat' ? 'cats' : s === 'dog' ? 'dogs' : 'cats or dogs');
 
-function gaExtrasComponent(facts: ProductFacts, max: number): ScoreComponent {
-  const ga = facts.guaranteedAnalysis?.value ?? [];
-  const extras = new Set(ga.filter((e) => !['crude_protein', 'crude_fat', 'crude_fiber', 'moisture', 'other'].includes(e.nutrient)).map((e) => e.nutrient));
-  const fromDatabase = facts.guaranteedAnalysis?.source.sourceType === 'database';
-  if (!ga.length) {
-    return { key: 'extra_guarantees', label: 'Guarantees beyond the required nutrients', points: 0, maxPoints: max, status: 'unverified', explanation: 'No guaranteed analysis is available.' };
-  }
-  if (extras.size >= 2) {
-    return { key: 'extra_guarantees', label: 'Guarantees beyond the required nutrients', points: max, maxPoints: max, status: 'met', explanation: `Also guarantees ${[...extras].map((x) => x.replace('_', '-')).join(', ')}.` };
-  }
-  if (extras.size === 1) {
-    return { key: 'extra_guarantees', label: 'Guarantees beyond the required nutrients', points: Math.round(max * 0.6), maxPoints: max, status: 'partly_met', explanation: `Also guarantees ${[...extras][0].replace('_', '-')}.` };
-  }
+// Ingredients that are not a source of the food: processing liquids, vitamin and mineral additions and
+// technological additives. Left out when judging how clearly the main ingredients are named.
+const NOT_A_SOURCE = /\b(water|broth|stock|vitamins?|minerals?|premix|supplement|chelate|proteinate|chloride|sulfate|sulphate|phosphate|carbonate|oxide|iodide|iodate|selenite|selenium yeast|taurine|choline|menadione|gum|carrageenan|agar|gelatin|tocopherols?|rosemary extract|citric acid|salt|colou?r)\b/;
+// Names that do not say which animal or plant the ingredient comes from ("meat by-products", "poultry fat",
+// "fish meal", "natural flavor"). "Chicken by-product meal" names its animal: what part of it is used is not
+// what this checks.
+const GENERIC_SOURCE = /^(?:meat|animal|poultry|fish|fowl|by-?products?|derivatives|digest|cereals?|grains?|vegetables?|vegetable (?:protein extracts?|oils?|fats?)|oils and fats|fats and oils|natural flavou?rs?|flavou?rs?|(?:sous|tierische)\b)\b/;
+
+/** Whether an ingredient name says which animal or plant it comes from ("chicken meal" yes, "meat by-products" no). */
+export function namedSource(name: string): boolean {
+  const n = normalizeIngredientName(name.replace(/\([^)]*\)|\[[^\]]*\]/g, ' '));
+  return !!n && !GENERIC_SOURCE.test(n);
+}
+
+/** The first five source ingredients (label order, blends and additives left out). */
+export function mainSources(ingredients: ParsedIngredient[]): ParsedIngredient[] {
+  // "Chicken fat (preserved with mixed tocopherols)" is a fat source: what it is preserved with is not.
+  return ingredients.filter((i) => i.kind !== 'group' && !NOT_A_SOURCE.test(normalizeIngredientName(i.name.replace(/\([^)]*\)|\[[^\]]*\]/g, ' ')))).slice(0, 5);
+}
+
+function namedSourcesComponent(ingredients: ParsedIngredient[], max: number): ScoreComponent {
+  const main = mainSources(ingredients);
+  const label = 'Main ingredients named by source';
+  if (!main.length) return { key: 'named_sources', label, points: max, maxPoints: max, status: 'met', explanation: 'The listed ingredients are processing liquids, nutrients and additives only.' };
+  const named = main.filter((i) => namedSource(i.name));
+  const points = Math.round((max * named.length) / main.length);
+  const generic = main.filter((i) => !namedSource(i.name)).map((i) => i.name);
   return {
-    key: 'extra_guarantees',
-    label: 'Guarantees beyond the required nutrients',
-    points: 0,
+    key: 'named_sources',
+    label,
+    points,
     maxPoints: max,
-    status: fromDatabase ? 'unverified' : 'not_met',
-    explanation: fromDatabase
-      ? 'The database record lists no further guarantees; the package may list more.'
-      : 'The label lists no guarantees beyond the required nutrients.',
+    status: points === max ? 'met' : points === 0 ? 'not_met' : 'partly_met',
+    explanation: generic.length
+      ? `${named.length} of the first ${main.length} main ingredients say which animal or plant they come from; ${generic.slice(0, 2).join(', ')} ${generic.length === 1 ? 'does' : 'do'} not (this matters most for pets with food allergies).`
+      : `The first ${main.length} main ingredients each say which animal or plant they come from.`,
   };
 }
 
-function presence(key: string, label: string, max: number, known: boolean, metText: string, missingText: string): ScoreComponent {
-  return known
-    ? { key, label, points: max, maxPoints: max, status: 'met', explanation: metText }
-    : { key, label, points: 0, maxPoints: max, status: 'unverified', explanation: missingText };
+/**
+ * Protein and fat against the AAFCO minimums for the product's species and life stage, on a dry-matter
+ * basis from the guaranteed minimums and the maximum moisture (conservative: the true values can only be
+ * higher). Without moisture, a value already at the minimum as fed passes (as fed is never above dry matter).
+ */
+function proteinFatComponent(facts: ProductFacts, scope: ScopeResult, max: number): ScoreComponent | null {
+  const ga = facts.guaranteedAnalysis?.value;
+  const p = findNutrient(ga, 'crude_protein');
+  const f = findNutrient(ga, 'crude_fat');
+  if (!p || !f || p.unit !== '%' || f.unit !== '%') return null;
+  const stages = facts.adequacy?.value.lifeStages ?? [];
+  const stage = stages.some((x) => x === 'growth' || x === 'all_life_stages' || x === 'gestation_lactation') ? 'growth' : 'adult';
+  const species: Species[] = scope.species === 'dog' ? ['dog'] : scope.species === 'cat' ? ['cat'] : ['cat', 'dog'];
+  const moisture = findNutrient(ga, 'moisture');
+  const dm = (v: number) => (moisture?.unit === '%' ? dryMatterPercent(v, moisture.value) : null);
+  const meets = (value: number, min: number) => {
+    const d = dm(value);
+    return d !== null ? d >= min : value >= min ? true : null;
+  };
+  // A product for both species is held to the stricter (cat) minimums.
+  const min = species.map((sp) => AAFCO_MIN[sp][stage]).reduce((a, b) => ({ protein: Math.max(a.protein, b.protein), fat: Math.max(a.fat, b.fat) }));
+  const pm = meets(p.value, min.protein);
+  const fm = meets(f.value, min.fat);
+  const label = 'Protein and fat (AAFCO minimums, dry matter)';
+  if (pm === null || fm === null) return { key: 'protein_fat', label, points: 0, maxPoints: max, status: 'unverified', explanation: 'Moisture isn’t available, so protein and fat can’t be compared on a dry-matter basis.' };
+  const both = pm && fm;
+  const points = both ? max : pm || fm ? Math.round(max * 0.4) : 0;
+  const show = (v: number) => (dm(v) === null ? `${v}% as fed` : `≈ ${dm(v)}% of dry matter`);
+  return {
+    key: 'protein_fat',
+    label,
+    points,
+    maxPoints: max,
+    status: both ? 'met' : points ? 'partly_met' : 'not_met',
+    explanation: `Protein ${show(p.value)} (minimum ${min.protein}%), fat ${show(f.value)} (minimum ${min.fat}%) for ${stage === 'growth' ? 'growth' : 'adult maintenance'}; from the guaranteed minimums, so actual amounts can be higher.`,
+  };
 }
+
+function extraGuaranteesComponent(facts: ProductFacts, max: number): ScoreComponent {
+  const ga = facts.guaranteedAnalysis?.value ?? [];
+  const extras = new Set(ga.filter((e) => !['crude_protein', 'crude_fat', 'crude_fiber', 'moisture', 'other'].includes(e.nutrient)).map((e) => e.nutrient));
+  const label = 'Further guarantees';
+  const fromDatabase = facts.guaranteedAnalysis?.source.sourceType === 'database';
+  if (!ga.length || (!extras.size && fromDatabase)) return { key: 'extra_guarantees', label, points: 0, maxPoints: max, status: 'unverified', explanation: fromDatabase ? 'The database record lists no further guarantees; the package may list more.' : 'No guaranteed analysis is available.' };
+  const named = [...extras].map((x) => x.replace('_', '-')).join(', ');
+  if (extras.size >= 2) return { key: 'extra_guarantees', label, points: max, maxPoints: max, status: 'met', explanation: `Also guarantees ${named}.` };
+  if (extras.size === 1) return { key: 'extra_guarantees', label, points: Math.round(max * 0.6), maxPoints: max, status: 'partly_met', explanation: `Also guarantees ${named}.` };
+  return { key: 'extra_guarantees', label, points: 0, maxPoints: max, status: 'not_met', explanation: 'The label lists no guarantees beyond the required nutrients.' };
+}
+
+const caloriesComponent = (facts: ProductFacts, max: number, why: string): ScoreComponent =>
+  facts.calories?.value.length
+    ? { key: 'calories', label: 'Calorie content statement', points: max, maxPoints: max, status: 'met', explanation: `Calorie content is listed (${describeCalories(facts.calories.value[0])}), ${why}.` }
+    : { key: 'calories', label: 'Calorie content statement', points: 0, maxPoints: max, status: 'unverified', explanation: 'Not found yet.' };
 
 export function assessGeneral(facts: ProductFacts, scope: ScopeResult): GeneralAssessment {
   const ingredients = productIngredients(facts);
   const species = speciesList(scope.species);
   const notes = ingredientNotes(ingredients, species);
   const findings: Finding[] = [];
-  const base = { methodologyVersion: METHODOLOGY_VERSION, kbVersion: KB_VERSION, ingredientNotes: notes, nutritionNotes: [], nutritionContext: [], supplement: null };
+  const base = { methodologyVersion: METHODOLOGY_VERSION, kbVersion: KB_VERSION, ingredientNotes: notes, nutritionNotes: [], nutritionContext: [], supplement: null, criticalConcerns: [] as string[] };
+  const unscored = (over: Partial<GeneralAssessment>): GeneralAssessment => ({
+    ...base,
+    category: 'unknown',
+    scoreApplicable: false,
+    score: null,
+    scoreBand: null,
+    scoreLabel: 'Not assessed',
+    scoreProvisional: false,
+    scoreWithheldReason: null,
+    scoreCoverage: null,
+    scoreMaxPossible: null,
+    scoreMinPossible: null,
+    scoreBasis: '',
+    ratingColor: 'gray',
+    coverageText: '',
+    components: [],
+    findings,
+    missingForScore: [],
+    ...over,
+  });
 
   if (scope.status === 'out_of_scope') {
     findings.push({ kind: 'info', text: scope.reason, evidence: 'Product classification', rule: 'G-SCOPE' });
-    return { ...base, category: 'unknown', scoreApplicable: false, score: null, scoreBand: null, scoreLabel: 'Not assessed', scoreProvisional: false, scoreWithheldReason: scope.reason, scoreCoverage: null, scoreMaxPossible: null, scoreBasis: '', components: [], findings, missingForScore: [] };
+    return unscored({ scoreWithheldReason: scope.reason });
   }
 
   const adequacy = facts.adequacy?.value;
@@ -182,7 +273,8 @@ export function assessGeneral(facts: ProductFacts, scope: ScopeResult): GeneralA
     const f = findNutrient(ga, 'crude_fat');
     const fi = findNutrient(ga, 'crude_fiber');
     const m = findNutrient(ga, 'moisture');
-    const parts = [p && `protein ${p.value}%`, f && `fat ${f.value}%`, fi && `fiber ${fi.value}%`, m && `moisture ${m.value}%`].filter(Boolean);
+    const q = (e: { qualifier: string }) => (e.qualifier === 'min' ? ' min' : e.qualifier === 'max' ? ' max' : '');
+    const parts = [p && `protein ${p.value}%${q(p)}`, f && `fat ${f.value}%${q(f)}`, fi && `fiber ${fi.value}%${q(fi)}`, m && `moisture ${m.value}%${q(m)}`].filter(Boolean);
     if (parts.length) findings.push({ kind: 'info', text: `Guaranteed analysis: ${parts.join(', ')}.`, evidence: evidenceLabel(facts.guaranteedAnalysis?.source), rule: 'G-GA' });
   } else if (category !== 'supplement') {
     findings.push({ kind: 'missing', text: 'Guaranteed analysis (protein, fat, fiber) is not available yet.', evidence: 'Missing evidence', rule: 'G-GA' });
@@ -203,151 +295,132 @@ export function assessGeneral(facts: ProductFacts, scope: ScopeResult): GeneralA
   }
   if (!ingredients.length) findings.push({ kind: 'missing', text: 'The ingredient list is not available yet.', evidence: 'Missing evidence', rule: 'G-INGREDIENTS' });
 
-  // ---- Score ----
-  const hasIngredients = ingredients.length > 0;
-  const coreGa = hasCoreGuaranteedAnalysis(ga);
-  const moistureKnown = !!findNutrient(ga, 'moisture');
-  const caloriesKnown = !!cals?.length;
-  const components: ScoreComponent[] = [];
-  const missingForScore: string[] = [];
-
   if (category === 'supplement') {
-    return {
+    return unscored({
       ...explained,
       category,
-      scoreApplicable: false,
-      score: null,
-      scoreBand: null,
       scoreLabel: 'Not scored',
-      scoreProvisional: false,
       scoreWithheldReason: 'Purrbi does not give supplements a number: their purpose, dose and evidence vary by ingredient. The label facts, ingredients and any documented concerns are shown instead.',
-      scoreCoverage: null,
-      scoreMaxPossible: null,
-      scoreBasis: '',
-      components,
-      findings,
-      missingForScore,
-    };
+    });
   }
 
+  // ---- Score ----
+  const components: ScoreComponent[] = [];
+  const missingForScore: string[] = [];
+  const hasIngredients = ingredients.length > 0;
   if (category === 'unknown') {
-    missingForScore.push('product type');
+    missingForScore.push('product type (complete food, treat or supplement)');
   } else if (category === 'complete_food') {
-    if (!adequacy) {
-      // Not essential (databases rarely carry it): the score is capped at NO_ADEQUACY_CAP until it is known.
-      components.push({ key: 'adequacy', label: 'Nutritional adequacy statement', points: 0, maxPoints: 50, status: 'unverified', explanation: 'Not available yet: the package states whether the food is complete and balanced, and for which life stage.' });
-    } else {
-      let points = 20;
+    if (!adequacy) missingForScore.push('nutritional adequacy ("complete and balanced") statement');
+    else {
+      let points = 8;
       let status: ScoreComponent['status'] = 'partly_met';
       let explanation = 'The statement does not clearly say what the food is complete and balanced for.';
       if (adequacy.type === 'complete') {
         const speciesOk = adequacy.species === 'unknown' || adequacy.species === scope.species || scope.species === 'cat_and_dog' || adequacy.species === 'cat_and_dog';
-        if (!speciesOk || !adequacy.lifeStages.length) {
-          points = 30;
-          explanation = !speciesOk ? 'The statement names a different species than the rest of the label.' : 'The statement does not name a life stage.';
+        if (!speciesOk) {
+          points = 10;
+          explanation = 'The statement names a different species than the rest of the label.';
+        } else if (!adequacy.lifeStages.length) {
+          points = 18;
+          explanation = 'Complete and balanced, but the statement does not name a life stage.';
         } else {
-          points = adequacy.method === 'feeding_trial' ? 50 : 43;
+          points = adequacy.method === 'feeding_trial' ? 30 : adequacy.method === 'formulation' ? 27 : 24;
           status = 'met';
-          explanation = adequacy.method === 'feeding_trial'
-            ? 'Complete and balanced, substantiated by animal feeding tests.'
-            : 'Complete and balanced by formulation (feeding tests are an additional, optional substantiation).';
+          explanation =
+            adequacy.method === 'feeding_trial'
+              ? `Complete and balanced for ${adequacy.lifeStages.map(lifeStageLabel).join(', ')}, substantiated by animal feeding tests.`
+              : `Complete and balanced for ${adequacy.lifeStages.map(lifeStageLabel).join(', ')}${adequacy.method === 'formulation' ? ' by formulation (feeding tests are an additional, optional substantiation)' : ''}.`;
         }
       }
-      components.push({ key: 'adequacy', label: 'Nutritional adequacy statement', points, maxPoints: 50, status, explanation });
+      components.push({ key: 'adequacy', label: 'Nutritional adequacy statement', points, maxPoints: 30, status, explanation });
     }
-    if (!coreGa) missingForScore.push('guaranteed analysis (protein, fat, fiber)');
-    components.push(presence('core_guarantees', 'Required guarantees (protein, fat, fiber)', 25, coreGa, 'Protein, fat and fiber guarantees are listed.', 'Not available yet.'));
-    components.push(presence('calories', 'Calorie content statement', 15, caloriesKnown, 'Calorie content is listed.', 'Not available yet.'));
-    components.push(presence('moisture', 'Moisture guarantee', 5, moistureKnown, 'Moisture is listed.', 'Not available yet.'));
-    components.push(gaExtrasComponent(facts, 5));
+    const pf = proteinFatComponent(facts, scope, 30);
+    if (!pf) missingForScore.push('guaranteed analysis (protein and fat)');
+    else if (pf.status === 'unverified') missingForScore.push('moisture guarantee (to compare protein and fat on a dry-matter basis)');
+    else components.push(pf);
     if (!hasIngredients) missingForScore.push('ingredient list');
+    else components.push(namedSourcesComponent(ingredients, 20));
+    components.push(caloriesComponent(facts, 10, 'which helps with portions'));
+    components.push(extraGuaranteesComponent(facts, 10));
   } else {
     // treat or complementary
-    const feeding = adequacy
-      ? adequacy.type === 'unclear'
-        ? { points: 13, status: 'partly_met' as const, text: 'A feeding statement is present but unclear.' }
-        : { points: 25, status: 'met' as const, text: adequacy.type === 'complete' ? 'Labeled complete and balanced.' : 'Labeled for intermittent or supplemental feeding, as expected for this type of product.' }
-      : null;
+    if (!hasIngredients) missingForScore.push('ingredient list');
+    else components.push(namedSourcesComponent(ingredients, 40));
+    components.push(caloriesComponent(facts, 30, 'which helps keep treats and toppers under about 10% of daily calories'));
     components.push(
-      feeding
-        ? { key: 'feeding_statement', label: 'Feeding statement', points: feeding.points, maxPoints: 25, status: feeding.status, explanation: feeding.text }
-        : { key: 'feeding_statement', label: 'Feeding statement', points: 0, maxPoints: 25, status: 'unverified', explanation: 'Not available yet.' },
+      adequacy && adequacy.type !== 'unclear'
+        ? { key: 'feeding_statement', label: 'Feeding statement', points: 15, maxPoints: 15, status: 'met', explanation: adequacy.type === 'complete' ? 'Labeled complete and balanced.' : 'Labeled for intermittent or supplemental feeding, as expected for this type of product.' }
+        : adequacy
+          ? { key: 'feeding_statement', label: 'Feeding statement', points: 8, maxPoints: 15, status: 'partly_met', explanation: 'A feeding statement is present but unclear.' }
+          : { key: 'feeding_statement', label: 'Feeding statement', points: 0, maxPoints: 15, status: 'unverified', explanation: 'Not found yet.' },
     );
-    // Essential: the ingredient list or the guaranteed analysis (either gives a bounded label assessment).
-    if (!coreGa && !hasIngredients) missingForScore.push('ingredient list or guaranteed analysis (protein, fat, fiber)');
-    components.push(presence('core_guarantees', 'Required guarantees (protein, fat, fiber)', 40, coreGa, 'Protein, fat and fiber guarantees are listed.', 'Not available yet.'));
-    components.push(presence('calories', 'Calorie content statement', 30, caloriesKnown, 'Calorie content is listed, which helps keep treats under about 10% of daily calories.', 'Not available yet.'));
-    components.push(presence('moisture', 'Moisture guarantee', 5, moistureKnown, 'Moisture is listed.', 'Not available yet.'));
+    components.push(
+      hasCoreGuaranteedAnalysis(ga)
+        ? { key: 'core_guarantees', label: 'Guaranteed analysis (protein, fat, fiber)', points: 15, maxPoints: 15, status: 'met', explanation: 'Protein, fat and fiber guarantees are listed.' }
+        : { key: 'core_guarantees', label: 'Guaranteed analysis (protein, fat, fiber)', points: 0, maxPoints: 15, status: 'unverified', explanation: 'Not found yet.' },
+    );
   }
 
+  const assessed = components.filter((c) => c.status !== 'unverified');
+  const coverage = assessed.reduce((s, c) => s + c.maxPoints, 0);
+  const unverified = components.filter((c) => c.status === 'unverified');
+  if (!missingForScore.length && coverage < MIN_COVERAGE) {
+    missingForScore.push(category === 'complete_food' ? unverified.map((c) => c.label.toLowerCase()).join(' or ') : 'calorie content statement, or both the feeding statement and the guaranteed analysis');
+  }
+  const coverageText = assessed.length
+    ? `Based on ${assessed.length} of ${category === 'complete_food' ? 5 : 4} parts: ${assessed.map((c) => c.label.toLowerCase()).join(', ')}${unverified.length ? ` (${unverified.map((c) => c.label.toLowerCase()).join(', ')} not found)` : ''}.`
+    : '';
+
   if (missingForScore.length) {
-    return {
+    return unscored({
       ...explained,
       category,
       scoreApplicable: true,
-      score: null,
-      scoreBand: null,
       scoreLabel: scope.status === 'unknown' ? 'Not scored yet' : 'Not enough information to score',
-      scoreProvisional: false,
       scoreWithheldReason:
         scope.status === 'unknown'
           ? 'Not scored yet: it isn’t confirmed whether this product is made for cats or dogs.'
           : category === 'unknown'
             ? 'Purrbi needs to know whether this is a complete food, a treat or a supplement before it can score it.'
-            : `Purrbi needs the ${missingForScore.join(', ')} before it can score this ${categoryLabel(category).toLowerCase()}.`,
-      scoreCoverage: null,
-      scoreMaxPossible: null,
-      scoreBasis: '',
+            : `Purrbi needs the ${missingForScore.join(' and the ')} before it can score this ${categoryLabel(category).toLowerCase()}.`,
+      scoreCoverage: coverage || null,
+      coverageText,
       components,
-      findings,
       missingForScore,
-    };
+    });
   }
 
   const max = components.reduce((s, c) => s + c.maxPoints, 0);
   if (max !== 100) throw new Error(`score components must total 100, got ${max}`);
-  const assessed = components.filter((c) => c.status !== 'unverified');
-  const unverified = components.filter((c) => c.status === 'unverified');
-  const coverage = assessed.reduce((s, c) => s + c.maxPoints, 0);
   const earned = assessed.reduce((s, c) => s + c.points, 0);
-  const missingPoints = 100 - coverage;
-  // Quality over what could be assessed; the range is what the complete label could give.
+  let score = Math.round((100 * earned) / coverage);
+  // A documented concern for the species caps the score, whatever the other parts earned.
   const hazard = hazards(notes);
-  const noAdequacy = category === 'complete_food' && !adequacy;
-  let score = coverage ? Math.round((100 * earned) / coverage) : 0;
-  let low = earned;
-  let high = earned + missingPoints;
-  if (noAdequacy) score = Math.min(score, NO_ADEQUACY_CAP);
-  if (hazard.length) {
-    score = Math.min(score, HAZARD_CAP);
-    low = Math.min(low, HAZARD_CAP);
-    high = Math.min(high, HAZARD_CAP);
-  }
-  const provisional = unverified.length > 0;
+  const critical = hazard.map((h) => `${h.name}: ${h.note}`);
+  if (hazard.length) score = Math.min(score, HAZARD_CAP);
   const b = band(score);
-  const partial = coverage < BAND_COVERAGE;
-  const caps = [
-    hazard.length ? `capped at ${HAZARD_CAP}: ${hazard.map((h) => h.name).join(', ')} ${hazard.length === 1 ? 'is a' : 'are'} documented concern${hazard.length === 1 ? '' : 's'} for ${speciesNames(scope.species)}` : '',
-    noAdequacy && !hazard.length ? `capped at ${NO_ADEQUACY_CAP} until the adequacy statement is known` : '',
-  ].filter(Boolean);
   return {
     ...explained,
     category,
     scoreApplicable: true,
     score,
-    scoreBand: hazard.length ? 'low' : partial ? null : b.band,
-    scoreLabel: hazard.length ? 'Documented ingredient concern' : partial ? 'Partial assessment' : b.label,
-    scoreProvisional: provisional,
+    scoreBand: hazard.length ? 'low' : b.band,
+    scoreLabel: hazard.length ? 'Serious concern' : b.label,
+    scoreProvisional: unverified.length > 0,
     scoreWithheldReason: null,
     scoreCoverage: coverage,
-    scoreMaxPossible: high,
-    scoreMinPossible: low,
+    scoreMaxPossible: score,
+    scoreMinPossible: score,
     scoreBasis: [
-      provisional
-        ? `Based on ${coverage} of 100 points’ worth of label information (${unverified.map((c) => c.label.toLowerCase()).join(', ')} not available yet); the complete label could put it between ${low} and ${high}.`
-        : 'Based on all the label information Purrbi scores for this product type.',
-      caps.length ? `Score ${caps.join('; ')}.` : '',
-    ].filter(Boolean).join(' '),
+      unverified.length ? `Scored on the parts found (${coverage} of 100 points’ worth); ${unverified.map((c) => c.label.toLowerCase()).join(', ')} not found yet.` : 'Scored on every part Purrbi uses for this product type.',
+      hazard.length ? `Capped at ${HAZARD_CAP}: ${hazard.map((h) => h.name).join(', ')} ${hazard.length === 1 ? 'is a' : 'are'} documented concern${hazard.length === 1 ? '' : 's'} for ${speciesNames(scope.species)}.` : '',
+    ]
+      .filter(Boolean)
+      .join(' '),
+    ratingColor: hazard.length ? 'red' : b.color,
+    coverageText,
+    criticalConcerns: critical,
     components,
     findings,
     missingForScore,

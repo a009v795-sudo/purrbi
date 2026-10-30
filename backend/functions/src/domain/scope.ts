@@ -7,12 +7,18 @@
 // unknown (unresolved: research and, if needed, a label photo decide). Species never comes from the
 // owner's selected pet or from pictures.
 import { detectSpecies } from './adequacy';
-import type { AdequacyStatement, OutOfScopeKind, ProductCategory, ProductSpecies, ScopeResult } from './types';
+import type { AdequacyStatement, CategoryBasis, OutOfScopeKind, ProductCategory, ProductSpecies, ScopeResult, Species, SpeciesBasis, SpeciesEvidence } from './types';
 
 /** Version of these classification rules, saved with each product record and scan. */
-export const SCOPE_VERSION = 'scope-2.1.0'; // 2.1.0: the database's front image is read while unresolved
+export const SCOPE_VERSION = 'scope-3.0.0'; // 3.0.0: species from the strongest evidence (a retailer listing alone doesn't confirm it); product type from feeding statements, never from "broth" or "gravy"
 
 export type DatabaseOrigin = 'opff' | 'off' | 'obf' | 'opf' | 'web' | 'label';
+
+/** A name, tag or statement about the product with where it comes from (decides how much it says about the species). */
+export interface SpeciesClaim {
+  text: string;
+  basis: SpeciesBasis;
+}
 
 export interface ScopeInput {
   origin: DatabaseOrigin; // provenance only: never decides the outcome
@@ -21,6 +27,52 @@ export interface ScopeInput {
   texts: string[]; // names, generic names, label tags, verified research and label-photo statements
   adequacy?: AdequacyStatement | null;
   ingredientsText?: string | null; // feed-ingredient vocabulary is evidence of an animal food
+  /** The same names and statements with their basis; when given, the species comes from the strongest basis. */
+  speciesClaims?: SpeciesClaim[];
+}
+
+/** Strongest first. A retailer's title or catalogue tags ("Dog Trt Frz Dr …") do not confirm who a product is for. */
+const BASIS_ORDER: SpeciesBasis[] = ['label', 'adequacy_statement', 'manufacturer_page', 'database_category', 'database_name', 'retailer_listing'];
+const CONFIRMING: ReadonlySet<SpeciesBasis> = new Set(['label', 'adequacy_statement', 'manufacturer_page', 'database_category', 'database_name']);
+const BASIS_WORDS: Record<SpeciesBasis, string> = {
+  label: 'the package label',
+  adequacy_statement: 'the nutritional adequacy statement',
+  manufacturer_page: 'the manufacturer’s page',
+  database_category: 'the pet database’s categories',
+  database_name: 'the pet database record',
+  retailer_listing: 'a retailer’s listing',
+  none: 'nothing yet',
+};
+const setOf = (s: ProductSpecies): Species[] => (s === 'cat_and_dog' ? ['cat', 'dog'] : s === 'cat' || s === 'dog' ? [s] : []);
+const speciesOfSet = (set: Species[]): ProductSpecies => (set.includes('cat') && set.includes('dog') ? 'cat_and_dog' : set[0] ?? 'unknown');
+
+/**
+ * Who the product is for, from the strongest evidence that names a species: the species named at the
+ * strongest basis (all of them: a dog-and-cat treat is ["cat", "dog"]). A weaker source naming fewer
+ * species is consistent with it, not a conflict; a confirming source naming a species the strongest does
+ * not is noted. Two sources at the strongest basis that name different species dispute it.
+ */
+export function speciesEvidence(claims: SpeciesClaim[], adequacy?: AdequacyStatement | null): SpeciesEvidence {
+  const named = [
+    ...(adequacy && adequacy.species !== 'unknown' ? [{ set: setOf(adequacy.species), basis: 'adequacy_statement' as SpeciesBasis }] : []),
+    ...claims
+      // The pet database's generic parent categories ("en:dog-and-cat-food") say nothing about the species.
+      .filter((c) => c.basis !== 'database_category' || !GENERIC_TAGS.test(stripLang(c.text)))
+      .map((c) => ({ set: setOf(detectSpecies(notSpecies(norm(c.text)))), basis: c.basis }))
+      .filter((c) => c.set.length),
+  ];
+  if (!named.length) return { set: [], confirmed: false, basis: 'none', disputed: false, note: 'Nothing found yet says whether it is for cats or dogs.' };
+  const basis = BASIS_ORDER.find((b) => named.some((c) => c.basis === b)) ?? 'retailer_listing';
+  const top = named.filter((c) => c.basis === basis);
+  const set = (['cat', 'dog'] as Species[]).filter((sp) => top.some((c) => c.set.includes(sp)));
+  // Disputed: at the strongest basis, one source names only cats and another only dogs.
+  const disputed = top.some((a) => top.some((b) => !a.set.some((x) => b.set.includes(x))));
+  const others = named.filter((c) => c.basis !== basis && CONFIRMING.has(c.basis) && c.set.some((x) => !set.includes(x)));
+  const say = (s: Species[]) => (s.length === 2 ? 'cats and dogs' : `${s[0]}s`);
+  const note = disputed
+    ? `Sources disagree on who it is for (${top.map((c) => say(c.set)).join(' vs ')}); a photo of the package settles it.`
+    : `For ${say(set)}, according to ${BASIS_WORDS[basis]}${others.length ? ` (${BASIS_WORDS[others[0].basis]} says ${say(others[0].set)})` : ''}.`;
+  return { set: disputed ? [] : set, confirmed: !disputed && CONFIRMING.has(basis), basis, disputed, note };
 }
 
 const norm = (s: string) =>
@@ -45,7 +97,8 @@ const SUPPLEMENT =
   /\b(supplements?|multivitamins?|vitamins?|probiotics?|prebiotics?|glucosamine|chondroitin|joint (support|health|care|chews?)|hip (and|&) joint|fish oil|salmon oil|krill oil|pollock oil|calming (chews?|aid|supplement)|digestive (aid|support|chews?)|immune (support|chews?)|skin (and|&) coat (chews?|supplement|oil)|urinary (support|health) chews?|l lysine|lysine)\b/;
 const TREAT =
   /\b(treats?|snacks?|dental (chews?|sticks?)|chews?|biscuits?|jerky|cookies|bully stick|rawhide|lickable|puree tubes?|creamy treats?|training bites|crunchies|nibbles)\b/;
-const COMPLEMENTARY = /\b(toppers?|mixers?|meal enhancers?|broths?|bone broth|gravy topper|food topper|complementary (pet )?(food|feed)|complementary feedingstuff)\b/;
+// Named as a topper or complementary feed. "Broth" and "gravy" are textures, not a feeding purpose.
+const COMPLEMENTARY = /\b(toppers?|mixers?|meal enhancers?|food toppers?|complementary (pet )?(food|feed)|complementary feedingstuff)\b/;
 const COMPLETE_FOOD =
   /\b(kibble|dry (dog |cat )?food|wet (dog |cat )?food|complete (pet |dry |wet )?(food|feed)|dinner|entree|pate|recipe|formula|chunks in gravy|loaf|stew|canned (dog |cat )?food|dog food|cat food|pet food)\b/;
 
@@ -119,8 +172,10 @@ export function classifyScope(input: ScopeInput): ScopeResult {
   const all = `${tags} | ${texts}`;
   const signals: string[] = [];
   if (input.recordType) signals.push(`record-type:${input.recordType}`); // recorded as provenance; not used to decide
-  const species = speciesFrom(all, input.adequacy);
-  const isPet = species !== 'unknown';
+  const evidence = input.speciesClaims ? speciesEvidence(input.speciesClaims, input.adequacy) : undefined;
+  const species = evidence ? speciesOfSet(evidence.set) : speciesFrom(all, input.adequacy);
+  // Disputed sources are unresolved, never merged into "cats and dogs".
+  const isPet = species !== 'unknown' || !!evidence?.disputed;
   if (isPet) signals.push(`species:${species}`);
   const markers = feedMarkers(input.ingredientsText);
   const petCategory = input.categoriesTags.some(isPetTag);
@@ -134,6 +189,8 @@ export function classifyScope(input: ScopeInput): ScopeResult {
     outOfScopeKind: kind,
     reason,
     signals: [...signals, `out_of_scope:${kind}`],
+    ...(evidence ? { speciesEvidence: evidence } : {}),
+    categoryBasis: 'none',
   });
 
   // Products for other animals or non-food items, even when found in the pet database.
@@ -143,6 +200,9 @@ export function classifyScope(input: ScopeInput): ScopeResult {
   if (!isPet && OTHER_ANIMAL.test(all)) return out('other_animal', 'This product appears to be for an animal other than a cat or dog.');
   if (!isPet && NON_FOOD.test(all)) return out('non_food', 'This looks like a pet accessory rather than a food, treat or supplement.');
 
+  if (evidence?.disputed) {
+    return { status: 'unknown', species: 'unknown', category: 'unknown', reason: evidence.note, signals: [...signals, 'species-disputed'], speciesEvidence: evidence, categoryBasis: 'none' };
+  }
   if (!isPet) {
     // Affirmative evidence of another kind of product: the record's own categories are all of another
     // kind (e.g. breakfast cereals, shampoos), or a verified manufacturer page says it is for people;
@@ -167,29 +227,42 @@ export function classifyScope(input: ScopeInput): ScopeResult {
         ? 'This looks like an animal food, but nothing on its record says yet whether it is made for cats or dogs.'
         : 'We couldn’t yet confirm from the product information whether this is made for cats or dogs.',
       signals: [...signals, 'unresolved'],
+      ...(evidence ? { speciesEvidence: evidence } : {}),
+      categoryBasis: 'none',
     };
   }
 
+  // The product type rests on the feeding statement first ("complete and balanced …", "for intermittent or
+  // supplemental feeding"), then on the product being named a treat, topper, mixer or supplement. Words such
+  // as broth, gravy, flaked or entrée say nothing about it ("Entrée in Broth" is often a complete food).
   let category: ProductCategory = 'unknown';
+  let categoryBasis: CategoryBasis = 'none';
   const adequacyType = input.adequacy?.type;
-  if (SUPPLEMENT.test(all)) {
+  // A product named a supplement is one, whatever else its label says (supplements are their own category).
+  if (SUPPLEMENT.test(all) && adequacyType !== 'intermittent') {
     category = 'supplement';
+    categoryBasis = 'feeding_purpose_name';
     signals.push('category:supplement-terms');
+  } else if (adequacyType === 'complete') {
+    category = 'complete_food';
+    categoryBasis = 'adequacy_statement';
+    signals.push('category:adequacy-complete');
+  } else if (adequacyType === 'intermittent') {
+    // "As with all treats, give as part of a balanced diet": the statement itself may name a treat.
+    category = SUPPLEMENT.test(texts) ? 'supplement' : TREAT.test(all) || TREAT.test(norm(input.adequacy?.text ?? '')) ? 'treat' : 'complementary';
+    categoryBasis = 'adequacy_statement';
+    signals.push('category:adequacy-intermittent');
   } else if (TREAT.test(all)) {
     category = 'treat';
+    categoryBasis = 'feeding_purpose_name';
     signals.push('category:treat-terms');
   } else if (COMPLEMENTARY.test(all)) {
     category = 'complementary';
+    categoryBasis = 'feeding_purpose_name';
     signals.push('category:complementary-terms');
-  } else if (adequacyType === 'complete') {
-    category = 'complete_food';
-    signals.push('category:adequacy-complete');
-  } else if (adequacyType === 'intermittent') {
-    // "As with all treats, give as part of a balanced diet": the statement itself names a treat.
-    category = TREAT.test(norm(input.adequacy?.text ?? '')) ? 'treat' : 'complementary';
-    signals.push('category:adequacy-intermittent');
   } else if (COMPLETE_FOOD.test(all)) {
     category = 'complete_food';
+    categoryBasis = 'product_type_words';
     signals.push('category:food-terms');
   }
 
@@ -202,6 +275,8 @@ export function classifyScope(input: ScopeInput): ScopeResult {
         ? 'Made for cats or dogs, but the product type (food, treat or supplement) is unclear.'
         : 'Made for cats or dogs.',
     signals,
+    ...(evidence ? { speciesEvidence: evidence } : {}),
+    categoryBasis,
   };
 }
 

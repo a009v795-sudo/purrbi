@@ -20,6 +20,8 @@ export interface RuntimeConfig {
   verdictModel: string;
   aiEnabled: boolean;
   researchEnabled: boolean;
+  /** A public barcode database is asked for a product's title when the pet databases have no record (a search hint, never a fact). */
+  barcodeLookupEnabled?: boolean;
   databaseImagesEnabled: boolean;
   explanationsEnabled: boolean;
   verdictsEnabled: boolean;

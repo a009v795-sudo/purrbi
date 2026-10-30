@@ -12,6 +12,7 @@
   "functionParams": {
     "AI_ENABLED": "true",
     "RESEARCH_ENABLED": "true",
+    "BARCODE_LOOKUP_ENABLED": "true",
     "DATABASE_IMAGES_ENABLED": "true",
     "EXPLANATIONS_ENABLED": "true",
     "VERDICTS_ENABLED": "true",

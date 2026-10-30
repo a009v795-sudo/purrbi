@@ -24,7 +24,7 @@ const input = (r: ReturnType<typeof result>, p = pet()) =>
   verdictInput({
     productName: 'TEST FIXTURE Chicken Recipe', brand: 'TESTBRAND', species: r.scope.species, category: r.general.category,
     score: r.general.score, provisional: r.general.scoreProvisional, scoreLabel: r.general.scoreLabel, scoreBasis: r.general.scoreBasis,
-    withheldReason: r.general.scoreWithheldReason ?? '', coverage: r.general.scoreCoverage, low: r.general.scoreMinPossible ?? null, high: r.general.scoreMaxPossible, pet: { name: p.name, species: p.species, fit: r.personal.state, headline: r.personal.headline },
+    withheldReason: r.general.scoreWithheldReason ?? '', missing: r.general.missingForScore, coverage: r.general.scoreCoverage, low: r.general.scoreMinPossible ?? null, high: r.general.scoreMaxPossible, pet: { name: p.name, species: p.species, fit: r.personal.state, headline: r.personal.headline },
     positives: r.highlights.positives, cautions: r.highlights.cautions, unresolved: r.personal.unresolved,
   });
 
@@ -74,36 +74,37 @@ describe('verdict', () => {
   it('rejects claims Purrbi does not make, invented numbers, wrong lengths and a missing alert', () => {
     const p = pet({ allergiesStatus: 'reported', allergies: ['chicken'] });
     const v = input(result(facts(), p), p);
-    const ok = `Purrbi’s label score for this chicken recipe is ${v.assessment.score}/100, but it contains chicken, which you recorded as an allergy for your cat, so compare the ingredient list before choosing it.`;
+    const ok = `Purrbi scores this chicken recipe ${v.assessment.score}/100, but it contains chicken, which you recorded as an allergy for your cat, so compare the ingredient list carefully before choosing it for your cat.`;
     expect(checkVerdict(ok, v)).toBeNull();
     expect(checkVerdict(ok.replace('compare the ingredient list', 'it is the safest choice; compare the list'), v)).toMatch(/claim Purrbi does not make/);
-    expect(checkVerdict(ok.replace(`${v.assessment.score}/100`, '97/100'), v)).toMatch(/score not the assessment’s \(97\)/);
+    expect(checkVerdict(ok.replace(`${v.assessment.score}/100`, '61/100'), v)).toMatch(/score not the assessment’s \(61\)/);
     expect(checkVerdict(ok.replace('compare the ingredient list', 'compare the 12 ingredients'), v)).toMatch(/number not in the assessment \(12\)/);
     expect(checkVerdict(ok.replace('this chicken recipe', 'this great, high-quality chicken recipe'), v)).toMatch(/claim Purrbi does not make/);
     expect(checkVerdict(ok.replace('compare the ingredient list', 'compare the ingredient list and guaranteed analysis'), v)).toBeNull(); // a label term, not a promise
     expect(checkVerdict(ok.replace('compare the ingredient list', 'it is guaranteed to suit your cat; compare the list'), v)).toMatch(/claim Purrbi does not make/);
     expect(checkVerdict('Contains chicken.', v)).toMatch(/length/);
-    expect(checkVerdict(ok.replace('but it contains', 'a partial assessment, but it contains'), v)).toMatch(/calls a full assessment partial/);
+    expect(checkVerdict(ok.replace('but it contains', 'not enough information to score, and it contains'), v)).toMatch(/repeats the missing-information message/);
     expect(checkVerdict(ok.replace(/chicken/g, 'poultry').replace('which you recorded as an allergy', 'which may matter'), v)).toMatch(/most serious caution/);
   });
-  it('the rule-based verdict leads with the alert, is 25 to 45 words of whole sentences, and passes the check', () => {
+  it('the rule-based verdict leads with the alert, is 25 to 40 words of whole sentences, and passes the check', () => {
     for (const p of [pet({ allergiesStatus: 'reported', allergies: ['chicken'] }), pet(), pet({ species: 'dog', name: 'Rex' })]) {
       for (const f of [facts(), facts({ adequacyText: '' }), facts({ ingredientsText: 'Chicken, glycerin, propylene glycol, salt' })]) {
         const v = input(result(f, p), p);
         const text = ruleVerdict(v);
         const n = text.split(/\s+/).length;
         expect(n).toBeGreaterThanOrEqual(25);
-        expect(n).toBeLessThanOrEqual(45);
+        expect(n).toBeLessThanOrEqual(40);
         expect(text).not.toMatch(/…/);
         expect(checkVerdict(text, v)).toBeNull();
       }
     }
     const allergic = pet({ allergiesStatus: 'reported', allergies: ['chicken'] });
     expect(ruleVerdict(input(result(facts(), allergic), allergic))).toMatch(/^In the allergy profile: Contains Chicken/);
-    // A partial assessment is told by its coverage and range, never by its score alone.
-    const partial = input(result(facts({ adequacyText: '' })), pet());
-    expect(ruleVerdict(partial)).toMatch(/could assess 50 of 100 points’ worth .* between 50 and 100/);
-    expect(checkVerdict('Purrbi’s label score for this chicken recipe is 74 so far, a partial assessment based on some of its label, and it fits your cat’s profile; the details below say what is still missing from the label.', partial)).toMatch(/partial score as if it were final/);
+    // An unscored product: the verdict interprets what was found; the missing part is one short clause, never a number.
+    const unscored = input(result(facts({ guaranteedAnalysis: undefined })), pet());
+    expect(ruleVerdict(unscored)).toMatch(/Purrbi hasn’t rated it yet: a rating needs the guaranteed analysis \(protein and fat\)\./);
+    expect(checkVerdict('Purrbi’s label score is Not enough information to score because the ingredient list or guaranteed analysis is missing, preventing a full assessment of this chicken recipe for your cat today.', unscored)).toMatch(/repeats the missing-information message/);
+    expect(checkVerdict('This chicken recipe for cats scores 60/100 for your cat; it is labeled complete and balanced for adult maintenance and lists chicken first, and the details are below.', unscored)).toMatch(/score not the assessment’s \(60\)/);
   });
   it('the cache key changes with the evidence or the pet, not with the pet’s name', () => {
     const named = (over: Parameters<typeof pet>[0]) => {

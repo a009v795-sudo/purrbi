@@ -16,14 +16,14 @@ const EU_COMPLEMENTARY = /\b(aliment complementaire|erganzungsfutter(mittel)?|(a
 const INTERMITTENT =
   /\b(intermittent|supplemental feeding|for supplemental|complementary (pet )?(food|feed)|complementary feedingstuff|not (a )?complete (and balanced )?(diet|food|meal)|not (a )?substitute for (a )?complete (pet )?(food|feed|diet)|as with all treats)\b/;
 const COMPLETE =
-  /\b(complete and balanced|formulated to meet the nutritional levels|nutrient profiles|nutritional levels established|animal feeding tests|feeding (trials?|protocols)|complete (pet |dry |wet )?(food|feed)|complete feedingstuff)\b/;
+  /\b(complete and balanced|formulated to meet the nutritional levels|nutrient profiles?|nutritional levels established|animal feeding tests|feeding (trials?|protocols)|complete (pet |dry |wet )?(food|feed)|complete feedingstuff)\b/;
 // Life-stage words in the same languages.
 const ALL_STAGES = /\b(all life stages|tous les stades de (la )?vie|toutes les etapes de (la )?vie|alle lebens(phasen|abschnitte|stadien)|todas las etapas de (la )?vida|tutte le fasi (della )?vita|alle levensfasen|todas as fases da vida)\b/;
 const GROWTH = /\b(growth|growing|pupp(y|ies)|kittens?|junior|croissance|chatons?|chiots?|wachstum|welpen?|katzchen|crecimiento|cachorros?|gatitos?|crescita|cuccioli|gattini|groei|crescimento)\b/;
 const REPRODUCTION = /\b(gestation|lactation|reproduction|pregnant|nursing|gestantes?|allaitantes?|trachtig(e|en)?|saugend(e|en)?|gestacion|lactancia|gestazione|allattamento|dracht(ig)?|zogend(e)?|gestacao|lactacao)\b/;
 const ADULT = /\b(adult maintenance|maintenance of adult|maintenance|adults?|senior|mature|adultes?|adultos?|adulti|ausgewachsene?n?|erwachsene?n?|volwassen(en)?)\b/;
 const FEEDING_TRIAL = /\b(animal feeding tests|feeding (trials?|tests|protocols))\b/;
-const FORMULATION = /\b(formulated to meet|nutrient profiles|nutritional levels established)\b/;
+const FORMULATION = /\b(formulated to meet|nutrient profiles?|nutritional levels established)\b/;
 
 // English plus the label languages most common in Open Pet Food Facts (fr, de, es, it, nl, pt).
 const DOG_WORDS = /\b(dogs?|canine|pupp(y|ies)|chiens?|chiots?|hunde?|welpen?|perros?|cachorros?|hond(en)?|cani)\b/;
@@ -46,6 +46,9 @@ export function parseAdequacyStatement(raw: string | null | undefined): Adequacy
   let type: AdequacyStatement['type'] = 'unclear';
   if (INTERMITTENT.test(t) || EU_COMPLEMENTARY.test(t)) type = 'intermittent';
   else if (COMPLETE.test(t) || EU_COMPLETE.test(t)) type = 'complete';
+  // Marketing copy ("complete and balanced nutrition for everyday feeding") is not an adequacy statement:
+  // a real one names the species or the life stage, or the standard it was substantiated against.
+  if (type === 'complete' && detectSpecies(t) === 'unknown' && !ALL_STAGES.test(t) && !GROWTH.test(t) && !REPRODUCTION.test(t) && !ADULT.test(t) && !FORMULATION.test(t) && !FEEDING_TRIAL.test(t) && !/\b(aafco|fediaf)\b/.test(t)) type = 'unclear';
 
   let method: AdequacyStatement['method'] = 'unknown';
   if (type === 'complete') {
