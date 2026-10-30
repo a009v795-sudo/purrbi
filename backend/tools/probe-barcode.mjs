@@ -69,6 +69,25 @@ for (const code of codes) {
     const r = await get(`https://world.openfoodfacts.org/api/v3/product/${code}?product_type=${pt}&fields=code,product_type,product_name,brands,categories_tags`);
     entry.v3[pt] = { status: r.status, redirect: r.location ?? undefined, result: r.json?.result ?? null, errors: r.json?.errors ?? null, product: r.json?.product ? { product_type: r.json.product.product_type ?? null, product_name: short(r.json.product.product_name), brands: r.json.product.brands ?? null, categories_tags: (r.json.product.categories_tags ?? []).slice(0, 15) } : null };
   }
+  // The public barcode database the backend uses for search words (UPCitemdb's keyless trial): its answer
+  // and its rate-limit headers, from this runner's address (the deployed functions share Google's addresses).
+  {
+    const upc = code.length === 13 && code.startsWith('0') ? code.slice(1) : code;
+    const started = Date.now();
+    try {
+      const res = await fetch(`https://api.upcitemdb.com/prod/trial/lookup?upc=${upc}`, { headers: { 'User-Agent': UA, Accept: 'application/json' }, signal: AbortSignal.timeout(15000) });
+      const headers = Object.fromEntries([...res.headers].filter(([k]) => /rate|retry|limit|reset/i.test(k)));
+      let json = null;
+      try {
+        json = JSON.parse(await res.text());
+      } catch {
+        json = null;
+      }
+      entry.upcitemdb = { status: res.status, ms: Date.now() - started, headers, code: json?.code ?? null, message: json?.message ?? null, items: (json?.items ?? []).map((i) => ({ title: short(i.title, 200), brand: i.brand ?? null, category: short(i.category, 120), upc: i.upc ?? null, ean: i.ean ?? null, size: i.size ?? null, offers: (i.offers ?? []).slice(0, 5).map((o) => ({ merchant: o.merchant, domain: o.domain, title: short(o.title, 120), link: o.link ? short(o.link, 160) : null })) })) };
+    } catch (e) {
+      entry.upcitemdb = { status: 'network', ms: Date.now() - started, error: String(e?.name ?? e) };
+    }
+  }
   report.barcodes.push(entry);
   console.log(JSON.stringify(entry, null, 1));
 }
