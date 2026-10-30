@@ -13,7 +13,13 @@ const RECIPE = ['Chicken', 'chicken meal', 'brown rice', 'chicken fat (preserved
 
 describe('label photo stages', () => {
   it('extracted: read twice, nothing public to compare with', () => {
-    expect(corroborateLabel(reading({ guaranteedAnalysis: GA_FULL }), null)).toMatchObject({ stage: 'extracted', agreements: [], conflicts: [] });
+    expect(corroborateLabel(reading({ guaranteedAnalysis: GA_FULL }), null)).toMatchObject({ stage: 'extracted', agreements: [], conflicts: [], note: 'Read twice, with the same result. Nothing public to compare it with yet.' });
+  });
+  it('extracted: the record has a name, but the photo’s name (a sub-brand on the front) does not match it', () => {
+    // As read from a real front photo: the two readings agreed on "ONE"; the record's name is the recipe's.
+    const c = corroborateLabel(reading({ productName: 'ONE', brand: 'PURINA', panels: ['front'] }), facts());
+    expect(c).toMatchObject({ stage: 'extracted', agreements: [], conflicts: [] });
+    expect(c.note).toBe('Read twice, with the same result. What it shows could not be matched to this barcode’s public record yet.');
   });
   it('corroborated: the name matches the record, but nothing ties the photo to this barcode', () => {
     const c = corroborateLabel(reading({ productName: 'TEST FIXTURE Chicken Recipe' }), facts());

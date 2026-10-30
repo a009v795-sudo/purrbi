@@ -79,6 +79,17 @@ describe('grounded label reading', () => {
     const label = combineReadings(read([blurry], { product_name: null }), read([blurry], { product_name: null }, 'model-b'), GTIN);
     expect(label).toMatchObject({ status: 'unreadable', reason: 'No label details were readable in this photo. Retake it closer to the panel you need.' });
     expect(label.uncertainFields).toEqual(['ingredients']);
+    // What each reading saw is kept for tracing, even when nothing was read.
+    expect(label.rejected).toEqual(['readings: model-a: ingredients (not clear: ingredients); 0 rows / model-b: ingredients (not clear: ingredients); 0 rows']);
+  });
+  it('two readings agree whether a model kept the printed lines of an inline analysis or put one row per line', () => {
+    // As on a real French bag (Purina ONE chat stérilisé): one model kept the printed lines, the other did not.
+    const inline: RawPanel = { kind: 'guaranteed_analysis', legibility: 'partial', heading: 'Constituants analytiques', text: 'Protéine : 37,0 %, Teneur en matières\ngrasses : 13,0 %, Cendres brutes : 7,5 %, Cellulose brute : 4,0 %' };
+    const perLine: RawPanel = { ...inline, legibility: 'clear', text: 'Protéine : 37,0 %\nTeneur en matières grasses : 13,0 %\nCendres brutes : 7,5 %\nCellulose brute : 4,0 %' };
+    const label = combineReadings(read([inline]), read([perLine], {}, 'model-b'), GTIN);
+    expect(label.status).toBe('processed');
+    expect(label.guaranteedAnalysis.map((e) => `${e.nutrient}:${e.value}${e.unit}`)).toEqual(['crude_protein:37%', 'crude_fat:13%', 'ash:7.5%', 'crude_fiber:4%']);
+    expect(label.rejected).toEqual([]);
   });
   it('calls it another product only when both readings show the same other valid barcode', () => {
     const otherCode = `400604022103${gs1CheckDigit('400604022103')}`;
@@ -101,6 +112,27 @@ describe('analysis rows', () => {
     ]);
     expect(analysisRows('Constituants analytiques (%)\nProtéine 35\nCendres brutes 7,5', true).map((r) => `${r.nutrient}:${r.value}`)).toEqual(['crude_protein:35', 'ash:7.5']);
     expect(analysisRows('Protéine 35', false)).toEqual([]); // no unit printed and no "%" header: not read
+  });
+  it('reads an analysis printed inline, as EU labels print it, row by row, and nothing that is ambiguous', () => {
+    const rows = (t: string, pct = false) => analysisRows(t, pct).map((r) => `${r.nutrient}:${r.value}${r.unit}`);
+    // TEST FIXTURE modelled on a French dry cat food bag: composition and analysis in one block, lines wrapped as printed.
+    expect(rows('Aliment complet pour chat adulte. Composition : Saumon (15%), protéines de volaille déshydratées (17%), blé (14%).\nConstituants analytiques : Protéine : 37,0 %, Teneur en matières\ngrasses : 13,0 %, Cendres brutes : 7,5 %, Cellulose brute : 4,0 %, Acides gras Oméga 6 : 2,0 %.')).toEqual([
+      'crude_protein:37%', 'crude_fat:13%', 'ash:7.5%', 'crude_fiber:4%', 'omega_6:2%',
+    ]);
+    expect(analysisRows('Constituants analytiques : Protéine : 37,0 %, Cendres brutes : 7,5 %', false).map((r) => r.label)).toEqual(['Protéine', 'Cendres brutes']);
+    expect(rows('Analytische Bestandteile: Rohprotein 31 %, Fettgehalt 20 %, Rohasche 6 %, Rohfaser 2,5 %')).toEqual(['crude_protein:31%', 'crude_fat:20%', 'ash:6%', 'crude_fiber:2.5%']);
+    expect(rows('Constituants analytiques (%) : Protéine 35\nCendres brutes 7,5')).toEqual(['crude_protein:35%', 'ash:7.5%']); // "(%)" printed in the text
+    expect(analysisRows('Taurine 0.1 % (min), Vitamin E 150 IU/kg (min.)', false).map((r) => `${r.nutrient}:${r.qualifier}:${r.value}${r.unit}`)).toEqual(['taurine:min:0.1%', 'other:min:150IU/kg']);
+    // A value printed under its name, and a note after a value, stay with their own rows.
+    expect(rows('Protéine 37 % Matières grasses\n13 %')).toEqual(['crude_protein:37%', 'crude_fat:13%']);
+    expect(rows('Protein 30% min (as fed)\nFat 18%')).toEqual(['crude_protein:30%', 'crude_fat:18%']);
+    // Never a value under another nutrient's name, and nothing ambiguous:
+    expect(rows('Protéine 37, Matières grasses 13, Cendres 7,5', true)).toEqual([]); // values without units, inline
+    expect(rows('Composition: protéines de volaille (17%), graisses animales (5%)')).toEqual([]); // ingredient percentages
+    expect(rows('Vitamine A : 36 900 UI/kg ; Vitamine D3 : 1 200 UI/kg ; Vitamine E : 460 mg/kg')).toEqual(['other:460mg/kg']); // a thousands space
+    expect(rows('Protéine 3[?],0 %, Matières grasses 13,0 %')).toEqual(['crude_fat:13%']); // only the row a [?] touches is dropped
+    expect(rows('30% 28%')).toEqual([]);
+    expect(rows('Calcium 1.0% min, 1.5% max')).toEqual([]);
   });
 });
 

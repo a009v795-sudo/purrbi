@@ -9,7 +9,7 @@ import { researchJson } from '../ai/openai';
 import { normalizeIngredientName } from '../domain/ingredients';
 import { httpRequest, SourceError } from '../util/http';
 
-export const EXPLAIN_VERSION = 'explain-1.1.0';
+export const EXPLAIN_VERSION = 'explain-1.2.0'; // 1.2.0: a cited PDF is reported as such (Purrbi checks quotes on web pages), and web pages are asked for
 
 export const EXPLAIN_DOMAINS = [
   'fda.gov', 'ecfr.gov', 'aafco.org', 'fediaf.org', 'efsa.europa.eu', 'merckvetmanual.com', 'msdvetmanual.com',
@@ -101,6 +101,7 @@ const SYSTEM = [
   'For each term give: role (a few words, e.g. "preservative", "protein source", "joint supplement ingredient") and a summary of one or two plain sentences on what it is and why it is used.',
   'For supplement actives, say what published evidence says about its effect in the stated species, and say plainly when evidence is limited, mixed or from other species.',
   'Never give doses, diagnoses or treatment advice. Do not call an ingredient good or bad beyond what the cited page says.',
+  'Cite a web page, not a PDF or other document file: Purrbi checks the quote against the page’s text.',
   'citation_quote must be one sentence copied word for word from the cited page that supports the summary. If no page on the allowed sites supports it, set citation_url, citation_title and citation_quote to null.',
 ].join(' ');
 
@@ -221,15 +222,19 @@ export async function explainTerms(opts: {
   if (!research) throw lastError;
   const { data, model } = research;
 
-  const pages = new Map<string, FetchedPage | string>(); // a page, or why it could not be read
-  const fetchPage = async (url: string): Promise<FetchedPage | string> => {
+  // A page; a file Purrbi cannot read as a page (a PDF); or why it could not be fetched.
+  const pages = new Map<string, FetchedPage | { file: string } | string>();
+  const fetchPage = async (url: string): Promise<FetchedPage | { file: string } | string> => {
     const known = pages.get(url);
     if (known) return known;
-    let page: FetchedPage | string = 'page limit reached';
+    let page: FetchedPage | { file: string } | string = 'page limit reached';
     if (pages.size < 8) {
       try {
         const res = await httpRequest(url, { source: 'Citation page', headers: { 'User-Agent': opts.userAgent, Accept: 'text/html' }, timeoutMs: 10000, retries: 0 });
-        page = readPage(res.text, res.url);
+        const type = (res.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase();
+        if (type === 'application/pdf' || res.text.startsWith('%PDF-')) page = { file: 'PDF document' };
+        else if (type && !/^text\/|html|xml/.test(type)) page = { file: `${type} file` };
+        else page = readPage(res.text, res.url);
       } catch (err) {
         page = err instanceof SourceError ? (err.status ? `HTTP ${err.status}` : err.kind) : 'error';
       }
@@ -262,6 +267,7 @@ export async function explainTerms(opts: {
     if (!reason) {
       const page = await fetchPage(url!);
       if (typeof page === 'string') reason = `cited page could not be fetched (${hostOf(url)}, ${page})`;
+      else if ('file' in page) reason = `cited page is a ${page.file}, which Purrbi cannot check yet (${hostOf(url)})`;
       else if (!allowedUrl(page.finalUrl)) reason = `cited page redirected off the allowed sites (${hostOf(page.finalUrl)})`;
       else {
         const found = quoteOnPage(page, quote);

@@ -1,7 +1,9 @@
 # Purrbi assessment methodology
 
-Version: `purrbi-score-2.0.0` (score), `scope-2.1.0` (classification), `verdict-1.2.0` (verdict),
-`kb-2026-10-28-draft` (ingredient notes). Every saved result records the versions it was made with.
+Version: `purrbi-score-2.0.0` (score), `scope-2.1.0` (classification), `verdict-1.3.0` (verdict),
+`kb-2026-10-28-draft` (ingredient notes), `label-extract-2.2.0` (label reader), `explain-1.2.0` (cited explanations).
+A saved result records its score and ingredient-note versions (`scoreVersion`, `kbVersion`); the shared product record its
+classification version (`scopeVersion`); each fact read from a label or a web page its reader's version; each explanation its own.
 
 The Purrbi label score is Purrbi's own measure of how well the label information that is available supports the product's intended use. It is not an FDA, AAFCO, WSAVA or veterinary rating. It does not depend on the pet profile: two pets see the same general score for the same evidence. Personal fit is assessed separately.
 
@@ -147,6 +149,7 @@ While the product is unresolved, only recall and documented-concern cautions are
   - gives a score ("N/100", "N out of 100") other than the assessment's score;
   - uses any other number that is not stated in the score, its basis, the highlights or the unresolved items;
   - calls a full assessment partial, or the reverse;
+  - gives a partial assessment's score as if it were final: a partial assessment is described by how much of the label could be assessed (coverage) or by the range the complete label could give, never by its score alone;
   - omits the most serious caution.
 - **Fallback.** The rule-based sentence is built from whole sentences, 25–45 words, with the most serious caution first. It passes the same checks.
 - **Fixed sentences.** Out-of-scope and unresolved products get a fixed sentence.
@@ -179,12 +182,20 @@ Each fact shows where it came from:
 
 Nothing is marked as reviewed by a person unless it was.
 
+**How a label is read** (label photos and database label images; reader `label-extract-2.2.0`, `ai/labelExtract.ts`):
+- The model only transcribes each visible panel, word for word, marking anything it cannot read with certainty. Two independent readings are made (two different models where configured); only what both say is kept.
+- Purrbi takes the values from the transcription with its own fixed rules:
+  - the ingredient list only after a printed "Ingredients"/"Composition" heading;
+  - analysis rows each with their own name, whether printed one per line or inline as on EU packs ("Protéine : 37,0 %, Matières grasses : 13,0 %, …"), and only from the analysis section, so an ingredient's percentage is never an analysis row;
+  - a row is dropped when anything in it is unreadable, when a value has no name of its own ("1.0% / 1.5%"), when values are printed inline without units, or when a space may be a thousands separator ("36 900 UI/kg").
+- Readings made by `label-extract-2.1.0` stay in use (2.2.0 only reads rows that 2.1.0 left out); label-image panels that 2.1.0 could not read are read again once.
+
 An owner's label photo goes through these stages, recorded on the photo (`stage`, `stageNote`) by the backend only (`pipeline/corroborate.ts`):
 
 | Stage | Meaning | Used for |
 |---|---|---|
 | submitted | Uploaded by the owner | — |
-| extracted | Two independent AI readings agreed on the label text | The owner's own result |
+| extracted | Two independent AI readings agreed on the label text; its note says whether there was anything public to compare it with, or whether what it shows could not be matched yet | The owner's own result |
 | corroborated | An independent public source agrees: this barcode's record has the same recipe in order, the same analysis (±0.5 points), or the same name | The owner's own result |
 | verified | Also tied to this barcode: the barcode is on the photo, or the photo shows this barcode's recipe (at least 80% of the first 10 ingredients, in order) | The owner's result, **and** gaps in Purrbi's shared record for this barcode |
 | disputed | Conflicts with this barcode's record (another recipe, under 60% match, or another analysis) | Not used; the owner is asked to check the package |

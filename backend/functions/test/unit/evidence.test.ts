@@ -152,7 +152,7 @@ describe('cited explanations', () => {
       'Levures déshydratées:unverified:quote not found on the cited page (vcahospitals.com)',
     ]);
     expect(out[0].quote).toBe(onPage); // the page's wording, not the model's
-    expect(out[0].version).toBe('explain-1.1.0');
+    expect(out[0].version).toBe('explain-1.2.0');
   });
   it('tries the next listed model when one is rejected, and reports pages it could not use', async () => {
     const models: string[] = [];
@@ -180,6 +180,27 @@ describe('cited explanations', () => {
       'gpt-4.1-mini:unverified:cited page redirected off the allowed sites (elsewhere.example)',
       'gpt-4.1-mini:unverified:cited page could not be fetched (aspca.org, HTTP 403)',
     ]);
+  });
+  it('reports a cited PDF as a file Purrbi cannot check, not as a quote missing from the page', async () => {
+    const asked: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.startsWith('https://api.openai.com/')) {
+        asked.push(String(JSON.parse(String(init?.body)).instructions ?? JSON.stringify(JSON.parse(String(init?.body)).input)));
+        return new Response(JSON.stringify(openAiResponse([
+          { n: 1, term: 'Glycerol', role: 'humectant', summary: 'Keeps treats moist.', citation_url: 'https://www.aafco.org/wp-content/uploads/2023/01/manual.pdf', citation_title: 'Manual', citation_quote: 'Glycerin is a humectant that keeps soft treats moist during storage.' },
+          { n: 2, term: 'Yeast', role: 'flavour', summary: 'Adds flavour.', citation_url: 'https://www.aafco.org/wp-content/uploads/2026/01/chapter.pdf', citation_title: 'Chapter', citation_quote: 'Dried yeast is used in pet foods as a source of flavor and B vitamins.' },
+        ], [])), { status: 200 });
+      }
+      // One PDF is served with its content type, the other only recognisable by its first bytes.
+      if (url.endsWith('manual.pdf')) return new Response('%PDF-1.7 binary', { status: 200, headers: { 'Content-Type': 'application/pdf' } });
+      return new Response('%PDF-1.4 binary', { status: 200, headers: { 'Content-Type': 'application/octet-stream' } });
+    }));
+    const out = await explainTerms({ apiKey: 'k', model: 'm', species: 'dog', terms: [{ term: 'Glycerol', kind: 'ingredient' }, { term: 'Yeast', kind: 'ingredient' }], userAgent: 'test', now: new Date('2026-10-30T00:00:00Z') });
+    expect(out.map((e) => `${e.status}:${e.reason}`)).toEqual([
+      'unverified:cited page is a PDF document, which Purrbi cannot check yet (aafco.org)',
+      'unverified:cited page is a PDF document, which Purrbi cannot check yet (aafco.org)',
+    ]);
+    expect(asked.join(' ')).toMatch(/not a PDF/); // the model is asked for web pages
   });
   it('does not pay to explain plain whole foods', () => {
     expect(needsExplanation('Chicken', 'ingredient')).toBe(false);
@@ -289,6 +310,12 @@ describe('manufacturer research', () => {
     expect(r.facts?.ingredients?.value.slice(0, 2)).toEqual(['Saumon (17%)', 'protéines de volaille déshydratées']);
     expect(r.facts?.adequacy?.value).toMatchObject({ type: 'complete', species: 'cat', lifeStages: ['adult_maintenance'] });
     expect(r.facts?.guaranteedAnalysis?.value.map((g) => g.value)).toEqual([34, 12.5]); // "12,5 %" on the page
+  });
+  it('says which analysis values were left out when others were kept', async () => {
+    stub(answer({ guaranteed_analysis: [...answer().guaranteed_analysis as unknown[], { label: 'Cendres brutes', qualifier: 'not_stated', value: 9, unit: '%' }] }));
+    const r = await run();
+    expect(r.facts?.guaranteedAnalysis?.value.map((g) => g.value)).toEqual([34, 12.5]);
+    expect(r.discarded).toEqual(['barcode search: guaranteed analysis: kept 2 of 3 values; not on the page: Cendres brutes 9']);
   });
   it('takes who it is for only from a page proven to be this product (barcode or same recipe), never from brand and name alone', async () => {
     // Real case 099482480882: a brand sells cat and dog recipes under the same name.

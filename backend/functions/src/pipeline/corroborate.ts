@@ -73,5 +73,8 @@ export function corroborateLabel(label: ValidatedLabel, record: ProductFacts | n
   }
   if (tied) return { stage: 'verified', agreements, conflicts, note: `Matched to this product: ${agreements[0]}.` };
   if (agreements.length) return { stage: 'corroborated', agreements, conflicts, note: `Partly matched: ${agreements[0]}; the product itself is not yet confirmed.` };
-  return { stage: 'extracted', agreements, conflicts, note: 'Read twice, with the same result. Nothing public to compare it with yet.' };
+  // The record has something the photo also shows (a recipe, an analysis or a name), but not closely enough to confirm it.
+  const compared = (recipe?.length && label.ingredients.length) || (analysis?.length && label.guaranteedAnalysis.length) || (name && label.productName);
+  const note = compared ? 'Read twice, with the same result. What it shows could not be matched to this barcode’s public record yet.' : 'Read twice, with the same result. Nothing public to compare it with yet.';
+  return { stage: 'extracted', agreements, conflicts, note };
 }

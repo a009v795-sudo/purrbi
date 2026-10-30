@@ -229,6 +229,7 @@ const VERIFIED_DAYS = 180;
 const UNVERIFIED_DAYS = 30;
 const TRANSIENT_DAYS = 0.25; // a cited page that could not be fetched (timeout, 429, 5xx) is tried again after 6 hours
 const NOT_RETURNED_DAYS = 1; // a term the model left out is asked for again the next day
+const UNREADABLE_DAYS = 1; // a cited PDF (which Purrbi cannot check) is asked for again the next day, when a web page may be cited
 
 /** Cached explanations that are still current; expired ones are treated as missing. */
 export async function readExplanations(db: Firestore, keys: string[], now: Date): Promise<Map<string, CitedExplanation>> {
@@ -241,7 +242,13 @@ export async function readExplanations(db: Firestore, keys: string[], now: Date)
     const e = snap.data() as CitedExplanation;
     if (e.status !== 'verified' && e.version !== EXPLAIN_VERSION) continue; // a failed lookup is tried again once the method changes
     const age = (now.getTime() - new Date(e.checkedAt).getTime()) / 86400000;
-    const lifetime = e.status === 'verified' ? VERIFIED_DAYS : /^cited page could not be fetched/.test(e.reason ?? '') ? TRANSIENT_DAYS : e.status === 'not_found' ? NOT_RETURNED_DAYS : UNVERIFIED_DAYS;
+    const reason = e.reason ?? '';
+    const lifetime =
+      e.status === 'verified' ? VERIFIED_DAYS
+      : /^cited page could not be fetched/.test(reason) ? TRANSIENT_DAYS
+      : /^cited page is a .*, which Purrbi cannot check/.test(reason) ? UNREADABLE_DAYS
+      : e.status === 'not_found' ? NOT_RETURNED_DAYS
+      : UNVERIFIED_DAYS;
     if (age <= lifetime) out.set(snap.id, e);
   }
   return out;

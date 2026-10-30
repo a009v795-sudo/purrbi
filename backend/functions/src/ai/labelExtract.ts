@@ -1,8 +1,8 @@
 // Reads a pet-product label photo into structured fields, grounded in the photo. The model only
 // transcribes: each visible label panel's heading and text, verbatim, with [?] wherever it cannot
 // read a word or digit with certainty. Purrbi then takes values from that transcription with its own
-// fixed rules (the ingredient list only after a printed "Ingredients"/"Composition" heading, one
-// analysis row per line, calorie and adequacy statements as printed), and keeps a value only when two
+// fixed rules (the ingredient list only after a printed "Ingredients"/"Composition" heading, analysis
+// rows each with its own name, calorie and adequacy statements as printed), and keeps a value only when two
 // independent readings (two different models where configured) agree on it. The photo's text is
 // untrusted data. Output is always labelled as the owner's label photo (AI-read, not reviewed).
 import { parseAdequacyStatement } from '../domain/adequacy';
@@ -14,7 +14,13 @@ import type { ActiveIngredient, AdequacyStatement, CalorieStatement, GuaranteedA
 import { SourceError } from '../util/http';
 import { chatJson } from './openai';
 
-export const LABEL_EXTRACTION_VERSION = 'label-extract-2.1.0'; // 2.1.0: calorie upper bounds ("<2 kcal") are not calorie content
+export const LABEL_EXTRACTION_VERSION = 'label-extract-2.2.0'; // 2.2.0: analyses printed inline ("Protéine 37 %, Matières grasses 13 %") are read row by row
+/**
+ * Readings still used as they were saved. 2.2.0 reads rows that 2.1.0 left out (several values on one
+ * printed line) and nothing else differently in the common case, so owners are not asked for those photos
+ * again; label images that 2.1.0 could not read are read again.
+ */
+export const LABEL_READINGS_IN_USE: ReadonlySet<string> = new Set(['label-extract-2.1.0', LABEL_EXTRACTION_VERSION]);
 
 const nullableString = { type: ['string', 'null'] };
 const PANEL_KINDS = ['front', 'ingredients', 'active_ingredients', 'guaranteed_analysis', 'adequacy_statement', 'calorie_statement', 'feeding_directions', 'barcode', 'other'] as const;
@@ -124,8 +130,16 @@ const HEADING_IN_TEXT = new RegExp(`(?:^|[\\n.;]\\s*)${HEADING}\\s*(?:[:：.]|\\
 const ANALYSIS_HEADING =
   /(guaranteed analysis|typical analysis|analytical constituents|constituants analytiques|analytische bestandteile|componentes anal[ií]ticos|componenti analitici|analytische bestanddelen|constituintes anal[ií]ticos)/i;
 const NEXT_SECTION = new RegExp(`\\n?\\s*(?:${ANALYSIS_HEADING.source}|calorie content|feeding (?:guide|directions))[\\s\\S]*$`, 'i');
-const ROW_VALUE = /(\d+(?:[.,]\d+)?)\s*(%|mg\/kg|iu\/kg|ui\/kg|ie\/kg|ppm|cfu\/g|cfu\/lb)?\s*(min(?:imum)?\.?|max(?:imum)?\.?)?\s*$/i;
-const VALUES = /\d+(?:[.,]\d+)?\s*(?:%|mg\/kg|iu\/kg|ui\/kg|ie\/kg|ppm|cfu\/g|cfu\/lb)/gi;
+const UNITS = '%|mg\\/kg|iu\\/kg|ui\\/kg|ie\\/kg|ppm|cfu\\/g|cfu\\/lb';
+// A min/max printed after the value ("15.0% min", "0.1 % (min.)"); "Minéraux" is not "min".
+const QUALIFIER_AFTER = '\\(?\\s*(?:minimum|maximum|mini|maxi|min|max)(?!\\p{L})\\.?\\s*\\)?';
+const ROW_VALUE = new RegExp(`(\\d+(?:[.,]\\d+)?)\\s*(${UNITS})?\\s*(${QUALIFIER_AFTER})?\\s*$`, 'iu');
+// Where a row ends on a line that prints several: a value with its unit (and a printed min/max).
+const ROW_END = new RegExp(`\\d+(?:[.,]\\d+)?\\s*(?:${UNITS})(?:\\s*${QUALIFIER_AFTER})?`, 'giu');
+// A number, a comma and the next name: values printed inline without units ("Protéine 37, Matières grasses 13").
+const UNITLESS_INLINE = /\d(?:[.,]\d+)?\s*[,;]\s*\p{L}/u;
+// "Vitamine A : 36 900 UI/kg": a group of three digits after a number and a space may be its thousands.
+const THOUSANDS_BEFORE = /(?<![\d.,])\d{1,3}[\s\u00a0\u202f]+$/u;
 // Printed min/max as whole words only ("minérales" is not "min").
 const MIN_PRINTED = /\(\s*min\.?\s*\)|(?<!\p{L})(?:min(?:imum)?|mini)(?!\p{L})|not less than/iu;
 const MAX_PRINTED = /\(\s*max\.?\s*\)|(?<!\p{L})(?:max(?:imum)?|maxi)(?!\p{L})|not more than/iu;
@@ -163,31 +177,90 @@ function ingredientList(p: RawPanel): { list: string; before: string } | null {
   return null;
 }
 
-/** Analysis rows, one per line ("name(s) … value unit [min/max]"); a row name printed above its value is joined to it. */
+/**
+ * The analysis part of a panel's text. A panel can run "Composition: … Constituants analytiques: …" as
+ * one block: ingredient percentages ("protéines de volaille (17 %)") are not analysis rows.
+ */
+function analysisSection(text: string): { text: string; percent: boolean } {
+  const a = ANALYSIS_HEADING.exec(text);
+  if (a) {
+    // The heading's own "(%)" (values printed without units) and colon are not part of the first row.
+    const after = text.slice(a.index + a[0].length);
+    const head = /^\s*(\([^()\n]*\))?\s*[:：.]?/.exec(after)!;
+    return { text: after.slice(head[0].length), percent: /%/.test(head[1] ?? '') };
+  }
+  const i = HEADING_IN_TEXT.exec(text);
+  return { text: i ? text.slice(0, i.index) : text, percent: false };
+}
+
+/**
+ * The rows printed on one line, split after each value: EU labels often print the analysis inline
+ * ("Protéine : 37,0 %, Matières grasses : 13,0 %, …"). Each part needs a name of its own; a value
+ * without one ("Calcium 1.0% / 1.5%", "30% 28%") makes the line ambiguous, and nothing on it is read.
+ * Text after the last value (a name continued on the next line) is the last part.
+ */
+function rowsOnLine(line: string): string[] | null {
+  const parts: string[] = [];
+  let start = 0;
+  for (const m of line.matchAll(ROW_END)) {
+    const end = m.index + m[0].length;
+    const part = line.slice(start, end).replace(/^[\s,;.·|]+/, '');
+    // The first value may take its name from the line above; a later one needs its own.
+    if (parts.length && !/\p{L}/u.test(part.replace(ROW_END, ''))) return null;
+    parts.push(part);
+    start = end;
+  }
+  // A note in brackets after the last value ("(as fed)") belongs to that value, not to the next row.
+  const rest = (start ? line.slice(start).replace(/^[\s,;.·|]+/, '') : line).trim();
+  return rest && !(start && /^\([^()]*\)$/.test(rest)) ? [...parts, rest] : parts;
+}
+
+/**
+ * Analysis rows ("name(s) … value unit [min/max]"), one per line or several on a line, each with its
+ * own name; a row name printed above its value is joined to it. Anything a [?] touches is dropped, and
+ * so is a row whose name holds another value.
+ */
 export function analysisRows(text: string, percentHeader: boolean): GuaranteedAnalysisEntry[] {
   const out: GuaranteedAnalysisEntry[] = [];
+  const section = analysisSection(text);
+  const percent = percentHeader || section.percent;
   let carry = '';
-  for (const raw of text.split(/\n+/)) {
+  for (const raw of section.text.split(/\n+/)) {
     const line = raw.trim();
     if (!line) continue;
-    if (UNSURE.test(line) || (line.match(VALUES) ?? []).length > 1) {
+    const parts = rowsOnLine(line);
+    if (!parts) {
       carry = '';
       continue;
     }
-    const m = ROW_VALUE.exec(line);
-    const name = m ? line.slice(0, m.index) : '';
-    if (!m || !/\p{L}/u.test(`${carry} ${name}`)) {
-      carry = ANALYSIS_HEADING.test(line) ? '' : `${carry} ${line}`.trim();
-      continue;
+    for (const part of parts) {
+      if (UNSURE.test(part)) {
+        carry = '';
+        continue;
+      }
+      const m = ROW_VALUE.exec(part);
+      let name = m ? part.slice(0, m.index) : '';
+      const heading = m ? ANALYSIS_HEADING.exec(name) : null;
+      if (heading) {
+        // "Constituants analytiques : Protéine : 37 %": the row's name starts after the heading.
+        name = name.slice(heading.index + heading[0].length).replace(/^[\s:：(%)]+/, '');
+        carry = '';
+      }
+      if (!m || !/\p{L}/u.test(`${carry} ${name}`)) {
+        carry = ANALYSIS_HEADING.test(part) ? '' : `${carry} ${part}`.trim();
+        continue;
+      }
+      const own = `${carry} ${name}`;
+      carry = '';
+      if (UNITLESS_INLINE.test(own) || (/^\d{3}$/.test(m[1]) && THOUSANDS_BEFORE.test(name))) continue;
+      const unitText = m[2]?.toLowerCase().replace(/^(ui|ie)\//, 'iu/');
+      const unit = unitText ? normalizeUnit(unitText) : percent ? '%' : null;
+      const label = own.replace(/^[\s.:：,;·|-]+|[\s.:·…_|-]+$/g, '').replace(/\s+/g, ' ').trim();
+      if (!unit || unit === 'other') continue;
+      const q = `${label} ${m[3] ?? ''}`;
+      const qualifier = MIN_PRINTED.test(q) ? 'min' : MAX_PRINTED.test(q) ? 'max' : 'not_stated';
+      out.push({ nutrient: nutrientKeyFromLabel(label), label: label.replace(/\(\s*(?:min|max)\.?\s*\)/gi, ' ').replace(/\s+/g, ' ').trim(), qualifier, value: Number(m[1].replace(',', '.')), unit });
     }
-    const unitText = m[2]?.toLowerCase().replace(/^(ui|ie)\//, 'iu/');
-    const unit = unitText ? normalizeUnit(unitText) : percentHeader ? '%' : null;
-    const label = `${carry} ${name}`.replace(/[\s.:·…_|-]+$/, '').replace(/\s+/g, ' ').trim();
-    carry = '';
-    if (!unit || unit === 'other') continue;
-    const q = `${label} ${m[3] ?? ''}`;
-    const qualifier = MIN_PRINTED.test(q) ? 'min' : MAX_PRINTED.test(q) ? 'max' : 'not_stated';
-    out.push({ nutrient: nutrientKeyFromLabel(label), label: label.replace(/\(\s*(?:min|max)\.?\s*\)/gi, ' ').replace(/\s+/g, ' ').trim(), qualifier, value: Number(m[1].replace(',', '.')), unit });
   }
   return out;
 }
@@ -338,7 +411,9 @@ export function combineReadings(a: Reading, b: Reading, scanGtin14: string): Val
     const reason = rejected.length
       ? 'Parts of the label could not be read reliably. Retake the photo closer, in good light and straight on.'
       : 'No label details were readable in this photo. Retake it closer to the panel you need.';
-    return { ...base, rejected, reason };
+    // What each reading saw, so a photo that gave nothing can be traced (panels, legibility, rows).
+    const seen = rejected.some((r) => r.startsWith('readings: ')) ? [] : [`readings: ${describeReading(a)} / ${describeReading(b)}`];
+    return { ...base, rejected: [...rejected, ...seen], reason };
   }
   return { ...out, status: 'processed', reason: '' };
 }

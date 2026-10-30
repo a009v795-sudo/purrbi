@@ -8,7 +8,7 @@
 // is recorded (sanitized) under the job's trace id.
 import { createHash, randomUUID } from 'node:crypto';
 import type { Firestore } from 'firebase-admin/firestore';
-import { extractLabel as extractLabelImpl, LABEL_EXTRACTION_VERSION, type ValidatedLabel } from '../ai/labelExtract';
+import { extractLabel as extractLabelImpl, LABEL_EXTRACTION_VERSION, LABEL_READINGS_IN_USE, type ValidatedLabel } from '../ai/labelExtract';
 import { checkVerdict, ruleVerdict, verdictInput, verdictKey, withPetName, writeVerdict as verdictImpl } from '../ai/verdict';
 import { parseAdequacyStatement } from '../domain/adequacy';
 import { normalizeBarcode, type NormalizedBarcode } from '../domain/barcode';
@@ -344,7 +344,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   const notes = evidence.notes;
   // Label images read by an older label reader are dropped (and read again below when allowed).
   const before = facts.sources.length + facts.classificationSignals.length;
-  const stale = dropStaleImageReads(facts, LABEL_EXTRACTION_VERSION, RESEARCH_VERSION);
+  const stale = dropStaleImageReads(facts, LABEL_READINGS_IN_USE, RESEARCH_VERSION);
   facts = stale.facts;
   let rewriteProduct = stale.dropped.length > 0 || facts.sources.length + facts.classificationSignals.length < before;
   if (rewriteProduct) job.diagnosticNotes.push(`Dropped ${stale.dropped.join(', ') || 'statements'} taken from database label images or web pages under older rules; they are read again.`);
@@ -360,7 +360,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   // inputs read later is never overwritten by it.
   const inputsAt = deps.now();
   const extractions = (await readLabelExtractions(db, o.uid, gtin)).filter((e) => e.label.status === 'processed');
-  const current = extractions.filter((e) => e.label.version === LABEL_EXTRACTION_VERSION);
+  const current = extractions.filter((e) => LABEL_READINGS_IN_USE.has(e.label.version ?? ''));
   // A reading verified against this barcode fills gaps in the shared record (backend only, no account id).
   const promoted: { photoKey: string; fields: string[]; agreements: string[] }[] = [];
   if (config.promoteLabelPhotos !== false) {
@@ -405,6 +405,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   // Due per panel: a panel never tried (e.g. the front, once it is unresolved what the product is) is read
   // even when other panels were read recently.
   // A technical failure (download error, AI error or budget) is tried again after 6 hours, not left for 30 days.
+  // After a new label reader, panels the earlier one could not read are tried again (what it read is kept).
   const panelOf = (x: string) => x.split(/[,:]/)[0].trim();
   const lastImages = meta.enrichment.databaseImages?.version === LABEL_EXTRACTION_VERSION ? meta.enrichment.databaseImages : undefined;
   const tried = new Set([...(lastImages?.read ?? []), ...(lastImages?.skipped ?? []).map(panelOf)]);

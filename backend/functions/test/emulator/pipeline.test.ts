@@ -7,7 +7,7 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { LABEL_EXTRACTION_VERSION, type ValidatedLabel } from '../../src/ai/labelExtract';
 import { gs1CheckDigit, type NormalizedBarcode } from '../../src/domain/barcode';
 import type { ProductFacts, RecallCheck } from '../../src/domain/types';
-import { explanationKey } from '../../src/knowledge/explain';
+import { EXPLAIN_VERSION, explanationKey } from '../../src/knowledge/explain';
 import { DEFAULT_LIMITS, type RuntimeConfig } from '../../src/pipeline/config';
 import { handleScanUpdate, processPhoto, processScan, type Deps, type Sources } from '../../src/pipeline/scanJob';
 import type { OpenFactsDb, OpenFactsLookup } from '../../src/sources/openFacts';
@@ -37,6 +37,7 @@ let verdictMode: 'ok' | 'invalid' | 'fail' = 'ok';
 let labelPatch: Partial<ValidatedLabel> | null = null; // changes the mocked reading of a label panel
 let imagesDown = false; // the database's image host fails (technical failure)
 let pagesDown = false; // research names pages that cannot be reached
+let explainUnverified: string | null = null; // every explanation comes back unverified, with this reason
 let verdictInputs: string[] = [];
 
 const NOW = new Date('2026-10-28T12:00:00Z');
@@ -151,6 +152,12 @@ const sources: Sources = {
   async explain(o) {
     calls.explain = (calls.explain ?? 0) + 1;
     calls.explainTerms = (calls.explainTerms ?? 0) + o.terms.length;
+    if (explainUnverified) {
+      return o.terms.map((t) => ({
+        key: explanationKey(o.species, t.kind, t.term), term: t.term, kind: t.kind, species: o.species, status: 'unverified' as const,
+        summary: '', role: '', sourceTitle: '', sourceUrl: '', quote: '', reason: explainUnverified!, checkedAt: NOW.toISOString(), model: 'mock', version: EXPLAIN_VERSION,
+      }));
+    }
     return o.terms.map((t) => ({
       key: explanationKey(o.species, t.kind, t.term), term: t.term, kind: t.kind, species: o.species, status: 'verified' as const,
       summary: `TEST FIXTURE explanation of ${t.term}.`, role: 'test role', sourceTitle: 'TEST FIXTURE source', sourceUrl: 'https://www.fda.gov/test-fixture',
@@ -221,6 +228,7 @@ beforeEach(async () => {
   labelPatch = null;
   imagesDown = false;
   pagesDown = false;
+  explainUnverified = null;
   await fetch(`http://${process.env.FIRESTORE_EMULATOR_HOST}/emulator/v1/projects/demo-purrbi/databases/(default)/documents`, { method: 'DELETE' });
   await db.doc('users/u1/pets/cat1').set({ name: 'Miso', species: 'cat', birthDate: Timestamp.fromDate(new Date('2022-01-01')), allergiesStatus: 'reported', allergies: ['chicken'], profileVersion: 2 });
   await db.doc('users/u1/pets/cat2').set({ name: 'Pip', species: 'cat', birthDate: Timestamp.fromDate(new Date('2021-03-01')), allergiesStatus: 'none_reported', profileVersion: 1 });
@@ -321,6 +329,20 @@ describe('path B: missing label information', () => {
     expect(s.status).toBe('needs_photos');
     expect(s.missingInfo).toEqual(['nutrition']);
     expect(s.diagnosticNotes).toContain('1 label photo reading was made by an older label reader and not used; the photo is asked for again if still needed.');
+  });
+  it('still uses a label photo read by the previous label reader (2.1.0), which the current one only reads more of', async () => {
+    const a = await newScan('u1', BC.food);
+    await processScan(deps(), 'u1', a.id);
+    const photo = await db.collection('users/u1/photos').add({ scanId: a.id, purpose: 'nutrition', imageUrl: 'https://firebasestorage.googleapis.com/v0/b/x/o/users%2Fu1%2Fuploads%2F1.jpg', status: 'uploaded', createdAt: Timestamp.fromDate(NOW) });
+    await processPhoto(deps(), 'u1', photo.id);
+    const gtin = (await read(a)).gtin;
+    await db.doc(`users/u1/labelFacts/${gtin}`).update({ [`extractions.${photo.id}.label.version`]: 'label-extract-2.1.0' });
+    const b = await newScan('u1', BC.food);
+    await processScan(deps(), 'u1', b.id);
+    const s = await read(b);
+    expect(s.status).toBe('complete');
+    expect(s.labelEvidenceUsed).toBe(true);
+    expect(s.diagnosticNotes.join(' ')).not.toMatch(/older label reader/);
   });
   it('does not ask again for photos already processed (reuse on rescan)', async () => {
     const a = await newScan('u1', BC.food);
@@ -772,6 +794,20 @@ describe('no permanent negative caching', () => {
     expect(calls.research).toBe(2);
     expect((await read(c)).status).toBe('complete');
   });
+  it('an explanation whose cited page is a PDF (which Purrbi cannot check) is asked for again the next day, not after 30 days', async () => {
+    explainUnverified = 'cited page is a PDF document, which Purrbi cannot check yet (aafco.org)';
+    const a = await newScan('u1', BC.treat, 'cat2');
+    await processScan(deps(), 'u1', a.id);
+    expect(calls.explain).toBe(1);
+    explainUnverified = null;
+    const b = await newScan('u1', BC.treat, 'cat2');
+    await processScan(at(12), 'u1', b.id);
+    expect(calls.explain).toBe(1); // not asked again within the day
+    const c = await newScan('u1', BC.treat, 'cat2');
+    await processScan(at(25), 'u1', c.id);
+    expect(calls.explain).toBe(2);
+    expect((await read(c)).explanationsStatus).toBe('ready');
+  });
   it('a product not yet confirmed as a cat or dog product is checked in the database again after a day', async () => {
     const a = await newScan('u1', BC.misfiled);
     await processScan(deps(), 'u1', a.id);
@@ -843,6 +879,36 @@ describe('fallbacks before asking the owner for photos', () => {
     expect(s.diagnosticNotes[0]).toBe('Dropped guaranteedAnalysis, calories, adequacy taken from database label images or web pages under older rules; they are read again.');
     const product = (await db.doc(`products/${gtin}`).get()).data()!;
     expect(product.facts.guaranteedAnalysis.source.readerVersion).toBe(LABEL_EXTRACTION_VERSION);
+  });
+  it('keeps what the previous label reader (2.1.0) read from a database image, and reads again only a panel it could not read', async () => {
+    const ref = await newScan('u1', BC.imageOnly);
+    await processScan(deps(), 'u1', ref.id);
+    expect(calls.dbImages).toBe(1);
+    const gtin = (await read(ref)).gtin;
+    // As 2.1.0 saved it.
+    const v21 = <T extends Record<string, unknown>>(x: T) => ({ ...x, readerVersion: 'label-extract-2.1.0' });
+    const facts = (await db.doc(`products/${gtin}`).get()).data()!.facts;
+    facts.sources = facts.sources.map((x: Record<string, unknown>) => (x.sourceType === 'database_image' ? v21(x) : x));
+    for (const k of ['guaranteedAnalysis', 'adequacy', 'calories']) facts[k].source = v21(facts[k].source);
+    await db.doc(`products/${gtin}`).update({ facts });
+    await db.doc(`productMeta/${gtin}`).update({ 'enrichment.databaseImages.version': 'label-extract-2.1.0' });
+    const again = await newScan('u1', BC.imageOnly);
+    await processScan(deps(), 'u1', again.id);
+    expect(calls.dbImages).toBe(1); // nothing is missing, so nothing is read again
+    const s = await read(again);
+    expect(s.status).toBe('complete');
+    expect(s.diagnosticNotes.join(' ')).not.toMatch(/Dropped/);
+    // The analysis panel, as if 2.1.0 had found it unreadable: the current reader reads it again.
+    const { guaranteedAnalysis: _read21, ...withoutAnalysis } = facts;
+    await db.doc(`products/${gtin}`).update({ facts: withoutAnalysis });
+    await db.doc(`productMeta/${gtin}`).update({ 'enrichment.databaseImages': { read: [], skipped: ['nutrition: unreadable (TEST FIXTURE)'], failed: [], version: 'label-extract-2.1.0' } });
+    const third = await newScan('u1', BC.imageOnly);
+    await processScan(deps(), 'u1', third.id);
+    expect(calls.dbImages).toBe(2);
+    expect((await read(third)).status).toBe('complete');
+    const product = (await db.doc(`products/${gtin}`).get()).data()!;
+    expect(product.facts.guaranteedAnalysis.source.readerVersion).toBe(LABEL_EXTRACTION_VERSION);
+    expect(product.facts.adequacy.source.readerVersion).toBe('label-extract-2.1.0'); // what 2.1.0 read is kept
   });
   it('fills missing label facts from the manufacturer page (research), once per freshness window', async () => {
     const ref = await newScan('u1', BC.webOnly);

@@ -283,13 +283,20 @@ async function researchAttempt(opts: ResearchOptions, user: string): Promise<Res
     if (adequacy) facts.adequacy = { value: adequacy, source };
   } else if (data.adequacy_statement_verbatim) discarded.push('adequacy statement: not found on the cited page');
 
-  const ga = validateGuaranteedAnalysis(
-    (data.guaranteed_analysis ?? [])
-      .filter((g) => pages.some((p) => numberOnPage(p.raw, Number(g.value))))
+  const offered = data.guaranteed_analysis ?? [];
+  const notOnPage = offered.filter((g) => !pages.some((p) => numberOnPage(p.raw, Number(g.value))));
+  const checked = validateGuaranteedAnalysis(
+    offered
+      .filter((g) => !notOnPage.includes(g))
       .map((g) => ({ nutrient: nutrientKeyFromLabel(g.label), label: g.label, qualifier: qualifierFrom(g.qualifier), value: Number(g.value), unit: normalizeUnit(g.unit) })),
-  ).valid;
+  );
+  const ga = checked.valid;
   if (ga.length) facts.guaranteedAnalysis = { value: ga, source };
-  else if (data.guaranteed_analysis?.length) discarded.push('guaranteed analysis: values not found on the cited page');
+  else if (offered.length) discarded.push('guaranteed analysis: values not found on the cited page');
+  // Which rows were left out when others were kept: values not on the page, or not plausible.
+  if (ga.length && (notOnPage.length || checked.rejected.length)) {
+    discarded.push(`guaranteed analysis: kept ${ga.length} of ${offered.length} values${notOnPage.length ? `; not on the page: ${notOnPage.slice(0, 4).map((g) => `${g.label} ${g.value}`).join(', ')}` : ''}${checked.rejected.length ? `; ${checked.rejected.slice(0, 2).join('; ')}` : ''}`);
+  }
 
   const actives = parseActiveIngredients(data.active_ingredients_verbatim?.match(/active ingredients?/i) ? data.active_ingredients_verbatim : data.active_ingredients_verbatim ? `Active ingredients: ${data.active_ingredients_verbatim}` : null)
     .filter((a) => onPage(a.name) && (a.amount === null || pages.some((p) => numberOnPage(p.raw, Number(a.amount)))));
