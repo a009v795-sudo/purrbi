@@ -204,18 +204,27 @@ function sectionRows(text: string, percentHeader: boolean): GuaranteedAnalysisEn
   // Values printed before their names ("30% Crude Protein / 18% Crude Fat", "Minimum: 30% Crude Protein, …"):
   // which value is whose is unclear, so nothing in the section is read.
   let carryForCheck = '';
+  let fromRest = false; // the text above is the end of a value line (a name wrapped onto this line)
   for (const line of lines) {
     const { parts, rest } = partsOf(line);
     if (!parts.length) {
-      if (!QUALIFIER_ALONE.test(line)) carryForCheck = line;
+      if (!QUALIFIER_ALONE.test(line)) {
+        carryForCheck = line;
+        fromRest = false;
+      }
       continue;
     }
     const first = lead(parts[0].name).replace(QUALIFIER_LEAD, '');
     const ownName = realWord(first) || nutrientKeysIn(first).length > 0;
-    const carried = realWord(carryForCheck) || nutrientKeysIn(carryForCheck).length > 0;
+    // The text above counts as this value's name if, with the start of this line, it names a nutrient ("Ruwe" /
+    // "as 24,4 %"), opened a bracket the name goes on in, or is a name wrapped from the end of a value line;
+    // an introduction above the first value ("Each chew contains") does not.
+    const carried =
+      nutrientKeysIn(`${carryForCheck} ${first}`).length > 0 || unclosed(carryForCheck) || (fromRest && realWord(carryForCheck));
     const goesOn = /\p{L}/u.test(rest) || parts.slice(1).some((p) => /\p{L}/u.test(p.name));
     if (!ownName && !carried && goesOn) return [];
     carryForCheck = /\p{L}/u.test(rest) ? rest : '';
+    fromRest = true;
   }
 
   for (const line of lines) {

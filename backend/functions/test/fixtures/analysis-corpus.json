@@ -1068,5 +1068,21 @@
    "other:150mg/kg:min",
    "crude_protein:30%:min"
   ]
+ },
+ {
+  "id": "R25 values before names under an introduction line",
+  "pct": false,
+  "text": "Each chew contains\n30% Crude Protein\n18% Crude Fat",
+  "expect": [],
+  "why": "values printed before their names: which is whose is unclear"
+ },
+ {
+  "id": "R26 a name above its value, the next name after the value",
+  "pct": false,
+  "text": "Calcium\n1.2% min Phosphorus\n1.0% min",
+  "expect": [
+   "calcium:1.2%:min",
+   "phosphorus:1%:min"
+  ]
  }
 ]
