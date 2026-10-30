@@ -33,7 +33,7 @@ export function facts(over: Omit<Partial<ProductFacts>, 'ingredientsText'> & { i
     productName: { value: 'TEST FIXTURE Chicken Recipe', source: SRC },
     brand: { value: 'TESTBRAND', source: SRC },
     ingredientsText: ingredientsText ? { value: ingredientsText, source: SRC } : undefined,
-    ingredients: ingredientsText ? { value: parseIngredientList(ingredientsText).map((i) => i.name), source: SRC } : undefined,
+    ingredients: ingredientsText ? { value: parseIngredientList(ingredientsText).map((i) => i.labelText), source: SRC } : undefined,
     guaranteedAnalysis: { value: GA_FULL, source: SRC },
     calories: { value: [{ kcal: 3800, per: 'kg' }], source: SRC },
     adequacy: adequacy ? { value: adequacy, source: SRC } : undefined,

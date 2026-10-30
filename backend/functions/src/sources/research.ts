@@ -118,7 +118,7 @@ const coreRows = (rows: GuaranteedAnalysisEntry[]) => CORE_GA.filter((k) => rows
 
 /** An ingredient's name without percentages, parentheses or the trailing plural, as words. */
 const ingredientWords = (name: string) =>
-  normalizeIngredientName(name.replace(/\([^)]*\)/g, ' '))
+  normalizeIngredientName(name.replace(/\([^)]*\)|\[[^\]]*\]/g, ' '))
     .replace(/[^a-z0-9 ]+/g, ' ')
     .split(/\s+/)
     .filter(Boolean)
@@ -448,7 +448,7 @@ async function researchAttempt(opts: ResearchOptions, user: string, mode: Mode):
   if (listedOnPage || (nameLevel && singleIngredient && onPage(parsed[0]?.name))) {
     if (!nameLevel || singleIngredient) {
       facts.ingredientsText = { value: ingredientsText!.trim(), source };
-      facts.ingredients = { value: parsed.map((i) => i.name), source };
+      facts.ingredients = { value: parsed.map((i) => i.labelText), source };
     } else discarded.push('ingredients: not used from a page matched only by brand and name');
   } else if (data.ingredients_verbatim) discarded.push('ingredients: not found verbatim on the cited page');
 

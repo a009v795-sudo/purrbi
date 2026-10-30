@@ -196,7 +196,8 @@ export function openFactsToFacts(lookup: Extract<OpenFactsLookup, { found: true 
   const brand = (p.brands || '').split(',')[0]?.trim();
   const ingredientsText = (p.ingredients_text_en || p.ingredients_text || '').trim();
   const ingredientsLanguage = p.ingredients_text_en ? 'en' : p.lang;
-  const ingredients = parseIngredientList(ingredientsText).map((i) => i.name);
+  // Each entry as printed (a blend keeps its bracketed items), so the list parses again to the same entries.
+  const ingredients = parseIngredientList(ingredientsText).map((i) => i.labelText);
   const ga = nutrimentsToGuarantees(p.nutriments);
   const calories = nutrimentsToCalories(p.nutriments);
   const facts: ProductFacts = {

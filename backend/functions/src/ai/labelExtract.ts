@@ -52,7 +52,7 @@ export function rowsInUse21(rows: GuaranteedAnalysisEntry[]): GuaranteedAnalysis
 /** An ingredient list cut where the current rules end it (2.1.0 did not know every analysis heading, e.g. "Inhaltsstoffe"). */
 export function ingredientsInUse(text: string): { text: string; ingredients: string[] } {
   const cut = text.replace(NEXT_SECTION, '').trim();
-  return { text: cut, ingredients: cut ? parseIngredientList(cut).map((i) => i.name) : [] };
+  return { text: cut, ingredients: cut ? parseIngredientList(cut).map((i) => i.labelText) : [] };
 }
 
 /** A saved reading as the current rules use it: a 2.1.0 reading without the rows it may have misread, its ingredient list cut again. */
@@ -247,7 +247,7 @@ export function parseReading(raw: RawLabelExtraction, model: string): Reading {
       break;
     }
   }
-  const ingredients = found ? parseIngredientList(found.list).map((i) => i.name) : [];
+  const ingredients = found ? parseIngredientList(found.list).map((i) => i.labelText) : [];
   // Analysis rows from the analysis panel, and from any other panel that prints an analysis heading: EU
   // packs run "Composition: … Constituants analytiques: …" as one block, which a reading may call the
   // ingredient panel. The same row in two panels counts once; a nutrient with two values is not read.
