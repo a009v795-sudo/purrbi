@@ -229,7 +229,10 @@ const VERIFIED_DAYS = 180;
 const UNVERIFIED_DAYS = 30;
 const TRANSIENT_DAYS = 0.25; // a cited page that could not be fetched (timeout, 429, 5xx) is tried again after 6 hours
 const NOT_RETURNED_DAYS = 1; // a term the model left out is asked for again the next day
-const UNREADABLE_DAYS = 1; // a cited PDF (which Purrbi cannot check) is asked for again the next day, when a web page may be cited
+// A cited file Purrbi cannot check (a PDF) is asked for again after 1 day, when a web page may be cited; if the
+// model keeps citing a file, after 7 and then 30 days.
+const FILE_REASON = /^cited page is a .*, which Purrbi cannot check/;
+const fileDays = (attempts: number) => (attempts >= 3 ? 30 : attempts === 2 ? 7 : 1);
 
 /** Cached explanations that are still current; expired ones are treated as missing. */
 export async function readExplanations(db: Firestore, keys: string[], now: Date): Promise<Map<string, CitedExplanation>> {
@@ -246,7 +249,7 @@ export async function readExplanations(db: Firestore, keys: string[], now: Date)
     const lifetime =
       e.status === 'verified' ? VERIFIED_DAYS
       : /^cited page could not be fetched/.test(reason) ? TRANSIENT_DAYS
-      : /^cited page is a .*, which Purrbi cannot check/.test(reason) ? UNREADABLE_DAYS
+      : FILE_REASON.test(reason) ? fileDays(e.attempts ?? 1)
       : e.status === 'not_found' ? NOT_RETURNED_DAYS
       : UNVERIFIED_DAYS;
     if (age <= lifetime) out.set(snap.id, e);
@@ -256,8 +259,11 @@ export async function readExplanations(db: Firestore, keys: string[], now: Date)
 
 export async function writeExplanations(db: Firestore, items: CitedExplanation[]): Promise<void> {
   if (!items.length) return;
+  const files = items.filter((e) => FILE_REASON.test(e.reason ?? ''));
+  const before = files.length ? await db.getAll(...files.map((e) => db.doc(`knowledge/${e.key}`))) : [];
+  const attempts = new Map(before.filter((d) => d.exists && FILE_REASON.test(String(d.get('reason') ?? ''))).map((d) => [d.id, Number(d.get('attempts') ?? 1)]));
   const batch = db.batch();
-  for (const e of items) batch.set(db.doc(`knowledge/${e.key}`), e);
+  for (const e of items) batch.set(db.doc(`knowledge/${e.key}`), FILE_REASON.test(e.reason ?? '') ? { ...e, attempts: (attempts.get(e.key) ?? 0) + 1 } : e);
   await batch.commit();
 }
 

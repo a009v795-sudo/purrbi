@@ -8,7 +8,7 @@
 // is recorded (sanitized) under the job's trace id.
 import { createHash, randomUUID } from 'node:crypto';
 import type { Firestore } from 'firebase-admin/firestore';
-import { extractLabel as extractLabelImpl, LABEL_EXTRACTION_VERSION, LABEL_READINGS_IN_USE, type ValidatedLabel } from '../ai/labelExtract';
+import { extractLabel as extractLabelImpl, LABEL_EXTRACTION_VERSION, LABEL_READINGS_IN_USE, readingInUse, type ValidatedLabel } from '../ai/labelExtract';
 import { checkVerdict, ruleVerdict, verdictInput, verdictKey, withPetName, writeVerdict as verdictImpl } from '../ai/verdict';
 import { parseAdequacyStatement } from '../domain/adequacy';
 import { normalizeBarcode, type NormalizedBarcode } from '../domain/barcode';
@@ -23,7 +23,7 @@ import { explainTerms as explainImpl, explanationKey, needsExplanation, type Cit
 import { readDatabaseLabelImages as databaseImagesImpl } from '../sources/labelImages';
 import { checkRecalls as checkRecallsImpl } from '../sources/openfda';
 import { databaseGuarantees, DB_FOR_TYPE, implausibleAnalysis, lookupOpenFacts as lookupOpenFactsImpl, openFactsToFacts, type OpenFactsDb, type OpenFactsLookup } from '../sources/openFacts';
-import { RESEARCH_VERSION, researchProduct as researchImpl, type ResearchOutcome } from '../sources/research';
+import { RESEARCH_RESULTS_IN_USE, RESEARCH_VERSION, researchProduct as researchImpl, type ResearchOutcome } from '../sources/research';
 import { currentCalls, errorDetail, runWithCallLog } from '../util/diagnostics';
 import { SourceError } from '../util/http';
 import { rematchAnalysis } from '../domain/nutrition';
@@ -344,10 +344,11 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   const notes = evidence.notes;
   // Label images read by an older label reader are dropped (and read again below when allowed).
   const before = facts.sources.length + facts.classificationSignals.length;
-  const stale = dropStaleImageReads(facts, LABEL_READINGS_IN_USE, RESEARCH_VERSION);
+  const stale = dropStaleImageReads(facts, LABEL_READINGS_IN_USE, RESEARCH_RESULTS_IN_USE);
   facts = stale.facts;
-  let rewriteProduct = stale.dropped.length > 0 || facts.sources.length + facts.classificationSignals.length < before;
-  if (rewriteProduct) job.diagnosticNotes.push(`Dropped ${stale.dropped.join(', ') || 'statements'} taken from database label images or web pages under older rules; they are read again.`);
+  let rewriteProduct = stale.dropped.length > 0 || stale.setAside.length > 0 || facts.sources.length + facts.classificationSignals.length < before;
+  if (stale.dropped.length || facts.sources.length + facts.classificationSignals.length < before) job.diagnosticNotes.push(`Dropped ${stale.dropped.join(', ') || 'statements'} taken from database label images or web pages under older rules; they are read again.`);
+  job.diagnosticNotes.push(...stale.setAside.map((n) => `${n[0].toUpperCase()}${n.slice(1)}.`));
   // A saved database analysis that cannot be per 100 g (saved before this check existed) is dropped too.
   const unusable = facts.guaranteedAnalysis?.source.sourceType === 'database' ? implausibleAnalysis(facts.guaranteedAnalysis.value) : null;
   if (unusable) {
@@ -360,7 +361,10 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   // inputs read later is never overwritten by it.
   const inputsAt = deps.now();
   const extractions = (await readLabelExtractions(db, o.uid, gtin)).filter((e) => e.label.status === 'processed');
-  const current = extractions.filter((e) => LABEL_READINGS_IN_USE.has(e.label.version ?? ''));
+  // Readings by an earlier reader still in use, without the rows it may have misread.
+  const current = extractions.filter((e) => LABEL_READINGS_IN_USE.has(e.label.version ?? '')).map((e) => ({ ...e, label: readingInUse(e.label) }));
+  const setAsideRows = extractions.reduce((n, e) => n + (LABEL_READINGS_IN_USE.has(e.label.version ?? '') ? e.label.guaranteedAnalysis.length - readingInUse(e.label).guaranteedAnalysis.length : 0), 0);
+  if (setAsideRows) job.diagnosticNotes.push(`${setAsideRows} analysis row${setAsideRows === 1 ? '' : 's'} of your label photo${setAsideRows === 1 ? '' : 's'} that the earlier label reader may have misread ${setAsideRows === 1 ? 'was' : 'were'} set aside.`);
   // A reading verified against this barcode fills gaps in the shared record (backend only, no account id).
   const promoted: { photoKey: string; fields: string[]; agreements: string[] }[] = [];
   if (config.promoteLabelPhotos !== false) {
@@ -405,20 +409,25 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   // Due per panel: a panel never tried (e.g. the front, once it is unresolved what the product is) is read
   // even when other panels were read recently.
   // A technical failure (download error, AI error or budget) is tried again after 6 hours, not left for 30 days.
-  // After a new label reader, panels the earlier one could not read are tried again (what it read is kept).
+  // After a new label reader still compatible with the last one, only the nutrition panel (whose reading
+  // changed) is tried again; what the earlier reader read is kept. Only needed panels that have an image are
+  // ever due, so a needed panel without one never makes the others due again.
   const panelOf = (x: string) => x.split(/[,:]/)[0].trim();
-  const lastImages = meta.enrichment.databaseImages?.version === LABEL_EXTRACTION_VERSION ? meta.enrichment.databaseImages : undefined;
-  const tried = new Set([...(lastImages?.read ?? []), ...(lastImages?.skipped ?? []).map(panelOf)]);
+  const images = meta.enrichment.databaseImages;
+  const lastImages = images && LABEL_READINGS_IN_USE.has(images.version ?? '') ? images : undefined;
+  const earlierReader = !!lastImages && lastImages.version !== LABEL_EXTRACTION_VERSION;
+  const tried = new Set([...(lastImages?.read ?? []), ...(lastImages?.skipped ?? []).map(panelOf)].filter((p) => !(earlierReader && p === 'nutrition')));
   const failedRecently = new Set(ageDays(meta.enrichment.databaseImagesAt, now) * 24 < 6 ? (lastImages?.failed ?? []).map(panelOf) : []);
-  const imagesDue = ageDays(meta.enrichment.databaseImagesAt, now) > config.productFreshDays || !lastImages || panelNeeds().some((p) => !tried.has(p) && !failedRecently.has(p));
-  if (aiOk && config.databaseImagesEnabled && panelNeeds().length && Object.keys(meta.labelImageUrls).length && imagesDue) {
+  const allDue = ageDays(meta.enrichment.databaseImagesAt, now) > config.productFreshDays || !lastImages;
+  const duePanels = () => panelNeeds().filter((p) => !!meta.labelImageUrls[p] && (allDue || (!tried.has(p) && !failedRecently.has(p))));
+  if (aiOk && config.databaseImagesEnabled && duePanels().length) {
     await setStatus(deps, o.uid, o.scanId, SCAN_STATUS.researching, 'Reading the label images in the product database', 30);
     const code = facts.sources.find((s) => s.sourceType === 'database')?.sourceId.split(':')[1] ?? o.barcode.digits;
     const product = { image_front_url: meta.labelImageUrls.front, image_ingredients_url: meta.labelImageUrls.ingredients, image_nutrition_url: meta.labelImageUrls.nutrition };
     const r = await deps.sources.databaseImages({
       product,
       code,
-      needs: panelNeeds(),
+      needs: duePanels(),
       gtin14: gtin,
       userAgent: config.userAgent,
       now,
@@ -451,7 +460,8 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
     (meta.enrichment.research?.outcome === 'fetch_failed' && ageDays(meta.enrichment.researchAt, now) * 24 >= 12) ||
     // A search made while it was unknown who the product is for could not use pages matched by brand and name.
     (meta.enrichment.research?.species === 'unknown' && scope.species !== 'unknown' && !!meta.enrichment.research.filled && meta.enrichment.research.filled.length === 0);
-  if (aiOk && config.researchEnabled && stillMissing && !hasWeb && researchDue) {
+  // A page already used is searched again only after a new research method (which may read more of it), and only while something is missing.
+  if (aiOk && config.researchEnabled && stillMissing && (!hasWeb || meta.enrichment.research?.version !== RESEARCH_VERSION) && researchDue) {
     await setStatus(deps, o.uid, o.scanId, SCAN_STATUS.researching, 'Looking for the manufacturer’s label information', 40);
     try {
       await consumeQuota(db, o.uid, 'research', config.limits, now);

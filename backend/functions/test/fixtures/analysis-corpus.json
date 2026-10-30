@@ -1,0 +1,828 @@
+[
+ {
+  "id": "US01 table one row per line",
+  "pct": false,
+  "text": "Crude Protein (min) 32.0%\nCrude Fat (min) 15.0%\nCrude Fiber (max) 4.0%\nMoisture (max) 10.0%\nTaurine (min) 0.15%\nOmega-6 Fatty Acids* (min) 2.5%\nOmega-3 Fatty Acids* (min) 0.3%\n*Not recognized as an essential nutrient by the AAFCO Cat Food Nutrient Profiles.",
+  "expect": [
+   "crude_protein:32%:min",
+   "crude_fat:15%:min",
+   "crude_fiber:4%:max",
+   "moisture:10%:max",
+   "taurine:0.15%:min",
+   "omega_6:2.5%:min",
+   "omega_3:0.3%:min"
+  ]
+ },
+ {
+  "id": "US02 dotted leaders, qualifier after, heading in text",
+  "pct": false,
+  "text": "GUARANTEED ANALYSIS\nCrude Protein ......... 26.0% min\nCrude Fat ............ 16.0% min\nCrude Fiber .......... 4.0% max\nMoisture ............. 10.0% max\nCalcium .............. 1.2% min\nPhosphorus ........... 1.0% min\nVitamin E ............ 150 IU/kg min\nGlucosamine* ......... 400 mg/kg min\nCalorie Content (calculated): 3,610 kcal ME/kg; 393 kcal ME/cup",
+  "expect": [
+   "crude_protein:26%:min",
+   "crude_fat:16%:min",
+   "crude_fiber:4%:max",
+   "moisture:10%:max",
+   "calcium:1.2%:min",
+   "phosphorus:1%:min",
+   "other:150IU/kg:min",
+   "other:400mg/kg:min"
+  ]
+ },
+ {
+  "id": "US03 wrapped names",
+  "pct": false,
+  "text": "Guaranteed Analysis\nCrude Protein\n(min) 30.0%\nCrude Fat\n(min) 18.0%\nOmega-6 Fatty\nAcids* (min) 3.0%",
+  "expect": [
+   "crude_protein:30%:min",
+   "crude_fat:18%:min",
+   "omega_6:3%:min"
+  ]
+ },
+ {
+  "id": "US04 inline small print",
+  "pct": false,
+  "text": "Guaranteed Analysis: Crude Protein (Min) 26.0%, Crude Fat (Min) 16.0%, Crude Fiber (Max) 4.0%, Moisture (Max) 10.0%, Zinc (Min) 150 mg/kg, Selenium (Min) 0.35 mg/kg, Vitamin E (Min) 150 IU/kg, Omega-6 Fatty Acids* (Min) 2.6%, Omega-3 Fatty Acids* (Min) 0.4%.",
+  "expect": [
+   "crude_protein:26%:min",
+   "crude_fat:16%:min",
+   "crude_fiber:4%:max",
+   "moisture:10%:max",
+   "other:150mg/kg:min",
+   "other:0.35mg/kg:min",
+   "other:150IU/kg:min",
+   "omega_6:2.6%:min",
+   "omega_3:0.4%:min"
+  ]
+ },
+ {
+  "id": "US05 vitamin A thousands comma",
+  "pct": false,
+  "text": "Crude Protein (min) 30.0%\nVitamin A (min) 15,000 IU/kg\nVitamin E (min) 150 IU/kg",
+  "expect": [
+   "crude_protein:30%:min",
+   "other:15000IU/kg:min",
+   "other:150IU/kg:min"
+  ]
+ },
+ {
+  "id": "US06 leading-dot decimals",
+  "pct": false,
+  "text": "Ash (max) 7.5%\nMagnesium (max) .09%\nTaurine (min) .15%",
+  "expect": [
+   "ash:7.5%:max",
+   "magnesium:0.09%:max",
+   "taurine:0.15%:min"
+  ]
+ },
+ {
+  "id": "US07 calcium min and max on one line",
+  "pct": false,
+  "text": "Calcium (min) 1.0%\nCalcium 1.0% min, 1.5% max\nPhosphorus (min) 0.8%",
+  "expect": [
+   "calcium:1%:min",
+   "phosphorus:0.8%:min"
+  ]
+ },
+ {
+  "id": "US08 as fed / dry matter columns",
+  "pct": false,
+  "text": "Guaranteed Analysis   As Fed   Dry Matter\nCrude Protein (min) 10.0% 45.5%\nCrude Fat (min) 5.0% 22.7%\nMoisture (max) 78.0%",
+  "expect": [
+   "moisture:78%:max"
+  ]
+ },
+ {
+  "id": "US09 wet food",
+  "pct": false,
+  "text": "Crude Protein (min) 10.0%\nCrude Fat (min) 5.0%\nCrude Fiber (max) 1.0%\nMoisture (max) 78.0%\nAsh (max) 3.0%\nTaurine (min) 0.05%",
+  "expect": [
+   "crude_protein:10%:min",
+   "crude_fat:5%:min",
+   "crude_fiber:1%:max",
+   "moisture:78%:max",
+   "ash:3%:max",
+   "taurine:0.05%:min"
+  ]
+ },
+ {
+  "id": "US10 DHA EPA rows",
+  "pct": false,
+  "text": "DHA (Docosahexaenoic acid)* (min) 0.1%\nEPA (Eicosapentaenoic acid)* (min) 0.05%",
+  "expect": [
+   "dha:0.1%:min",
+   "epa:0.05%:min"
+  ]
+ },
+ {
+  "id": "US11 two-variant table",
+  "pct": false,
+  "text": "Chicken / Turkey\nCrude Protein (min) 10% 11%\nCrude Fat (min) 5% 6%\nMoisture (max) 78% 78%",
+  "expect": []
+ },
+ {
+  "id": "US12 not less than / not more than",
+  "pct": false,
+  "text": "Crude Protein not less than 30%\nCrude Fat not less than 18%\nCrude Fiber not more than 3%\nMoisture not more than 10%",
+  "expect": [
+   "crude_protein:30%:min",
+   "crude_fat:18%:min",
+   "crude_fiber:3%:max",
+   "moisture:10%:max"
+  ]
+ },
+ {
+  "id": "US13 bilingual Canadian heading",
+  "pct": false,
+  "text": "GUARANTEED ANALYSIS / ANALYSE GARANTIE\nCrude Protein (min.) / Protéines brutes (min.) 30%\nCrude Fat (min.) / Matières grasses brutes (min.) 18%",
+  "expect": [
+   "crude_protein:30%:min",
+   "crude_fat:18%:min"
+  ]
+ },
+ {
+  "id": "US14 probiotics CFU",
+  "pct": false,
+  "text": "Crude Protein (min) 26%\nTotal Microorganisms* (min) 80,000,000 CFU/lb",
+  "expect": [
+   "crude_protein:26%:min"
+  ]
+ },
+ {
+  "id": "US15 markdown table single column",
+  "pct": false,
+  "text": "| Nutrient | Amount |\n|---|---|\n| Crude Protein (min) | 30% |\n| Crude Fat (min) | 18% |",
+  "expect": [
+   "crude_protein:30%:min",
+   "crude_fat:18%:min"
+  ]
+ },
+ {
+  "id": "US16 markdown table as fed + DM",
+  "pct": false,
+  "text": "| Nutrient | As fed | Dry matter |\n|---|---|---|\n| Protein | 10% | 45% |\n| Fat | 5% | 22% |",
+  "expect": []
+ },
+ {
+  "id": "FR01 composition then analysis (test-like)",
+  "pct": false,
+  "text": "Aliment complet pour chat adulte. Composition : Saumon (15%), protéines de volaille déshydratées (17%), blé (14%).\nConstituants analytiques : Protéine : 37,0 %, Teneur en matières\ngrasses : 13,0 %, Cendres brutes : 7,5 %, Cellulose brute : 4,0 %, Acides gras Oméga 6 : 2,0 %.",
+  "expect": [
+   "crude_protein:37%",
+   "crude_fat:13%",
+   "ash:7.5%",
+   "crude_fiber:4%",
+   "omega_6:2%"
+  ]
+ },
+ {
+  "id": "FR02 analysis then additives per kg (units without /kg)",
+  "pct": false,
+  "text": "Constituants analytiques : protéine 30 %, matières grasses 15 %, cendres brutes 7 %, cellulose brute 2,5 %, humidité 8 %.\nAdditifs nutritionnels (par kg) : vitamine A 15 000 UI, vitamine D3 1 500 UI, vitamine E 300 mg, taurine 1 000 mg, sulfate de zinc monohydraté 150 mg.",
+  "expect": [
+   "crude_protein:30%",
+   "crude_fat:15%",
+   "ash:7%",
+   "crude_fiber:2.5%",
+   "moisture:8%"
+  ]
+ },
+ {
+  "id": "FR03 additives with /kg and thousands spaces",
+  "pct": false,
+  "text": "Additifs : Vitamine A : 25 000 UI/kg ; Vitamine D3 : 1 500 UI/kg ; Taurine : 1 500 mg/kg ; Zinc (sulfate de zinc monohydraté) : 120 mg/kg",
+  "expect": [],
+  "why": "additives are not analytical constituents: their section is not read"
+ },
+ {
+  "id": "FR04 analysis then composition (reverse order, same block)",
+  "pct": false,
+  "text": "Constituants analytiques : Protéine 32 %, Matières grasses 14 %, Cendres brutes 7 %, Cellulose brute 3 %, Humidité 8 %.\nComposition : protéines de volaille déshydratées (35 %), riz (20 %), graisses animales (10 %), protéines de maïs (6 %).",
+  "expect": [
+   "crude_protein:32%",
+   "crude_fat:14%",
+   "ash:7%",
+   "crude_fiber:3%",
+   "moisture:8%"
+  ]
+ },
+ {
+  "id": "FR05 multilingual FR then NL composition",
+  "pct": false,
+  "text": "Constituants analytiques : Protéine 30 %, Matières grasses 15 %, Cendres brutes 7 %, Cellulose brute 3 %.\nNL Samenstelling : gevogeltemeel (30 %), rijst (20 %), dierlijk vet (8 %), maïs.\nAnalytische bestanddelen : Ruw eiwit 30 %, Ruw vet 15 %, Ruwe as 7 %, Ruwe celstof 3 %.",
+  "expect": [
+   "crude_protein:30%",
+   "crude_fat:15%",
+   "ash:7%",
+   "crude_fiber:3%"
+  ],
+  "why": "the same rows in two languages count once"
+ },
+ {
+  "id": "FR06 percent header in text, unitless with dashes",
+  "pct": false,
+  "text": "Constituants analytiques (%) : Protéine 35 - Matières grasses 15 - Cendres brutes 7,5",
+  "expect": []
+ },
+ {
+  "id": "FR07 percent header in text, unitless with slashes",
+  "pct": false,
+  "text": "Constituants analytiques (%) : Protéine 35 / Matières grasses 15 / Cendres brutes 7,5",
+  "expect": []
+ },
+ {
+  "id": "FR08 percent header in text, unitless with periods",
+  "pct": false,
+  "text": "Constituants analytiques (%) : Protéine 35. Matières grasses 15. Cendres brutes 7,5",
+  "expect": []
+ },
+ {
+  "id": "FR09 percent header in text, unitless, spaces only",
+  "pct": false,
+  "text": "Constituants analytiques (%)\nProtéine 35 Matières grasses 15 Cendres brutes 7,5",
+  "expect": []
+ },
+ {
+  "id": "FR10 percent header in text, names line then values line",
+  "pct": false,
+  "text": "Constituants analytiques (%)\nProtéine | Matières grasses | Cendres brutes\n35 | 15 | 7,5",
+  "expect": []
+ },
+ {
+  "id": "FR11 one row per line with %",
+  "pct": false,
+  "text": "Constituants analytiques\nProtéine 35 %\nMatières grasses 15 %\nCendres brutes 7,5 %\nCellulose brute 2 %\nHumidité 8 %",
+  "expect": [
+   "crude_protein:35%",
+   "crude_fat:15%",
+   "ash:7.5%",
+   "crude_fiber:2%",
+   "moisture:8%"
+  ]
+ },
+ {
+  "id": "FR12 omega rows",
+  "pct": false,
+  "text": "Acides gras oméga 3 : 0,5 % ; Acides gras oméga 6 : 3,5 %",
+  "expect": [
+   "omega_3:0.5%",
+   "omega_6:3.5%"
+  ]
+ },
+ {
+  "id": "FR13 omega-3 with \"dont DHA\"",
+  "pct": false,
+  "text": "Acides gras oméga-3, dont DHA 0,2 %",
+  "expect": [],
+  "why": "one value under two nutrients (omega-3 and DHA) is not read"
+ },
+ {
+  "id": "FR14 [?] in the middle of the line",
+  "pct": false,
+  "text": "Protéine : 37,0 %, Teneur en mati[?]res\ngrasses : 13,0 %, Cendres brutes : 7,5 %",
+  "expect": [
+   "crude_protein:37%",
+   "ash:7.5%"
+  ]
+ },
+ {
+  "id": "FR15 calorie line inline",
+  "pct": false,
+  "text": "Énergie métabolisable : 3 900 kcal/kg, Protéine 30 %, Matières grasses 15 %",
+  "expect": [
+   "crude_protein:30%",
+   "crude_fat:15%"
+  ]
+ },
+ {
+  "id": "FR16 multi-variant inline",
+  "pct": false,
+  "text": "Avec poulet : Protéine 11 %, Matières grasses 5 % ; Avec bœuf : Protéine 10,5 %, Matières grasses 5,5 %",
+  "expect": [],
+  "why": "two variants give the same nutrients different values: ambiguous"
+ },
+ {
+  "id": "FR17 variant table columns",
+  "pct": false,
+  "text": "Poulet / Bœuf\nProtéine 11 % 10,5 %\nMatières grasses 5 % 5,5 %",
+  "expect": []
+ },
+ {
+  "id": "FR18 value under name",
+  "pct": false,
+  "text": "Protéine\n37 %\nMatières grasses\n13 %",
+  "expect": [
+   "crude_protein:37%",
+   "crude_fat:13%"
+  ]
+ },
+ {
+  "id": "FR19 nbsp thousands",
+  "pct": false,
+  "text": "Vitamine A : 36 900 UI/kg\nVitamine E : 460 mg/kg",
+  "expect": [
+   "other:460mg/kg"
+  ]
+ },
+ {
+  "id": "FR20 range",
+  "pct": false,
+  "text": "Calcium 1,0 - 1,5 %",
+  "expect": []
+ },
+ {
+  "id": "FR21 composition with unrecognised analysis heading, rows per line",
+  "pct": false,
+  "text": "Composition : poulet (30 %), riz, maïs.\nAnalyse moyenne :\nProtéine 30 %\nMatières grasses 15 %\nCendres brutes 7 %",
+  "expect": [
+   "crude_protein:30%",
+   "crude_fat:15%",
+   "ash:7%"
+  ]
+ },
+ {
+  "id": "FR22 inline, minerals with g/kg before a % row",
+  "pct": false,
+  "text": "Constituants analytiques : Protéine 30 %, Calcium 12 g/kg, Phosphore 0,9 %",
+  "expect": [
+   "crude_protein:30%",
+   "phosphorus:0.9%"
+  ]
+ },
+ {
+  "id": "FR23 dry matter in brackets",
+  "pct": false,
+  "text": "Protéine 28 % (matière sèche 32 %)\nMatières grasses 12 %",
+  "expect": [
+   "crude_protein:28%",
+   "crude_fat:12%"
+  ]
+ },
+ {
+  "id": "DE01 inline",
+  "pct": false,
+  "text": "Analytische Bestandteile: Rohprotein 31 %, Fettgehalt 20 %, Rohasche 6 %, Rohfaser 2,5 %, Feuchtigkeit 8 %, Calcium 1,1 %, Phosphor 0,9 %, Natrium 0,4 %, Magnesium 0,08 %",
+  "expect": [
+   "crude_protein:31%",
+   "crude_fat:20%",
+   "ash:6%",
+   "crude_fiber:2.5%",
+   "moisture:8%",
+   "calcium:1.1%",
+   "phosphorus:0.9%",
+   "sodium:0.4%",
+   "magnesium:0.08%"
+  ]
+ },
+ {
+  "id": "DE02 additives with dot thousands inline",
+  "pct": false,
+  "text": "Ernährungsphysiologische Zusatzstoffe: Vitamin A 15.000 IE/kg, Vitamin D3 1.500 IE/kg, Vitamin E 200 mg/kg, Taurin 1.500 mg/kg, Zink (als Zinkoxid) 100 mg/kg",
+  "expect": [],
+  "why": "additives are not analytical constituents: their section is not read"
+ },
+ {
+  "id": "DE03 Inhaltsstoffe heading after Zusammensetzung, rows per line",
+  "pct": false,
+  "text": "Zusammensetzung: Huhn (40 %), Reis (20 %), Geflügelfett.\nInhaltsstoffe:\nRohprotein 30 %\nRohfett 15 %\nRohasche 7 %\nRohfaser 2 %",
+  "expect": [
+   "crude_protein:30%",
+   "crude_fat:15%",
+   "ash:7%",
+   "crude_fiber:2%"
+  ]
+ },
+ {
+  "id": "DE04 vitamin D3 without colon",
+  "pct": false,
+  "text": "Vitamin A 12000 IE/kg\nVitamin D3 500 IE/kg\nVitamin E 100 mg/kg",
+  "expect": [
+   "other:12000IU/kg",
+   "other:500IU/kg",
+   "other:100mg/kg"
+  ]
+ },
+ {
+  "id": "DE05 omega-3 before omega-6 with g/kg",
+  "pct": false,
+  "text": "Rohprotein 30 %, Omega-3-Fettsäuren 5 g/kg, Omega-6-Fettsäuren 2,5 %",
+  "expect": [
+   "crude_protein:30%",
+   "omega_6:2.5%"
+  ]
+ },
+ {
+  "id": "ES01 inline",
+  "pct": false,
+  "text": "Componentes analíticos: Proteína bruta 30 %, Grasa bruta 15 %, Ceniza bruta 7 %, Fibra bruta 3 %, Humedad 8 %, Calcio 1,2 %, Fósforo 0,9 %.",
+  "expect": [
+   "crude_protein:30%",
+   "crude_fat:15%",
+   "ash:7%",
+   "crude_fiber:3%",
+   "moisture:8%",
+   "calcium:1.2%",
+   "phosphorus:0.9%"
+  ]
+ },
+ {
+  "id": "ES02 mín./máx. after values",
+  "pct": false,
+  "text": "Proteína bruta 30 % mín., Grasa bruta 18 % mín., Fibra bruta 3 % máx., Humedad 10 % máx.",
+  "expect": [
+   "crude_protein:30%",
+   "crude_fat:18%",
+   "crude_fiber:3%",
+   "moisture:10%"
+  ]
+ },
+ {
+  "id": "IT01 inline",
+  "pct": false,
+  "text": "Componenti analitici: proteina grezza 32 %, grassi grezzi 15 %, ceneri grezze 7 %, fibra grezza 2 %, umidità 8 %.",
+  "expect": [
+   "crude_protein:32%",
+   "crude_fat:15%",
+   "ash:7%",
+   "crude_fiber:2%",
+   "moisture:8%"
+  ]
+ },
+ {
+  "id": "NL01 inline",
+  "pct": false,
+  "text": "Analytische bestanddelen: ruw eiwit 30 %, ruw vet 15 %, ruwe as 7 %, ruwe celstof 2 %, vocht 8 %.",
+  "expect": [
+   "crude_protein:30%",
+   "crude_fat:15%",
+   "ash:7%",
+   "crude_fiber:2%",
+   "moisture:8%"
+  ]
+ },
+ {
+  "id": "PT01 inline",
+  "pct": false,
+  "text": "Constituintes analíticos: Proteína bruta 30 %, Gordura bruta 15 %, Cinza bruta 7 %, Fibra bruta 3 %, Humidade 8 %.",
+  "expect": [
+   "crude_protein:30%",
+   "crude_fat:15%",
+   "ash:7%",
+   "crude_fiber:3%",
+   "moisture:8%"
+  ]
+ },
+ {
+  "id": "EN01 EU inline",
+  "pct": false,
+  "text": "Analytical constituents: Protein 30%, Fat content 15%, Inorganic matter 7%, Crude fibres 2.5%, Moisture 8%, Omega-6 fatty acids 3%, Omega-3 fatty acids 0.6%, Calcium 1.2%, Phosphorus 1%.",
+  "expect": [
+   "crude_protein:30%",
+   "crude_fat:15%",
+   "ash:7%",
+   "crude_fiber:2.5%",
+   "moisture:8%",
+   "omega_6:3%",
+   "omega_3:0.6%",
+   "calcium:1.2%",
+   "phosphorus:1%"
+  ]
+ },
+ {
+  "id": "EN02 Royal Canin dashes",
+  "pct": false,
+  "text": "ANALYTICAL CONSTITUENTS: Protein: 27% - Fat content: 13% - Crude ash: 7.2% - Crude fibres: 5.4% - Moisture: 5.5% - Per kg: Omega 3 fatty acids: 5.9 g - including EPA/DHA: 2.3 g.",
+  "expect": [
+   "crude_protein:27%",
+   "crude_fat:13%",
+   "ash:7.2%",
+   "crude_fiber:5.4%",
+   "moisture:5.5%"
+  ]
+ },
+ {
+  "id": "EN03 as fed + dry matter after values",
+  "pct": false,
+  "text": "Crude Protein 26% (as fed), 29% (dry matter)\nCrude Fat 16%",
+  "expect": [
+   "crude_fat:16%"
+  ],
+  "why": "a line giving as-fed and dry-matter values is not read"
+ },
+ {
+  "id": "EN04 analysis then ingredients (EN, same block)",
+  "pct": false,
+  "text": "Analytical constituents: Protein 32%, Fat content 18%, Crude ash 7%, Crude fibres 2%.\nIngredients: Chicken (40%), dried chicken protein (20%), chicken fat (8%), rice.",
+  "expect": [
+   "crude_protein:32%",
+   "crude_fat:18%",
+   "ash:7%",
+   "crude_fiber:2%"
+  ]
+ },
+ {
+  "id": "EN05 inline taurine in mg without /kg before vitamin D3 IU/kg",
+  "pct": false,
+  "text": "Protein 30%, Fat 15%, Taurine 2000 mg, Vitamin D3 1500 IU/kg",
+  "expect": [
+   "crude_protein:30%",
+   "crude_fat:15%",
+   "other:1500IU/kg"
+  ]
+ },
+ {
+  "id": "EN06 inline multilingual names",
+  "pct": false,
+  "text": "Protéine/Protein 35 %, Matières grasses/Fat content 15 %",
+  "expect": [
+   "crude_protein:35%",
+   "crude_fat:15%"
+  ]
+ },
+ {
+  "id": "EN07 analysis heading \"Analysis:\" after ingredients, per line",
+  "pct": false,
+  "text": "Ingredients: Chicken (60%), sweet potato (20%), peas.\nAnalysis:\nProtein 30%\nFat 15%\nFibre 3%",
+  "expect": [
+   "crude_protein:30%",
+   "crude_fat:15%",
+   "crude_fiber:3%"
+  ]
+ },
+ {
+  "id": "EN08 inline, unitless with \" - \", heading (%) in heading field",
+  "pct": true,
+  "text": "Protein 35 - Fat 15 - Ash 7.5",
+  "expect": []
+ },
+ {
+  "id": "EN09 inline values, missing first unit",
+  "pct": false,
+  "text": "Protein 30 Fat 15%",
+  "expect": []
+ },
+ {
+  "id": "EN10 inline, lowercase \"min\" in next name",
+  "pct": false,
+  "text": "Calcium 1.2%, Minerals 7%",
+  "expect": [
+   "calcium:1.2%",
+   "other:7%"
+  ]
+ },
+ {
+  "id": "EN11 inline with \"and\"",
+  "pct": false,
+  "text": "Protein 30% and fat 15%",
+  "expect": [
+   "crude_protein:30%",
+   "crude_fat:15%"
+  ]
+ },
+ {
+  "id": "EN12 inline wrapped mid-name twice",
+  "pct": false,
+  "text": "Analytical constituents: Protein 30%, Fat\ncontent 15%, Crude\nash 7%, Crude fibres 2%",
+  "expect": [
+   "crude_protein:30%",
+   "crude_fat:15%",
+   "ash:7%",
+   "crude_fiber:2%"
+  ]
+ },
+ {
+  "id": "EN13 heading with (as fed)",
+  "pct": false,
+  "text": "Analytical constituents (as fed): Protein 30%, Fat content 15%",
+  "expect": [
+   "crude_protein:30%",
+   "crude_fat:15%"
+  ]
+ },
+ {
+  "id": "EN14 vitamin B12 / omega 3 no colon",
+  "pct": false,
+  "text": "Omega 3 400 mg/kg\nVitamin B12 100 mg/kg",
+  "expect": [
+   "omega_3:400mg/kg",
+   "other:100mg/kg"
+  ]
+ },
+ {
+  "id": "EN15 [?] replaces a unit",
+  "pct": false,
+  "text": "Protein 30[?], Fat 15%",
+  "expect": [],
+  "why": "a row an unreadable mark touches is not read, and the next name is part of it"
+ },
+ {
+  "id": "X01 value-first layout",
+  "pct": false,
+  "text": "30% Crude Protein\n18% Crude Fat\n4% Crude Fiber",
+  "expect": []
+ },
+ {
+  "id": "X02 qualifier in brackets after the value",
+  "pct": false,
+  "text": "Crude Fiber 4.0% (max)\nMoisture (max) 10.0%",
+  "expect": [
+   "crude_fiber:4%:max",
+   "moisture:10%:max"
+  ]
+ },
+ {
+  "id": "X03 a name left without its value",
+  "pct": false,
+  "text": "Crude Protein (min)\nCrude Fat (min) 18%",
+  "expect": [
+   "crude_fat:18%:min"
+  ]
+ },
+ {
+  "id": "X04 dry-matter table after guarantees",
+  "pct": false,
+  "text": "Crude Protein (min) 30.0%\nCrude Fat (min) 18.0%\nCrude Fiber (max) 4.0%\nMoisture (max) 10.0%\nTypical Analysis (dry matter basis)\nProtein 33.3%\nFat 20.0%\nFiber 3.3%",
+  "expect": [
+   "crude_protein:30%:min",
+   "crude_fat:18%:min",
+   "crude_fiber:4%:max",
+   "moisture:10%:max"
+  ]
+ },
+ {
+  "id": "X05 footnote naming the guaranteed analysis",
+  "pct": false,
+  "text": "Crude Protein (min) 30.0%\nCrude Fat (min) 18.0%\nCrude Fiber (max) 4.0%\nMoisture (max) 10.0%\n*All values in this guaranteed analysis are as fed.",
+  "expect": [
+   "crude_protein:30%:min",
+   "crude_fat:18%:min",
+   "crude_fiber:4%:max",
+   "moisture:10%:max"
+  ]
+ },
+ {
+  "id": "X06 ranges in three languages",
+  "pct": false,
+  "text": "Calcium 1.0% to 1.5%\nCalcium : 1,0 % à 1,5 %\nCalcium 1,0 % bis 1,5 %",
+  "expect": []
+ },
+ {
+  "id": "X07 note in brackets inside the line",
+  "pct": false,
+  "text": "Protéines 38 % (dont 80 % d'origine animale), Matières grasses 18 %",
+  "expect": [
+   "crude_protein:38%",
+   "crude_fat:18%"
+  ]
+ },
+ {
+  "id": "X08 feeding sentence after the analysis",
+  "pct": false,
+  "text": "Guaranteed Analysis: Crude Protein (min) 25%, Crude Fat (min) 15%\nFeeding guidelines: feed 2-3% of body weight daily.",
+  "expect": [
+   "crude_protein:25%:min",
+   "crude_fat:15%:min"
+  ]
+ },
+ {
+  "id": "X09 marketing after a row",
+  "pct": false,
+  "text": "Humidité 78 %. Aliment 100 % complet",
+  "expect": [
+   "moisture:78%"
+  ]
+ },
+ {
+  "id": "X10 omega-3 wrapped at the end of a line",
+  "pct": false,
+  "text": "Analytical constituents: Protein 30%, Fat content 15%, Omega-3\nfatty acids 0,6%, Omega-6\nfatty acids 3%",
+  "expect": [
+   "crude_protein:30%",
+   "crude_fat:15%",
+   "omega_3:0.6%",
+   "omega_6:3%"
+  ]
+ },
+ {
+  "id": "X11 oméga 3 et 6 under (%)",
+  "pct": false,
+  "text": "Constituants analytiques (%)\nProtéine 35\nAcides gras oméga 3\net 6 : 4",
+  "expect": [
+   "crude_protein:35%"
+  ]
+ },
+ {
+  "id": "X12 trace elements under their own unit",
+  "pct": false,
+  "text": "Constituants analytiques (%)\nProtéine 35\nMatières grasses 15\nOligo-éléments (mg/kg)\nFer 100\nZinc 80\nCuivre 10",
+  "expect": [
+   "crude_protein:35%",
+   "crude_fat:15%"
+  ]
+ },
+ {
+  "id": "X13 Spanish mín./máx. per line",
+  "pct": false,
+  "text": "Proteína bruta 30 % mín.\nGrasa bruta 18 % mín.\nHumedad 10 % máx.",
+  "expect": [
+   "crude_protein:30%:min",
+   "crude_fat:18%:min",
+   "moisture:10%:max"
+  ]
+ },
+ {
+  "id": "X14a dashes between rows",
+  "pct": false,
+  "text": "Protein: 27% – Fat content: 13%",
+  "expect": [
+   "crude_protein:27%",
+   "crude_fat:13%"
+  ]
+ },
+ {
+  "id": "X14b bullets between rows",
+  "pct": false,
+  "text": "Protéine 30 % • Matières grasses 15 %",
+  "expect": [
+   "crude_protein:30%",
+   "crude_fat:15%"
+  ]
+ },
+ {
+  "id": "X23 two variants in one panel: ambiguous",
+  "pct": false,
+  "text": "Protein: 27% – Fat content: 13%\nProtéine 30 % • Matières grasses 15 %",
+  "expect": []
+ },
+ {
+  "id": "X15 additives with dot thousands (skipped section)",
+  "pct": false,
+  "text": "Analytische Bestandteile: Rohprotein 30 %, Rohfett 15 %\nErnährungsphysiologische Zusatzstoffe: Vitamin A 15.000 IE/kg, Vitamin D3 1.500 IE/kg, Taurin 1.500 mg/kg",
+  "expect": [
+   "crude_protein:30%",
+   "crude_fat:15%"
+  ]
+ },
+ {
+  "id": "X16 composition then additives then analysis (Purina ONE back, one block)",
+  "pct": false,
+  "text": "Aliment complet pour chat adulte. Composition : Saumon (15%), protéines de volaille déshydratées, blé (15%), farine de soja, maïs, gluten de maïs,\ngluten de blé, graisse animale, pulpe de betterave déshydratée, racine de chicorée déshydratée, protéines de poisson déshydratées, sels minéraux,\nhydrolysat (avec ajout de 0,025% de poudre de Lactobacillus Delbrueckii et Fermentum traitée thermiquement), levures. Additifs : Additifs nutritionnels\nUI/kg : Vit A : 36 960 ; Vit D3 : 1 200 ; Vit E : 460 ; mg/kg : Vit C : 140 ; Taurine : 780 ; Sulfate ferreux monohydraté : 230 ; Iodate de calcium anhydre : 2,\nSulfate cuivrique pentahydraté : 46 ; Sulfate manganeux monohydraté : 110 ; Sulfate de zinc monohydraté : 390 ; Sélénite de sodium : 0,27. Avec antioxygènes.\nConstituants analytiques : Protéine : 37,0 %, Teneur en matières grasses : 13,0 %,\nCendres brutes : 7,5 %, Cellulose brute : 4,0 %, Acides gras Oméga 6 : 2,0 %.",
+  "expect": [
+   "crude_protein:37%",
+   "crude_fat:13%",
+   "ash:7.5%",
+   "crude_fiber:4%",
+   "omega_6:2%"
+  ]
+ },
+ {
+  "id": "X17 the page text from purina.fr (one line)",
+  "pct": false,
+  "text": "Ingrédients et nutrition Composition Saumon (15 % dont tête, arête, chair) Protéines de volaille déshydratées Blé (14 %) Farine de soja Maïs Farine de protéines de maïs Constituants analytiques Protéine: 37,0% Teneur en matières grasses: 13,0% Cendres brutes: 7,5% Cellulose brute: 4,0% Acides gras Oméga 3: 0,1% Acides gras Oméga 6: 2,0% Additifs : Additifs nutritionnels UI/kg : Vitamine A : 34 000 ; Vitamine D3 : 1 100",
+  "expect": [
+   "crude_protein:37%",
+   "crude_fat:13%",
+   "ash:7.5%",
+   "crude_fiber:4%",
+   "omega_3:0.1%",
+   "omega_6:2%"
+  ]
+ },
+ {
+  "id": "X18 percent header unitless per line (old test)",
+  "pct": true,
+  "text": "Constituants analytiques (%)\nProtéine 35\nCendres brutes 7,5",
+  "expect": [
+   "crude_protein:35%",
+   "ash:7.5%"
+  ]
+ },
+ {
+  "id": "X19 no unit and no header",
+  "pct": false,
+  "text": "Protéine 35",
+  "expect": []
+ },
+ {
+  "id": "X20 one row per line US (old test)",
+  "pct": false,
+  "text": "Crude Protein (min) 30.0%\nCrude Fat ..... 15.0% min\nMoisture (max.) 10%\nVitamin E 150 IU/kg\nCalcium 1.0% / 1.5%",
+  "expect": [
+   "crude_protein:30%:min",
+   "crude_fat:15%:min",
+   "moisture:10%:max",
+   "other:150IU/kg"
+  ]
+ },
+ {
+  "id": "X21 U Biscuits fourres (per line, glare variant)",
+  "pct": false,
+  "text": "Protéine brute 10%\nCellulose brute 1%\nMatières grasses brutes 8%\nCendres brutes 5,5%\nHumidité 10%",
+  "expect": [
+   "crude_protein:10%",
+   "crude_fiber:1%",
+   "crude_fat:8%",
+   "ash:5.5%",
+   "moisture:10%"
+  ]
+ }
+]

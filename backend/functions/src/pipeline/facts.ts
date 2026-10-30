@@ -1,5 +1,5 @@
 // Merging product facts from several sources and deciding what is still missing.
-import type { ValidatedLabel } from '../ai/labelExtract';
+import { misreadBy21, type ValidatedLabel } from '../ai/labelExtract';
 import { hasCoreGuaranteedAnalysis } from '../domain/nutrition';
 import type { ProductCategory, ProductFacts, ScopeResult, SourceRef } from '../domain/types';
 
@@ -24,7 +24,12 @@ export function fillMissing(base: ProductFacts, extra: Partial<ProductFacts>): {
     }
   }
   if (extra.classificationSignals) facts.classificationSignals.push(...extra.classificationSignals);
-  for (const s of extra.sources ?? []) if (!facts.sources.some((x) => x.sourceId === s.sourceId)) facts.sources.push(s);
+  for (const s of extra.sources ?? []) {
+    const i = facts.sources.findIndex((x) => x.sourceId === s.sourceId);
+    if (i < 0) facts.sources.push(s);
+    // A newer read of the same panel or page that supplied something is the one the source list names.
+    else if (filled.some((k) => (facts as unknown as Record<string, { source?: SourceRef } | undefined>)[k]?.source?.sourceId === s.sourceId) && s.retrievedAt > facts.sources[i].retrievedAt) facts.sources[i] = s;
+  }
   if (!facts.ingredientsLanguage && extra.ingredientsLanguage) facts.ingredientsLanguage = extra.ingredientsLanguage;
   return { facts, filled };
 }
@@ -35,12 +40,26 @@ const ENRICHMENT_SOURCES = new Set(['database_image', 'manufacturer', 'retailer_
  * Removes enrichment made under older rules, so it is done again: facts read from database label images
  * by a label reader no longer in use, and facts or statements taken from web pages by older research rules.
  */
-export function dropStaleImageReads(facts: ProductFacts, readersInUse: ReadonlySet<string>, researchVersion?: string): { facts: ProductFacts; dropped: string[] } {
+export function dropStaleImageReads(facts: ProductFacts, readersInUse: ReadonlySet<string>, researchInUse?: ReadonlySet<string>): { facts: ProductFacts; dropped: string[]; setAside: string[] } {
+  // An analysis read by label reader 2.1.0 with a row it may have misread: a database image's is read again
+  // (dropped); a matched label photo's, which cannot be read again, keeps only its other rows.
+  const ga = facts.guaranteedAnalysis;
+  if (ga && ga.source.readerVersion === 'label-extract-2.1.0' && ga.value.some(misreadBy21)) {
+    const kept = ga.value.filter((e) => !misreadBy21(e));
+    const out: ProductFacts = { ...facts };
+    const reread = ga.source.sourceType === 'database_image';
+    if (reread || !kept.length) delete out.guaranteedAnalysis;
+    else out.guaranteedAnalysis = { ...ga, value: kept };
+    const rest = dropStaleImageReads(out, readersInUse, researchInUse);
+    const n = ga.value.length - kept.length;
+    const note = `${n} analysis row${n === 1 ? '' : 's'} from ${ga.source.sourceName} that the earlier label reader may have misread ${n === 1 ? 'was' : 'were'} set aside${reread ? '; the image is read again' : ''}`;
+    return { facts: rest.facts, dropped: rest.dropped, setAside: [note, ...rest.setAside] };
+  }
   const stale = (s: SourceRef | undefined) =>
     (s?.sourceType === 'database_image' && !readersInUse.has(s.readerVersion ?? '')) ||
-    (!!researchVersion && (s?.sourceType === 'manufacturer' || s?.sourceType === 'retailer_or_web') && s.readerVersion !== researchVersion);
+    (!!researchInUse && (s?.sourceType === 'manufacturer' || s?.sourceType === 'retailer_or_web') && !researchInUse.has(s.readerVersion ?? ''));
   const staleIds = new Set(facts.sources.filter(stale).map((s) => s.sourceId));
-  if (!staleIds.size) return { facts, dropped: [] };
+  if (!staleIds.size) return { facts, dropped: [], setAside: [] };
   const out: ProductFacts = { ...facts, sources: facts.sources.filter((s) => !staleIds.has(s.sourceId)), classificationSignals: facts.classificationSignals.filter((c) => !staleIds.has(c.source)) };
   const dropped: string[] = [];
   for (const k of FACT_KEYS) {
@@ -49,7 +68,7 @@ export function dropStaleImageReads(facts: ProductFacts, readersInUse: ReadonlyS
       dropped.push(k);
     }
   }
-  return { facts: out, dropped };
+  return { facts: out, dropped, setAside: [] };
 }
 
 /** Facts that came from enrichment (database label images, verified web pages), to carry over when the database record is re-fetched. */

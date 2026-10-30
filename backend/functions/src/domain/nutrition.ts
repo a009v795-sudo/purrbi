@@ -41,6 +41,13 @@ export function nutrientKeyFromLabel(label: string): NutrientKey {
   return 'other';
 }
 
+/** Every nutrient a label names: a label naming two ("Calcium/Phosphore", a name carried onto another row's) is ambiguous; a compound names none. */
+export function nutrientKeysIn(label: string): NutrientKey[] {
+  const t = plainLabel(label);
+  if (COMPOUND.test(t)) return [];
+  return NUTRIENT_PATTERNS.filter(([re]) => re.test(t)).map(([, key]) => key);
+}
+
 /**
  * Matches every analysis line again with the current names, so products read before a name was
  * known (e.g. a French label) are assessed correctly without reading the label again. On an EU

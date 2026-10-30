@@ -2,16 +2,19 @@
 // web_search tool, then independent verification: every field kept must be found again on a cited
 // page that Purrbi fetches itself. Anything that cannot be verified is discarded, never shown.
 // Switched by the RESEARCH_ENABLED parameter; attempted at most once per product per freshness window.
+import { analysisRows } from '../ai/labelExtract';
 import { researchJson } from '../ai/openai';
 import { detectSpecies, parseAdequacyStatement } from '../domain/adequacy';
 import { textContainsGtin } from '../domain/barcode';
 import { normalizeIngredientName, parseIngredientList } from '../domain/ingredients';
-import { normalizeUnit, nutrientKeyFromLabel, parseCalorieText, qualifierFrom, validateGuaranteedAnalysis } from '../domain/nutrition';
+import { CORE_GA, normalizeUnit, nutrientKeyFromLabel, parseCalorieText, qualifierFrom, validateGuaranteedAnalysis } from '../domain/nutrition';
 import { parseActiveIngredients } from '../domain/supplements';
-import type { ProductFacts, SourceRef } from '../domain/types';
+import type { GuaranteedAnalysisEntry, ProductFacts, SourceRef } from '../domain/types';
 import { httpRequest, SourceError } from '../util/http';
 
-export const RESEARCH_VERSION = 'research-1.6.0'; // 1.5.0: who it is for only from a page proven to be this product; 1.6.0: recipes compared in order, tolerant of naming
+export const RESEARCH_VERSION = 'research-1.7.0'; // 1.5.0: who it is for only from a page proven to be this product; 1.6.0: recipes compared in order, tolerant of naming; 1.7.0: the analysis printed on the page is read by Purrbi itself
+/** Research results still used as they were saved: 1.7.0 only reads more of a page's analysis than 1.6.0. */
+export const RESEARCH_RESULTS_IN_USE: ReadonlySet<string> = new Set(['research-1.6.0', RESEARCH_VERSION]);
 
 const nullableString = { type: ['string', 'null'] };
 const SCHEMA = {
@@ -91,10 +94,38 @@ function htmlToText(html: string): string {
 /** Words only: case, accents, punctuation, symbols (®, ™) and markup gaps do not matter. */
 const wordsKey = (s: string) => normalizeIngredientName(s).replace(/[^a-z0-9]+/g, ' ').trim();
 
-/** A number as printed on the page, with a decimal point or a decimal comma (EU labels). */
-const numberOnPage = (raw: string, n: number) => raw.includes(String(n)) || raw.includes(String(n).replace('.', ','));
+/** A number as printed on the page (a decimal point or comma, trailing zeros, ".15"), not inside another number. */
+const numberOnPage = (raw: string, n: number) => {
+  if (!Number.isFinite(n) || n < 0) return false;
+  const [int, dec = ''] = String(n).split('.');
+  const whole = int === '0' && dec ? '0?' : int;
+  return new RegExp(`(?<![\\d.,])${whole}${dec ? `[.,]${dec}0*` : '(?:[.,]0+)?'}(?![\\d]|[.,]\\d)`).test(raw);
+};
 
 const canonical = (u: string) => u.replace(/#.*$/, '').replace(/[?&]utm_[^&]*/g, '').replace(/\/$/, '');
+
+const PAGE_ANALYSIS_HEADING = /(?:guaranteed analysis|typical analysis|analytical constituents|constituants analytiques|composants analytiques|analytische bestandteile|componentes anal[ií]ticos|componenti analitici|analytische bestanddelen|constituintes anal[ií]ticos)/giu;
+// What follows the analysis on a product page: additives, energy, the feeding guide, the next section.
+const PAGE_SECTION_END = /(?<![\p{L}\p{N}])(?:additifs|additives|zusatzstoffe|aditivos|additivi|toevoegingsmiddelen|composition|ingr[ée]dients?|zusammensetzung|composici[oó]n|composizione|samenstelling|conseils|feeding|f[üu]tterung\p{L}*|[ée]nergie|energy|metaboli[sz]able|calories?|kcal)(?![\p{L}\p{N}])/iu;
+
+/**
+ * The analysis printed on the page itself, read with the label reader's rules (each row with its own
+ * name, inline or one per line): the text after each analysis heading, up to the next section or 600
+ * characters. Used only when every analysis on the page reads the same (a page showing variants, or
+ * typical next to guaranteed values, is left to the model's answer).
+ */
+export function pageAnalysis(plain: string): GuaranteedAnalysisEntry[] {
+  const sections = [...plain.matchAll(PAGE_ANALYSIS_HEADING)].map((h) => {
+    const body = plain.slice(h.index + h[0].length, h.index + h[0].length + 600);
+    const end = body.search(PAGE_SECTION_END);
+    return validateGuaranteedAnalysis(analysisRows(`${h[0]} ${end >= 0 ? body.slice(0, end) : body}`, false)).valid;
+  });
+  const key = (rows: GuaranteedAnalysisEntry[]) => rows.map((r) => `${r.nutrient}:${r.value}${r.unit}`).join('|');
+  if (!sections.length || !sections[0].length || sections.some((s) => key(s) !== key(sections[0]))) return [];
+  return sections[0];
+}
+
+const coreRows = (rows: GuaranteedAnalysisEntry[]) => CORE_GA.filter((k) => rows.some((r) => r.nutrient === k && r.unit === '%')).length;
 
 /** An ingredient's name without percentages, parentheses or the trailing plural, as words. */
 const ingredientWords = (name: string) =>
@@ -204,13 +235,13 @@ async function researchAttempt(opts: ResearchOptions, user: string): Promise<Res
   const urls = [...named.filter((u) => cited.has(u)), ...named.filter((u) => !cited.has(u))].slice(0, 2);
   if (!urls.length) return { facts: null, sources: [], discarded: [`no source page was named (${searched})`], model };
 
-  const pages: { url: string; text: string; raw: string }[] = [];
+  const pages: { url: string; text: string; raw: string; plain: string }[] = [];
   for (const url of urls) {
     try {
       const res = await httpRequest(url, { source: 'web page', headers: { 'User-Agent': opts.userAgent, Accept: 'text/html' }, timeoutMs: 8000, retries: 0 });
       const plain = htmlToText(res.text).slice(0, 400000);
       // text: words only, for phrase checks; raw: keeps numbers and percentages for value checks
-      pages.push({ url, text: ` ${wordsKey(plain)} `, raw: plain.toLowerCase() });
+      pages.push({ url, text: ` ${wordsKey(plain)} `, raw: plain.toLowerCase(), plain });
     } catch (err) {
       discarded.push(`could not fetch ${url.slice(0, 120)} to verify it${err instanceof SourceError ? ` (${err.status ? `HTTP ${err.status}` : err.kind})` : ''}`);
     }
@@ -290,11 +321,30 @@ async function researchAttempt(opts: ResearchOptions, user: string): Promise<Res
       .filter((g) => !notOnPage.includes(g))
       .map((g) => ({ nutrient: nutrientKeyFromLabel(g.label), label: g.label, qualifier: qualifierFrom(g.qualifier), value: Number(g.value), unit: normalizeUnit(g.unit) })),
   );
-  const ga = checked.valid;
+  let ga = checked.valid;
+  // The analysis printed on the source page, read by Purrbi itself with the label rules, is the page's own
+  // word: it is used when it gives more of the analysis than the model's answer, or when the answer's values
+  // disagree with it (a value found elsewhere on the page, e.g. fibre's given as protein).
+  const printed = pageAnalysis(page.plain);
+  const differ = ga.filter((g) => g.nutrient !== 'other' && printed.some((p) => p.nutrient === g.nutrient && p.unit === g.unit && Math.abs(p.value - g.value) > 0.05));
+  const usePrinted = printed.length > 0 && (differ.length > 0 || coreRows(printed) > coreRows(ga) || (coreRows(printed) === coreRows(ga) && printed.length > ga.length));
+  const listed = (rows: { label: string; value: number }[]) => rows.slice(0, 3).map((g) => `${g.label} ${g.value}`).join(', ');
+  if (usePrinted) {
+    ga = printed;
+    verified.push(`Read the analysis printed on ${host || 'the page'} (${printed.length} row${printed.length === 1 ? '' : 's'}).`);
+    if (differ.length) discarded.push(`guaranteed analysis: the answer’s ${listed(differ)} differs from the analysis printed on the page, which was used`);
+    if (notOnPage.length) discarded.push(`guaranteed analysis: the answer’s ${listed(notOnPage)} is not on the page; the analysis printed on the page was used`);
+  }
   if (ga.length) facts.guaranteedAnalysis = { value: ga, source };
-  else if (offered.length) discarded.push('guaranteed analysis: values not found on the cited page');
+  else if (offered.length) {
+    discarded.push(
+      notOnPage.length === offered.length
+        ? 'guaranteed analysis: values not found on the cited page'
+        : `guaranteed analysis: none kept${notOnPage.length ? `; not on the page: ${listed(notOnPage)}` : ''}${checked.rejected.length ? `; ${checked.rejected.slice(0, 2).join('; ')}` : ''}`,
+    );
+  }
   // Which rows were left out when others were kept: values not on the page, or not plausible.
-  if (ga.length && (notOnPage.length || checked.rejected.length)) {
+  if (!usePrinted && ga.length && (notOnPage.length || checked.rejected.length)) {
     discarded.push(`guaranteed analysis: kept ${ga.length} of ${offered.length} values${notOnPage.length ? `; not on the page: ${notOnPage.slice(0, 4).map((g) => `${g.label} ${g.value}`).join(', ')}` : ''}${checked.rejected.length ? `; ${checked.rejected.slice(0, 2).join('; ')}` : ''}`);
   }
 

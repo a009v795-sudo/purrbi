@@ -202,6 +202,27 @@ describe('cited explanations', () => {
     ]);
     expect(asked.join(' ')).toMatch(/not a PDF/); // the model is asked for web pages
   });
+  it('treats an Office document or another file as a file, and an HTML page as a page whatever it is served as', async () => {
+    const quote = 'Carrageenan is a thickener extracted from red seaweed and used in canned foods.';
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.startsWith('https://api.openai.com/')) {
+        return new Response(JSON.stringify(openAiResponse([
+          { n: 1, term: 'Glycerol', role: 'humectant', summary: 'Keeps treats moist.', citation_url: 'https://www.aafco.org/manual.docx', citation_title: 'Manual', citation_quote: 'Glycerin is a humectant that keeps soft treats moist during storage.' },
+          { n: 2, term: 'Yeast', role: 'flavour', summary: 'Adds flavour.', citation_url: 'https://www.aafco.org/data.json', citation_title: 'Data', citation_quote: 'Dried yeast is used in pet foods as a source of flavor and B vitamins.' },
+          { n: 3, term: 'carrageenan', role: 'thickener', summary: 'A thickener.', citation_url: 'https://www.aafco.org/page', citation_title: 'Page', citation_quote: quote },
+        ], [])), { status: 200 });
+      }
+      if (url.endsWith('.docx')) return new Response('PK\u0003\u0004 zip', { status: 200, headers: { 'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' } });
+      if (url.endsWith('.json')) return new Response('{"a":1}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return new Response(`<!doctype html><html><body><p>${quote}</p></body></html>`, { status: 200, headers: { 'Content-Type': 'application/octet-stream' } });
+    }));
+    const out = await explainTerms({ apiKey: 'k', model: 'm', species: 'dog', terms: [{ term: 'Glycerol', kind: 'ingredient' }, { term: 'Yeast', kind: 'ingredient' }, { term: 'carrageenan', kind: 'ingredient' }], userAgent: 'test', now: new Date('2026-10-30T00:00:00Z') });
+    expect(out.map((e) => `${e.status}:${e.reason}`)).toEqual([
+      'unverified:cited page is a document file, which Purrbi cannot check yet (aafco.org)',
+      'unverified:cited page is a file (application/json), which Purrbi cannot check yet (aafco.org)',
+      'verified:',
+    ]);
+  });
   it('does not pay to explain plain whole foods', () => {
     expect(needsExplanation('Chicken', 'ingredient')).toBe(false);
     expect(needsExplanation('Brown rice', 'ingredient')).toBe(false);
@@ -309,10 +330,38 @@ describe('manufacturer research', () => {
     expect(r.facts?.productName?.value).toBe('PURINA ONE® Stérilisé Croquettes au Saumon');
     expect(r.facts?.ingredients?.value.slice(0, 2)).toEqual(['Saumon (17%)', 'protéines de volaille déshydratées']);
     expect(r.facts?.adequacy?.value).toMatchObject({ type: 'complete', species: 'cat', lifeStages: ['adult_maintenance'] });
-    expect(r.facts?.guaranteedAnalysis?.value.map((g) => g.value)).toEqual([34, 12.5]); // "12,5 %" on the page
+    // The model's answer gave protein and fat; the analysis printed on the page also gives fibre ("3,5 %").
+    expect(r.facts?.guaranteedAnalysis?.value.map((g) => `${g.nutrient}:${g.value}`)).toEqual(['crude_protein:34', 'crude_fat:12.5', 'crude_fiber:3.5']);
+    expect(r.verified).toEqual(['Read the analysis printed on purina.fr (3 rows).']);
+  });
+  it('prefers the analysis printed on the page to an answer that disagrees with it', async () => {
+    // The answer's value is nowhere on the page: the page's own analysis is used, and the note says so.
+    stub(answer({ guaranteed_analysis: [{ label: 'Protéine', qualifier: 'not_stated', value: 33, unit: '%' }] }));
+    const r = await run();
+    expect(r.facts?.guaranteedAnalysis?.value.map((g) => `${g.nutrient}:${g.value}`)).toEqual(['crude_protein:34', 'crude_fat:12.5', 'crude_fiber:3.5']);
+    expect(r.discarded).toEqual(['barcode search: guaranteed analysis: the answer’s Protéine 33 is not on the page; the analysis printed on the page was used']);
+    // The answer's value is on the page, but as another row's (fibre's 3,5 % given as protein).
+    stub(answer({ guaranteed_analysis: [{ label: 'Protéine', qualifier: 'not_stated', value: 3.5, unit: '%' }] }));
+    const differ = await run();
+    expect(differ.facts?.guaranteedAnalysis?.value.map((g) => `${g.nutrient}:${g.value}`)).toEqual(['crude_protein:34', 'crude_fat:12.5', 'crude_fiber:3.5']);
+    expect(differ.discarded).toEqual(['barcode search: guaranteed analysis: the answer’s Protéine 3.5 differs from the analysis printed on the page, which was used']);
+  });
+  it('a value counts as on the page only where the page prints it as a number of its own', async () => {
+    // "7" is printed only inside "17%" (the salmon's share), so an ash of 7 % is not on the page.
+    const plain = PAGE.replace('<h2>Constituants analytiques</h2>', '<h2>Valeurs</h2>');
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => (url.startsWith('https://api.openai.com/')
+      ? new Response(JSON.stringify({ output: [{ type: 'web_search_call' }, { type: 'message', content: [{ type: 'output_text', text: JSON.stringify(answer({ guaranteed_analysis: [...answer().guaranteed_analysis as unknown[], { label: 'Cendres brutes', qualifier: 'not_stated', value: 7, unit: '%' }] })), annotations: [] }] }] }), { status: 200 })
+      : new Response(plain, { status: 200 }))));
+    const r = await run();
+    expect(r.facts?.guaranteedAnalysis?.value.map((g) => g.value)).toEqual([34, 12.5]);
+    expect(r.discarded).toEqual(['barcode search: guaranteed analysis: kept 2 of 3 values; not on the page: Cendres brutes 7']);
   });
   it('says which analysis values were left out when others were kept', async () => {
-    stub(answer({ guaranteed_analysis: [...answer().guaranteed_analysis as unknown[], { label: 'Cendres brutes', qualifier: 'not_stated', value: 9, unit: '%' }] }));
+    // A page whose analysis has no heading Purrbi recognises: only the answer's values, each checked on the page.
+    const plain = PAGE.replace('<h2>Constituants analytiques</h2>', '<h2>Valeurs</h2>');
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => (url.startsWith('https://api.openai.com/')
+      ? new Response(JSON.stringify({ output: [{ type: 'web_search_call' }, { type: 'message', content: [{ type: 'output_text', text: JSON.stringify(answer({ guaranteed_analysis: [...answer().guaranteed_analysis as unknown[], { label: 'Cendres brutes', qualifier: 'not_stated', value: 9, unit: '%' }] })), annotations: [] }] }] }), { status: 200 })
+      : new Response(plain, { status: 200 }))));
     const r = await run();
     expect(r.facts?.guaranteedAnalysis?.value.map((g) => g.value)).toEqual([34, 12.5]);
     expect(r.discarded).toEqual(['barcode search: guaranteed analysis: kept 2 of 3 values; not on the page: Cendres brutes 9']);
@@ -331,7 +380,7 @@ describe('manufacturer research', () => {
       : new Response(page5, { status: 200 }))));
     const recipe = await run({ knownSpecies: 'unknown', knownIngredients: ['Saumon (17%)', 'protéines de volaille déshydratées', 'blé', 'maïs', 'graisses animales'] });
     expect(recipe.facts?.classificationSignals?.map((c) => c.text)).toContain('intended for cats');
-    expect(recipe.verified).toEqual(['Same recipe on purina.fr: 5 of the first 5 ingredients match the database record in order (Saumon (17%), protéines de volaille déshydratées, blé, maïs …).']);
+    expect(recipe.verified).toEqual(['Same recipe on purina.fr: 5 of the first 5 ingredients match the database record in order (Saumon (17%), protéines de volaille déshydratées, blé, maïs …).', 'Read the analysis printed on purina.fr (3 rows).']);
   });
   it('says what it looked for when the page does not show the product', async () => {
     stub(answer({ product_name: 'Purina Gourmet Gold Mousse au Thon' }));

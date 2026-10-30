@@ -28,6 +28,7 @@ const BC = {
   misfiled: withCheck('501234567896'), // a pet food filed in the human-food database, as 099482480882 is
   offDown: withCheck('501234567897'),
   misfiledFront: withCheck('501234567898'), // misfiled too, with a front image in the database
+  ingrImage: withCheck('501234567899'), // no ingredient list or analysis; the database has an ingredients image only
 };
 
 let db: Firestore;
@@ -71,6 +72,12 @@ const sources: Sources = {
         product_name: 'TEST FIXTURE Turkey Dry Dog Food', brands: 'TESTBRAND', categories_tags: ['en:dog-food', 'en:dry-dog-food'],
         ingredients_text: 'Turkey, oatmeal, barley, turkey fat',
         image_nutrition_url: 'https://images.openpetfoodfacts.org/images/products/501/234/567/8935/nutrition_en.3.400.jpg',
+      } };
+    }
+    if (dbName === 'opff' && barcode.digits === BC.ingrImage) {
+      return { found: true, db: dbName, code: barcode.digits, source: src(dbName, barcode.digits), product: {
+        product_name: 'TEST FIXTURE Duck Dry Dog Food', brands: 'TESTBRAND', categories_tags: ['en:dog-food', 'en:dry-dog-food'],
+        image_ingredients_url: 'https://images.openpetfoodfacts.org/images/products/501/234/567/8999/ingredients_en.2.400.jpg',
       } };
     }
     if (dbName === 'opff' && barcode.digits === BC.webOnly) {
@@ -134,6 +141,8 @@ const sources: Sources = {
       const front = { sourceId: `off-image:${o.code}:front`, sourceType: 'database_image' as const, sourceName: 'Open Food Facts label image', url: o.product.image_front_url, retrievedAt: NOW.toISOString(), matchConfidence: 'exact_barcode' as const, readerVersion: LABEL_EXTRACTION_VERSION };
       return { read: ['front'], skipped: [], failed: [], facts: [{ sources: [front], classificationSignals: [{ text: 'Dry Cat Food', source: front.sourceId, kind: 'photo' as const }, { text: 'for cats', source: front.sourceId, kind: 'photo' as const }] }] };
     }
+    // An ingredients image both readings find unreadable (as labelImages.ts reports it, by panel).
+    if (o.product.image_ingredients_url && !o.product.image_nutrition_url) return { facts: [], read: [], skipped: o.needs.filter((n) => n === 'ingredients').map((n) => `${n}: unreadable (TEST FIXTURE)`), failed: [] };
     if (!o.product.image_nutrition_url) return { facts: [], read: [], skipped: ['no image'], failed: [] };
     await o.beforeAiCall();
     const source = { sourceId: `opff-image:${o.code}:nutrition`, sourceType: 'database_image' as const, sourceName: 'Open Pet Food Facts label image', url: o.product.image_nutrition_url, retrievedAt: NOW.toISOString(), matchConfidence: 'exact_barcode' as const, readerVersion: LABEL_EXTRACTION_VERSION };
@@ -155,7 +164,7 @@ const sources: Sources = {
     if (explainUnverified) {
       return o.terms.map((t) => ({
         key: explanationKey(o.species, t.kind, t.term), term: t.term, kind: t.kind, species: o.species, status: 'unverified' as const,
-        summary: '', role: '', sourceTitle: '', sourceUrl: '', quote: '', reason: explainUnverified!, checkedAt: NOW.toISOString(), model: 'mock', version: EXPLAIN_VERSION,
+        summary: '', role: '', sourceTitle: '', sourceUrl: '', quote: '', reason: explainUnverified!, checkedAt: ((o as { now?: Date }).now ?? NOW).toISOString(), model: 'mock', version: EXPLAIN_VERSION,
       }));
     }
     return o.terms.map((t) => ({
@@ -329,6 +338,23 @@ describe('path B: missing label information', () => {
     expect(s.status).toBe('needs_photos');
     expect(s.missingInfo).toEqual(['nutrition']);
     expect(s.diagnosticNotes).toContain('1 label photo reading was made by an older label reader and not used; the photo is asked for again if still needed.');
+  });
+  it('uses a label photo read by label reader 2.1.0 without the analysis rows 2.1.0 may have misread', async () => {
+    const a = await newScan('u1', BC.food);
+    await processScan(deps(), 'u1', a.id);
+    const photo = await db.collection('users/u1/photos').add({ scanId: a.id, purpose: 'nutrition', imageUrl: 'https://firebasestorage.googleapis.com/v0/b/x/o/users%2Fu1%2Fuploads%2F1.jpg', status: 'uploaded', createdAt: Timestamp.fromDate(NOW) });
+    await processPhoto(deps(), 'u1', photo.id);
+    const gtin = (await read(a)).gtin;
+    // As 2.1.0 could save "Crude Fiber 4.0% (max)\nMoisture (max) 10.0%": fibre with moisture's value, no moisture.
+    const saved = (await db.doc(`users/u1/labelFacts/${gtin}`).get()).data()!.extractions[photo.id].label.guaranteedAnalysis as { nutrient: string; label: string; value: number }[];
+    const misread = saved.map((e) => (e.nutrient === 'crude_fiber' ? { ...e, label: 'Crude Fiber 4.0% Moisture', value: 10 } : e)).filter((e) => e.nutrient !== 'moisture');
+    await db.doc(`users/u1/labelFacts/${gtin}`).update({ [`extractions.${photo.id}.label.version`]: 'label-extract-2.1.0', [`extractions.${photo.id}.label.guaranteedAnalysis`]: misread });
+    const b = await newScan('u1', BC.food);
+    await processScan(deps(), 'u1', b.id);
+    const s = await read(b);
+    expect(s.diagnosticNotes).toContain('1 analysis row of your label photo that the earlier label reader may have misread was set aside.');
+    expect(s.nutrition.map((n: { label: string }) => n.label)).toEqual(['Crude Protein', 'Crude Fat']);
+    expect(s.missingInfo).toContain('nutrition'); // the fibre guarantee is asked for again, not taken from the misread row
   });
   it('still uses a label photo read by the previous label reader (2.1.0), which the current one only reads more of', async () => {
     const a = await newScan('u1', BC.food);
@@ -794,19 +820,36 @@ describe('no permanent negative caching', () => {
     expect(calls.research).toBe(2);
     expect((await read(c)).status).toBe('complete');
   });
-  it('an explanation whose cited page is a PDF (which Purrbi cannot check) is asked for again the next day, not after 30 days', async () => {
+  it('a needed panel the database has no image of does not make the other images due again (no repeated paid reads)', async () => {
+    for (let i = 0; i < 4; i++) {
+      const s = await newScan('u1', BC.ingrImage);
+      await processScan({ ...deps(), now: () => new Date(NOW.getTime() + i * 600000) }, 'u1', s.id); // every 10 minutes
+    }
+    expect(calls.dbImages).toBe(1); // the ingredients image is read once; there is no nutrition image to read
+  });
+  it('an explanation whose cited page is a PDF (which Purrbi cannot check) is asked for again after a day, then 7 and 30 days while it stays one', async () => {
     explainUnverified = 'cited page is a PDF document, which Purrbi cannot check yet (aafco.org)';
-    const a = await newScan('u1', BC.treat, 'cat2');
-    await processScan(deps(), 'u1', a.id);
+    const scanAt = async (hours: number) => {
+      const s = await newScan('u1', BC.treat, 'cat2');
+      await processScan(at(hours), 'u1', s.id);
+      return s;
+    };
+    await scanAt(0);
     expect(calls.explain).toBe(1);
-    explainUnverified = null;
-    const b = await newScan('u1', BC.treat, 'cat2');
-    await processScan(at(12), 'u1', b.id);
+    await scanAt(12);
     expect(calls.explain).toBe(1); // not asked again within the day
-    const c = await newScan('u1', BC.treat, 'cat2');
-    await processScan(at(25), 'u1', c.id);
+    await scanAt(25);
+    expect(calls.explain).toBe(2); // the model cites a PDF again: next time after 7 days
+    await scanAt(25 + 24 * 6);
     expect(calls.explain).toBe(2);
-    expect((await read(c)).explanationsStatus).toBe('ready');
+    await scanAt(25 + 24 * 7 + 1);
+    expect(calls.explain).toBe(3); // a third time: next time after 30 days
+    explainUnverified = null;
+    await scanAt(25 + 24 * 7 + 1 + 24 * 29);
+    expect(calls.explain).toBe(3);
+    const last = await scanAt(25 + 24 * 7 + 1 + 24 * 30 + 1);
+    expect(calls.explain).toBe(4);
+    expect((await read(last)).explanationsStatus).toBe('ready');
   });
   it('a product not yet confirmed as a cat or dog product is checked in the database again after a day', async () => {
     const a = await newScan('u1', BC.misfiled);
@@ -880,6 +923,29 @@ describe('fallbacks before asking the owner for photos', () => {
     const product = (await db.doc(`products/${gtin}`).get()).data()!;
     expect(product.facts.guaranteedAnalysis.source.readerVersion).toBe(LABEL_EXTRACTION_VERSION);
   });
+  it('reads a database image again when its 2.1.0 analysis has a row 2.1.0 may have misread, keeping its other facts', async () => {
+    const ref = await newScan('u1', BC.imageOnly);
+    await processScan(deps(), 'u1', ref.id);
+    const gtin = (await read(ref)).gtin;
+    const v21 = <T extends Record<string, unknown>>(x: T) => ({ ...x, readerVersion: 'label-extract-2.1.0' });
+    const facts = (await db.doc(`products/${gtin}`).get()).data()!.facts;
+    facts.sources = facts.sources.map((x: Record<string, unknown>) => (x.sourceType === 'database_image' ? v21(x) : x));
+    for (const k of ['guaranteedAnalysis', 'adequacy', 'calories']) facts[k].source = v21(facts[k].source);
+    facts.guaranteedAnalysis.value = facts.guaranteedAnalysis.value
+      .map((e: { nutrient: string }) => (e.nutrient === 'crude_fiber' ? { ...e, label: 'Crude Fiber 4.0% Moisture', value: 10 } : e))
+      .filter((e: { nutrient: string }) => e.nutrient !== 'moisture');
+    await db.doc(`products/${gtin}`).update({ facts });
+    await db.doc(`productMeta/${gtin}`).update({ 'enrichment.databaseImages.version': 'label-extract-2.1.0' });
+    const again = await newScan('u1', BC.imageOnly);
+    await processScan(deps(), 'u1', again.id);
+    expect(calls.dbImages).toBe(2);
+    const s = await read(again);
+    expect(s.diagnosticNotes).toContain('1 analysis row from Open Pet Food Facts label image that the earlier label reader may have misread was set aside; the image is read again.');
+    const product = (await db.doc(`products/${gtin}`).get()).data()!;
+    expect(product.facts.guaranteedAnalysis.value.find((e: { nutrient: string }) => e.nutrient === 'crude_fiber').value).toBe(4);
+    expect(product.facts.guaranteedAnalysis.source.readerVersion).toBe(LABEL_EXTRACTION_VERSION);
+    expect(product.facts.adequacy.source.readerVersion).toBe('label-extract-2.1.0'); // its other facts are kept
+  });
   it('keeps what the previous label reader (2.1.0) read from a database image, and reads again only a panel it could not read', async () => {
     const ref = await newScan('u1', BC.imageOnly);
     await processScan(deps(), 'u1', ref.id);
@@ -909,6 +975,35 @@ describe('fallbacks before asking the owner for photos', () => {
     const product = (await db.doc(`products/${gtin}`).get()).data()!;
     expect(product.facts.guaranteedAnalysis.source.readerVersion).toBe(LABEL_EXTRACTION_VERSION);
     expect(product.facts.adequacy.source.readerVersion).toBe('label-extract-2.1.0'); // what 2.1.0 read is kept
+  });
+  it('after a new research method, searches again only while something is missing, keeping what the earlier method found', async () => {
+    const ref = await newScan('u1', BC.webOnly);
+    await processScan(deps({ researchEnabled: true }), 'u1', ref.id);
+    expect(calls.research).toBe(1);
+    const gtin = (await read(ref)).gtin;
+    const v16 = <T extends Record<string, unknown>>(x: T) => ({ ...x, readerVersion: 'research-1.6.0' });
+    const facts = (await db.doc(`products/${gtin}`).get()).data()!.facts;
+    facts.sources = facts.sources.map((x: Record<string, unknown>) => (x.sourceType === 'manufacturer' ? v16(x) : x));
+    for (const k of ['ingredientsText', 'ingredients', 'guaranteedAnalysis', 'adequacy']) facts[k].source = v16(facts[k].source);
+    await db.doc(`products/${gtin}`).update({ facts });
+    await db.doc(`productMeta/${gtin}`).update({ 'enrichment.research.version': 'research-1.6.0' });
+    // Everything found by 1.6.0, nothing missing: no new search.
+    const complete = await newScan('u1', BC.webOnly);
+    await processScan(deps({ researchEnabled: true }), 'u1', complete.id);
+    expect(calls.research).toBe(1);
+    expect((await read(complete)).status).toBe('complete');
+    // 1.6.0 found one row of the analysis: the new method searches once more, and its fuller analysis is used.
+    facts.guaranteedAnalysis.value = facts.guaranteedAnalysis.value.slice(0, 1);
+    await db.doc(`products/${gtin}`).update({ facts });
+    const partial = await newScan('u1', BC.webOnly);
+    await processScan(deps({ researchEnabled: true }), 'u1', partial.id);
+    expect(calls.research).toBe(2);
+    const product = (await db.doc(`products/${gtin}`).get()).data()!;
+    expect(product.facts.guaranteedAnalysis.value).toHaveLength(4);
+    expect(product.facts.adequacy.source.readerVersion).toBe('research-1.6.0'); // what 1.6.0 found is kept
+    const after = await newScan('u1', BC.webOnly);
+    await processScan(deps({ researchEnabled: true }), 'u1', after.id);
+    expect(calls.research).toBe(2); // nothing missing and the method is current
   });
   it('fills missing label facts from the manufacturer page (research), once per freshness window', async () => {
     const ref = await newScan('u1', BC.webOnly);

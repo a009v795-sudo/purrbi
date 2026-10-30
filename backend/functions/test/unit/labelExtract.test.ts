@@ -91,6 +91,17 @@ describe('grounded label reading', () => {
     expect(label.guaranteedAnalysis.map((e) => `${e.nutrient}:${e.value}${e.unit}`)).toEqual(['crude_protein:37%', 'crude_fat:13%', 'ash:7.5%', 'crude_fiber:4%']);
     expect(label.rejected).toEqual([]);
   });
+  it('reads the analysis in a block the reading calls the ingredient panel, as on a real Purina ONE back label', () => {
+    // As on the back of a real French bag (Purina ONE chat stérilisé, 7613032759155): one printed block.
+    const block: RawPanel = { kind: 'ingredients', legibility: 'partial', heading: null, text: 'Aliment complet pour chat adulte. Composition : Saumon (15%), protéines de volaille déshydratées, blé (15%), farine de soja, maïs.\nAdditifs : Additifs nutritionnels UI/kg : Vit A : 36 960 ; Vit D3 : 1 200 ; mg/kg : Taurine : 780.\nConstituants analytiques : Protéine : 37,0 %, Teneur en matières grasses : 13,0 %,\nCendres brutes : 7,5 %, Cellulose brute : 4,0 %, Acides gras Oméga 6 : 2,0 %.' };
+    const asAnalysis: RawPanel = { ...block, kind: 'guaranteed_analysis' };
+    const label = combineReadings(read([block]), read([asAnalysis], {}, 'model-b'), GTIN);
+    expect(label.guaranteedAnalysis.map((e) => `${e.nutrient}:${e.value}`)).toEqual(['crude_protein:37', 'crude_fat:13', 'ash:7.5', 'crude_fiber:4', 'omega_6:2']);
+    // Two panels giving one nutrient two values (two recipes in a multipack): that nutrient is not read.
+    const chicken: RawPanel = { kind: 'guaranteed_analysis', legibility: 'clear', heading: 'Constituants analytiques', text: 'Protéine 11 %\nMatières grasses 5 %' };
+    const beef: RawPanel = { ...chicken, text: 'Protéine 10,5 %\nMatières grasses 5 %' };
+    expect(read([chicken, beef]).analysis.map((e) => `${e.nutrient}:${e.value}`)).toEqual(['crude_fat:5']);
+  });
   it('calls it another product only when both readings show the same other valid barcode', () => {
     const otherCode = `400604022103${gs1CheckDigit('400604022103')}`;
     const other = (model: string) => read([FRONT], { barcode_digits: otherCode }, model);

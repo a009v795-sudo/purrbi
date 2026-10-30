@@ -36,6 +36,7 @@ export interface CitedExplanation {
   sourceUrl: string;
   quote: string;
   reason: string; // why it was not verified, when it wasn't
+  attempts?: number; // how many times in a row the cited page was a file Purrbi cannot check (store.ts)
   checkedAt: string;
   model: string;
   version: string;
@@ -231,10 +232,15 @@ export async function explainTerms(opts: {
     if (pages.size < 8) {
       try {
         const res = await httpRequest(url, { source: 'Citation page', headers: { 'User-Agent': opts.userAgent, Accept: 'text/html' }, timeoutMs: 10000, retries: 0 });
+        // A web page: text, HTML or XML, or anything that starts like an HTML page. A PDF or an Office
+        // document (a ZIP archive) is a file, whatever it is served as.
         const type = (res.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase();
-        if (type === 'application/pdf' || res.text.startsWith('%PDF-')) page = { file: 'PDF document' };
-        else if (type && !/^text\/|html|xml/.test(type)) page = { file: `${type} file` };
-        else page = readPage(res.text, res.url);
+        const head = res.text.slice(0, 1024).replace(/^\uFEFF/, '').trimStart();
+        const pageType = !type || type.startsWith('text/') || type === 'application/xhtml+xml' || type === 'application/xml' || type.endsWith('+xml');
+        if (type === 'application/pdf' || head.startsWith('%PDF-')) page = { file: 'PDF document' };
+        else if (head.startsWith('PK\u0003\u0004')) page = { file: 'document file' };
+        else if (pageType || /^<!doctype html|^<html[\s>]/i.test(head)) page = readPage(res.text, res.url);
+        else page = { file: `file (${type})` };
       } catch (err) {
         page = err instanceof SourceError ? (err.status ? `HTTP ${err.status}` : err.kind) : 'error';
       }

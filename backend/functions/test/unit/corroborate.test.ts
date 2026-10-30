@@ -15,6 +15,15 @@ describe('label photo stages', () => {
   it('extracted: read twice, nothing public to compare with', () => {
     expect(corroborateLabel(reading({ guaranteedAnalysis: GA_FULL }), null)).toMatchObject({ stage: 'extracted', agreements: [], conflicts: [], note: 'Read twice, with the same result. Nothing public to compare it with yet.' });
   });
+  it('extracted: says when what it shows agrees so far, but too little to confirm the product', () => {
+    const soFar = 'Read twice, with the same result. It agrees with this barcode’s public record so far, but not enough to confirm it.';
+    const f = facts();
+    expect(corroborateLabel(reading({ adequacy: f.adequacy!.value, calories: [{ kcal: 3800, per: 'kg' }] }), f).note).toBe(soFar);
+    expect(corroborateLabel(reading({ ingredients: ['Chicken', 'chicken meal', 'brown rice'] }), f).note).toBe(soFar); // three in order: too few
+    expect(corroborateLabel(reading({ guaranteedAnalysis: GA_FULL.slice(0, 1) }), f).note).toBe(soFar); // one guarantee: too few
+    // The front's name ("ONE") is not the record's, but the calories printed on the front are.
+    expect(corroborateLabel(reading({ productName: 'ONE', calories: [{ kcal: 3800, per: 'kg' }] }), f).note).toBe('Read twice, with the same result. Part of it agrees with this barcode’s public record; not enough to confirm it yet.');
+  });
   it('extracted: the record has a name, but the photo’s name (a sub-brand on the front) does not match it', () => {
     // As read from a real front photo: the two readings agreed on "ONE"; the record's name is the recipe's.
     const c = corroborateLabel(reading({ productName: 'ONE', brand: 'PURINA', panels: ['front'] }), facts());

@@ -1,7 +1,7 @@
 # Purrbi assessment methodology
 
 Version: `purrbi-score-2.0.0` (score), `scope-2.1.0` (classification), `verdict-1.3.0` (verdict),
-`kb-2026-10-28-draft` (ingredient notes), `label-extract-2.2.0` (label reader), `explain-1.2.0` (cited explanations).
+`kb-2026-10-28-draft` (ingredient notes), `label-extract-2.2.0` (label reader), `research-1.7.0` (web research), `explain-1.2.0` (cited explanations).
 A saved result records its score and ingredient-note versions (`scoreVersion`, `kbVersion`); the shared product record its
 classification version (`scopeVersion`); each fact read from a label or a web page its reader's version; each explanation its own.
 
@@ -184,19 +184,22 @@ Nothing is marked as reviewed by a person unless it was.
 
 **How a label is read** (label photos and database label images; reader `label-extract-2.2.0`, `ai/labelExtract.ts`):
 - The model only transcribes each visible panel, word for word, marking anything it cannot read with certainty. Two independent readings are made (two different models where configured); only what both say is kept.
-- Purrbi takes the values from the transcription with its own fixed rules:
+- Purrbi takes the values from the transcription with its own fixed rules (`domain/analysisText.ts` for the analysis):
   - the ingredient list only after a printed "Ingredients"/"Composition" heading;
-  - analysis rows each with their own name, whether printed one per line or inline as on EU packs ("Protéine : 37,0 %, Matières grasses : 13,0 %, …"), and only from the analysis section, so an ingredient's percentage is never an analysis row;
-  - a row is dropped when anything in it is unreadable, when a value has no name of its own ("1.0% / 1.5%"), when values are printed inline without units, or when a space may be a thousands separator ("36 900 UI/kg").
-- Readings made by `label-extract-2.1.0` stay in use (2.2.0 only reads rows that 2.1.0 left out); label-image panels that 2.1.0 could not read are read again once.
+  - analysis rows only from an analysis section ("Guaranteed analysis", "Constituants analytiques", "Analytische Bestandteile", …): a composition, additives, a feeding guide or a dry-matter table is not read, so an ingredient's percentage is never an analysis row;
+  - rows printed one per line or inline as on EU packs ("Protéine : 37,0 %, Matières grasses : 13,0 %, …"); a name printed above its value, or a unit printed on the next line, is joined to it;
+  - each row needs a name of its own that names one nutrient (or, for another row, a real word), with no other number in it and balanced brackets, and a printed unit (or a "(%)" heading);
+  - nothing ambiguous is read: a printed line where a value has no name of its own ("1.0% / 1.5%", "30% 28%") or which gives a range is skipped; so are values printed before their names, values printed inline without units, a space that may be a thousands separator ("36 900 UI/kg"), one value under two nutrients ("oméga 3 et 6"), anything an unreadable mark touches, and a nutrient given two different values (two recipes, as fed and dry matter); "15,000 IU/kg" is fifteen thousand.
+- Readings made by `label-extract-2.1.0` stay in use, without the analysis rows 2.1.0 may have misread (a row whose name holds another value, an ingredient's percentage, the tail of a thousands group): owners are not asked for those photos again. A database label image whose 2.1.0 analysis had such a row, or whose nutrition panel 2.1.0 could not read, is read again once.
+- The same analysis rules read the analysis printed on a manufacturer's or retailer's page (research `research-1.7.0`): the page's own analysis is used when it gives more than the model's answer, or when the answer disagrees with it.
 
 An owner's label photo goes through these stages, recorded on the photo (`stage`, `stageNote`) by the backend only (`pipeline/corroborate.ts`):
 
 | Stage | Meaning | Used for |
 |---|---|---|
 | submitted | Uploaded by the owner | — |
-| extracted | Two independent AI readings agreed on the label text; its note says whether there was anything public to compare it with, or whether what it shows could not be matched yet | The owner's own result |
-| corroborated | An independent public source agrees: this barcode's record has the same recipe in order, the same analysis (±0.5 points), or the same name | The owner's own result |
+| extracted | Two independent AI readings agreed on the label text. Its note says whether there was anything public to compare it with, whether what it shows agrees so far but too little to confirm it, agrees in part, or could not be matched yet | The owner's own result |
+| corroborated | An independent public source agrees: this barcode's record has the same analysis (at least two guarantees, ±0.5 points) or the same name | The owner's own result |
 | verified | Also tied to this barcode: the barcode is on the photo, or the photo shows this barcode's recipe (at least 80% of the first 10 ingredients, in order) | The owner's result, **and** gaps in Purrbi's shared record for this barcode |
 | disputed | Conflicts with this barcode's record (another recipe, under 60% match, or another analysis) | Not used; the owner is asked to check the package |
 
