@@ -7,7 +7,6 @@ import { lifeStageLabel } from './adequacy';
 import { allergenLabel, matchAllergen } from './allergens';
 import { petLifeStage } from './lifeStage';
 import { describeCalories, findNutrient } from './nutrition';
-import { ingredientNotes } from './kb';
 import { productIngredients } from './score';
 import type { Finding, GeneralAssessment, PersonalAssessment, PersonalState, PetProfile, ProductFacts, RecallCheck, ScopeResult, TraceItem } from './types';
 
@@ -90,14 +89,8 @@ export function personalize(
   }
 
   // P-HAZARD: an entry of Purrbi's reviewed list, judged for this pet's species (one finding per entry).
-  // When who the product is for is unconfirmed and does not include this pet's species, the general notes
-  // (judged for the listed species) are complemented by the entries for this pet's own species.
-  const listed = productSpecies === 'cat_and_dog' ? ['cat', 'dog'] : productSpecies === 'unknown' ? ['cat', 'dog'] : [productSpecies];
-  const ownNotes = !confirmed && !listed.includes(pet.species) ? ingredientNotes(productIngredients(facts), [pet.species]).filter((n) => n.status === 'concern' || n.status === 'caution') : [];
-  const flagged = [
-    ...general.ingredientNotes.filter((n) => (n.status === 'concern' || n.status === 'caution') && !ownNotes.some((o) => (o.kbId ?? o.name) === (n.kbId ?? n.name))),
-    ...ownNotes,
-  ];
+  // While who the product is for is unconfirmed, the notes cover both species (score.ts assessedSpecies).
+  const flagged = general.ingredientNotes.filter((n) => n.status === 'concern' || n.status === 'caution');
   for (const id of [...new Set(flagged.map((n) => n.kbId ?? n.name))]) {
     const group = flagged.filter((n) => (n.kbId ?? n.name) === id);
     const n = group[0];

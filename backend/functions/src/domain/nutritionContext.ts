@@ -2,7 +2,7 @@
 // the AAFCO minimum for the life stage the label claims, estimated carbohydrate and energy density.
 // Informational only — none of it changes the score. Label guarantees are minimums or maximums, not
 // exact amounts, so every comparison is labelled as an approximate calculation.
-import { findNutrient } from './nutrition';
+import { aafcoTarget, energyPerKgDm, findNutrient, kcalPerKg } from './nutrition';
 import type { AdequacyStatement, CalorieStatement, GuaranteedAnalysisEntry, NutrientKey, NutritionNote, ProductCategory, ProductSpecies } from './types';
 
 const MEANING: Partial<Record<NutrientKey, string>> = {
@@ -40,13 +40,6 @@ const CALC_SOURCE = 'Calculated by Purrbi from the guaranteed analysis';
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
-function kcalPerKg(calories: CalorieStatement[] | undefined): number | null {
-  const kg = calories?.find((c) => c.per === 'kg');
-  if (kg) return kg.kcal;
-  const g100 = calories?.find((c) => c.per === '100g');
-  return g100 ? g100.kcal * 10 : null;
-}
-
 function profileFor(species: ProductSpecies, adequacy: AdequacyStatement | undefined): { species: 'dog' | 'cat'; stage: 'growth' | 'adult'; label: string } | null {
   if (!adequacy || adequacy.type !== 'complete' || !adequacy.lifeStages.length) return null;
   const sp = species === 'cat' || species === 'dog' ? species : adequacy.species === 'cat' || adequacy.species === 'dog' ? adequacy.species : null;
@@ -61,9 +54,8 @@ export function nutritionNotes(
 ): NutritionNote[] {
   if (!ga?.length) return [];
   const moisture = findNutrient(ga, 'moisture')?.value;
-  const kcal = kcalPerKg(args.calories);
   const profile = args.category === 'complete_food' ? profileFor(args.species, args.adequacy) : null;
-  const energyDm = kcal !== null && moisture !== undefined && moisture < 95 ? kcal / (1 - moisture / 100) : null;
+  const energyDm = energyPerKgDm(args.calories, moisture);
 
   return ga.map((e) => {
     const meaning = `${MEANING[e.nutrient] ?? 'As listed on the label.'}${QUALIFIER[e.qualifier]}`;
@@ -75,10 +67,9 @@ export function nutritionNotes(
       contextSource = CALC_SOURCE;
       const min = profile ? AAFCO_MIN_DM[profile.species][profile.stage][e.nutrient] : undefined;
       if (profile && min !== undefined) {
-        const adjusted = energyDm ? round1((min * energyDm) / 4000) : null;
-        const target = adjusted ?? min;
+        const { target, corrected } = aafcoTarget(min, energyDm);
         const verdict = dm >= target ? 'at or above' : 'below';
-        context += ` AAFCO's minimum for ${profile.species} foods for ${profile.label} is ${min}% of dry matter${adjusted ? ` (≈ ${adjusted}% at this food's energy density)` : ''}; by this estimate the food is ${verdict} it.${verdict === 'below' ? ' Label guarantees are minimums, so the actual amount may be higher; ask the manufacturer if this matters for your pet.' : ''}`;
+        context += ` AAFCO's minimum for ${profile.species} foods for ${profile.label} is ${min}% of dry matter${corrected ? ` (≈ ${target}% at this food's energy density)` : ''}; by this estimate the food is ${verdict} it.${verdict === 'below' ? ' Label guarantees are minimums, so the actual amount may be higher; ask the manufacturer if this matters for your pet.' : ''}`;
         contextSource = `${CALC_SOURCE}; ${AAFCO_SOURCE}`;
       }
     }

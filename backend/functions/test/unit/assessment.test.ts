@@ -28,7 +28,8 @@ describe('general score', () => {
     // adequacy by formulation 27 + protein/fat above the cat minimums on dry matter 30 + named sources 20 + calories 10 + further guarantees 10
     expect(a.score).toBe(97);
     expect(a).toMatchObject({ scoreProvisional: false, scoreCoverage: 100, scoreLabel: 'Strong', ratingColor: 'green', scoreMinPossible: 97, scoreMaxPossible: 97 });
-    expect(a.components.find((c) => c.key === 'protein_fat')?.explanation).toMatch(/Protein ≈ 33.3% of dry matter \(minimum 26%\), fat ≈ 16.7% of dry matter \(minimum 9%\)/);
+    // 3,800 kcal/kg at 10% moisture is ≈ 4,222 kcal per kg of dry matter: AAFCO's minimums scale up with it.
+    expect(a.components.find((c) => c.key === 'protein_fat')?.explanation).toMatch(/Protein ≈ 33.3% of dry matter \(minimum 26%, ≈ 27.4% at this food’s energy density\), fat ≈ 16.7% of dry matter \(minimum 9%, ≈ 9.5% at this food’s energy density\)/);
     expect(a.components.every((c) => c.explanation.length > 0)).toBe(true);
   });
   it('withholds the number when an essential part is missing, naming exactly what is missing (never estimates)', () => {

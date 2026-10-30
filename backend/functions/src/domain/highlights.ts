@@ -78,9 +78,9 @@ export function buildHighlights(args: { facts: ProductFacts; scope: ScopeResult;
   // What the score's parts found (each with its evidence), never "no concerns".
   const met = (key: string) => general.components.find((c) => c.key === key && c.status === 'met');
   const pfMet = met('protein_fat');
-  if (pfMet) positives.push({ kind: 'positive', severity: 'info', title: 'Protein and fat above AAFCO minimums', detail: oneLine(pfMet.explanation), value: '', evidence: evidenceLabel(facts), rule: 'G-PROTEIN-FAT' });
+  if (pfMet) positives.push({ kind: 'positive', severity: 'info', title: 'Protein and fat above AAFCO minimums', detail: oneLine(pfMet.explanation), value: '', evidence: evidenceLabel(facts), rule: 'G-PROTEIN-FAT', full: pfMet.explanation });
   const named = met('named_sources');
-  if (named) positives.push({ kind: 'positive', severity: 'info', title: 'Main ingredients named by source', detail: oneLine(named.explanation), value: '', evidence: 'Ingredient list', rule: 'G-NAMED' });
+  if (named) positives.push({ kind: 'positive', severity: 'info', title: 'Main ingredients named by source', detail: oneLine(named.explanation), value: '', evidence: 'Ingredient list', rule: 'G-NAMED', full: named.explanation });
   for (const f of pf('P-ALLERGEN', 'positive')) positives.push(positive(f, 'Not on the ingredient list'));
   // No positive for "no documented concerns": Purrbi's reviewed list is short, so absence is not a strength.
   if ((general.category === 'treat' || general.category === 'complementary') && facts.calories?.value.length) {

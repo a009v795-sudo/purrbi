@@ -152,7 +152,11 @@ export function dryMatterPercent(value: number, moisturePercent: number | undefi
 
 const PER_PATTERNS: [RegExp, CaloriePer][] = [
   [/kg\b|kilogram/, 'kg'],
+  [/^100 ?(?:g|grams?)\b/, '100g'],
   [/100 ?g\b/, '100g'],
+  [/^(?:oz|ounces?)\b/, 'oz'],
+  [/^(?:lb|lbs|pounds?)\b/, 'lb'],
+  [/^(?:g|grams?)\b/, 'g'],
   [/\bcup\b/, 'cup'],
   [/\bcan\b/, 'can'],
   [/\b(pouch|retort pouch)\b/, 'pouch'],
@@ -172,6 +176,9 @@ const KCAL_LIMITS: Partial<Record<CaloriePer, [number, number]>> = {
   treat: [0.2, 1500],
   chew: [0.2, 1500],
   piece: [0.2, 1500],
+  oz: [8, 270],
+  lb: [130, 4300],
+  g: [0.3, 9.5],
 };
 
 const UPPER_BOUND = /(<|≤|less than|fewer than|under|up to|moins de|menos de|weniger als|meno di|minder dan)\s*$/i;
@@ -196,7 +203,8 @@ export function parsePackageSize(text: string | null | undefined): PackageSize |
   const found = [...text.matchAll(new RegExp(`(?:(\\d+)\\s*[x×]\\s*)?${SIZE.source}`, 'gi'))]
     .map((m) => sizeOf(Number(m[2].replace(',', '.')), m[3], m[0].replace(/^\d+\s*[x×]\s*/i, '')))
     .filter((x): x is PackageSize => !!x);
-  const distinct = [...new Map(found.map((f) => [`${f.amount}${f.unit}`, f])).values()];
+  // "Net Wt. 3 oz (85 g)" states one size in two units.
+  const distinct = found.reduce<PackageSize[]>((acc, f) => (acc.some((x) => samePackage(x, f)) ? acc : [...acc, f]), []);
   return distinct.length === 1 ? distinct[0] : null;
 }
 
@@ -221,10 +229,12 @@ export function parseCalorieText(text: string | null | undefined): CalorieStatem
     if (UPPER_BOUND.test(text.slice(Math.max(0, (m.index ?? 0) - 14), m.index))) continue;
     const kcal = Number(m[1].replace(/[,\s]/g, ''));
     const perText = m[2].toLowerCase().trim();
-    const sized = /^\d/.test(perText) && !/^100 ?g\b/.test(perText) ? SIZE.exec(perText) : null;
-    const size = sized ? sizeOf(Number(sized[1].replace(',', '.')), sized[2], sized[0]) : null;
+    const sized = /^\d/.test(perText) && !/^100 ?(?:g|grams?)\b/.test(perText) ? SIZE.exec(perText) : null;
+    let size = sized ? sizeOf(Number(sized[1].replace(',', '.')), sized[2], sized[0]) : null;
     const rest = sized ? perText.slice(sized.index + sized[0].length) : perText;
     let per = PER_PATTERNS.find(([p]) => p.test(rest))?.[1] ?? PER_PATTERNS.find(([p]) => p.test(perText))?.[1] ?? 'other';
+    // An 8-oz measuring cup is a measure, not the package: "358 kcal per 8 oz cup" is per cup.
+    if (size && per === 'cup') size = null;
     if (size && per === 'other') per = 'piece'; // "kcal per 1.5 oz" without a container word: the stated amount
     if (!Number.isFinite(kcal)) continue;
     const limits = KCAL_LIMITS[per];
@@ -234,7 +244,7 @@ export function parseCalorieText(text: string | null | undefined): CalorieStatem
   return out;
 }
 
-const PER_WORD: Record<CaloriePer, string> = { kg: 'kg', '100g': '100 g', cup: 'cup', can: 'can', pouch: 'pouch', tray: 'tray', treat: 'treat', chew: 'chew', piece: 'piece', g: 'g', other: 'serving' };
+const PER_WORD: Record<CaloriePer, string> = { kg: 'kg', '100g': '100 g', cup: 'cup', can: 'can', pouch: 'pouch', tray: 'tray', treat: 'treat', chew: 'chew', piece: 'piece', g: 'g', oz: 'oz', lb: 'lb', other: 'serving' };
 const sizeText = (s: PackageSize) => `${s.amount.toLocaleString('en-US')}-${s.unit === 'fl oz' ? 'fl-oz' : s.unit}`;
 
 export function describeCalories(c: CalorieStatement): string {
@@ -254,6 +264,29 @@ export function caloriesForPackage(cals: CalorieStatement[] | undefined, size: P
   if (!size || !sized.length) return cals;
   const match = sized.filter((c) => samePackage(c.size, size));
   return cals.filter((c) => !c.size || match.includes(c));
+}
+
+/** kcal per kg as sold, from a per-kg, per-100 g, per-g, per-oz or per-lb statement. */
+export function kcalPerKg(calories: CalorieStatement[] | undefined): number | null {
+  const factor: Partial<Record<CaloriePer, number>> = { kg: 1, '100g': 10, g: 1000, oz: 1000 / OUNCE_G, lb: 1000 / 453.592 };
+  const c = calories?.find((x) => factor[x.per] !== undefined && !x.size);
+  return c ? Math.round(c.kcal * factor[c.per]!) : null;
+}
+
+/** Energy (kcal ME) per kg of dry matter, when the calories per kg and the moisture are known. */
+export function energyPerKgDm(calories: CalorieStatement[] | undefined, moisture: number | undefined): number | null {
+  const kcal = kcalPerKg(calories);
+  return kcal !== null && moisture !== undefined && moisture >= 0 && moisture < 95 ? kcal / (1 - moisture / 100) : null;
+}
+
+/**
+ * An AAFCO dry-matter minimum for this food: the profiles assume 4,000 kcal ME per kg of dry matter, so a
+ * denser food must contain proportionally more; a less dense one is held to the plain minimum (AAFCO allows
+ * no correction downwards).
+ */
+export function aafcoTarget(minDm: number, energyDm: number | null): { target: number; corrected: boolean } {
+  if (energyDm === null || energyDm <= 4000) return { target: minDm, corrected: false };
+  return { target: Math.round(((minDm * energyDm) / 4000) * 10) / 10, corrected: true };
 }
 
 export function describeEntry(e: GuaranteedAnalysisEntry): string {

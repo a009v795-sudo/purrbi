@@ -74,7 +74,7 @@ export interface GuaranteedAnalysisEntry {
   unit: '%' | 'mg/kg' | 'IU/kg' | 'CFU/g' | 'CFU/lb' | 'mg' | 'g' | 'other';
 }
 
-export type CaloriePer = 'kg' | 'cup' | 'can' | 'treat' | 'piece' | 'pouch' | 'tray' | 'chew' | 'g' | '100g' | 'other';
+export type CaloriePer = 'kg' | 'cup' | 'can' | 'treat' | 'piece' | 'pouch' | 'tray' | 'chew' | 'g' | 'oz' | 'lb' | '100g' | 'other';
 
 /** A supplement's active ingredient as printed (amounts are per serving as stated). */
 export interface ActiveIngredient {

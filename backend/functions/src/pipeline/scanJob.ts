@@ -18,7 +18,7 @@ import { ingredientRelevance, personalize } from '../domain/personalize';
 import { ingredientRows } from '../domain/ingredientRows';
 import { normalizeIngredientName, type ParsedIngredient } from '../domain/ingredients';
 import { classifyScope, SCOPE_VERSION, type DatabaseOrigin, type SpeciesClaim } from '../domain/scope';
-import { assessGeneral, productIngredients, speciesList } from '../domain/score';
+import { assessedSpecies, assessGeneral, productIngredients } from '../domain/score';
 import { buildSummary, overallState } from '../domain/summary';
 import type { ClaimSource, ClassificationSignal, GeneralAssessment, PetProfile, ProductFacts, RecallCheck, ScopeResult, SourceRef, SpeciesBasis } from '../domain/types';
 import { explainTerms as explainImpl, explanationKey, needsExplanation, type CitedExplanation, type ExplainRequest } from '../knowledge/explain';
@@ -629,7 +629,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   const claimsByTerm = new Map<string, ClaimSource[]>();
   const relevance = ingredientRelevance(pet, facts, general);
   const rowFields = () =>
-    scope.status === 'out_of_scope' ? { ingredientRows: [], ingredientRowsByConcern: [] } : ingredientRowFields(ingredientRows(parsed, speciesList(scope.species), (term) => claimsByTerm.get(normalizeIngredientName(term)) ?? []), relevance);
+    scope.status === 'out_of_scope' ? { ingredientRows: [], ingredientRowsByConcern: [] } : ingredientRowFields(ingredientRows(parsed, assessedSpecies(scope), (term) => claimsByTerm.get(normalizeIngredientName(term)) ?? []), relevance);
   const summary = buildSummary(facts, scope, general, personal, recall);
   const state = overallState(general, recall, scope);
   // What a photo would still add. After "Continue without photos" the result is complete, but the requests
@@ -654,6 +654,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
     coverage: general.scoreCoverage,
     low: general.scoreMinPossible ?? null,
     high: general.scoreMaxPossible,
+    concerns: general.criticalConcerns.map((c) => c.split(':')[0]),
     pet: pet ? { name: pet.name, species: pet.species, fit: personal.state, headline: personal.headline } : null,
     positives: highlights.positives,
     cautions: highlights.cautions,

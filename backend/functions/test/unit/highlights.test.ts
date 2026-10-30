@@ -100,9 +100,11 @@ describe('verdict', () => {
     }
     const allergic = pet({ allergiesStatus: 'reported', allergies: ['chicken'] });
     expect(ruleVerdict(input(result(facts(), allergic), allergic))).toMatch(/^In the allergy profile: Contains Chicken/);
-    // An unscored product: the verdict interprets what was found; the missing part is one short clause, never a number.
+    // An unscored product: the verdict interprets what was found and says only that it is not rated yet (the
+    // screen lists what a rating needs), never a number.
     const unscored = input(result(facts({ guaranteedAnalysis: undefined })), pet());
-    expect(ruleVerdict(unscored)).toMatch(/Purrbi hasn’t rated it yet: a rating needs the guaranteed analysis \(protein and fat\)\./);
+    expect(ruleVerdict(unscored)).toMatch(/^Not rated yet\. /);
+    expect(ruleVerdict(unscored)).not.toMatch(/a rating needs|guaranteed analysis|\d+\/100/);
     expect(checkVerdict('Purrbi’s label score is Not enough information to score because the ingredient list or guaranteed analysis is missing, preventing a full assessment of this chicken recipe for your cat today.', unscored)).toMatch(/repeats the missing-information message/);
     expect(checkVerdict('This chicken recipe for cats scores 60/100 for your cat; it is labeled complete and balanced for adult maintenance and lists chicken first, and the details are below.', unscored)).toMatch(/score not the assessment’s \(60\)/);
   });

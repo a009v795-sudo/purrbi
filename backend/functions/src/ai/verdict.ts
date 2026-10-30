@@ -12,11 +12,11 @@ import type { Highlight } from '../domain/highlights';
 import { SourceError } from '../util/http';
 import { chatJson } from './openai';
 
-export const VERDICT_VERSION = 'verdict-2.0.0'; // 2.0.0: one score (no ranges), 25-40 words, findings interpreted rather than missing data restated
+export const VERDICT_VERSION = 'verdict-2.1.0'; // 2.1.0: the most serious caution is named by what it is; the pet's name is replaced before any text is cut; product names are not claims
 
 export interface VerdictInput {
   product: { name: string; brand: string; species: string; category: string };
-  assessment: { score: number | null; provisional: boolean; label: string; basis: string; withheldReason: string; missing: string; coverage?: number | null; low?: number | null; high?: number | null };
+  assessment: { score: number | null; provisional: boolean; label: string; basis: string; withheldReason: string; missing: string; coverage?: number | null; low?: number | null; high?: number | null; concerns?: string[] };
   pet: { name: string; species: string; fit: string; headline: string } | null;
   positives: { title: string; detail: string; value: string }[];
   cautions: { title: string; detail: string; value: string; severity: string; rule: string }[];
@@ -37,20 +37,34 @@ export function verdictInput(args: {
   coverage?: number | null;
   low?: number | null;
   high?: number | null;
+  /** The documented concerns that cap the score (ingredient names). */
+  concerns?: string[];
   pet: { name: string; species: string; fit: string; headline: string } | null;
   positives: Highlight[];
   cautions: Highlight[];
   unresolved: string[];
 }): VerdictInput {
-  const input: VerdictInput = {
+  const full: VerdictInput = {
     product: { name: args.productName || 'This product', brand: args.brand, species: args.species, category: args.category },
-    assessment: { score: args.score, provisional: args.provisional, label: args.scoreLabel, basis: args.scoreBasis, withheldReason: args.withheldReason, missing: (args.missing ?? []).join(' and the '), coverage: args.coverage ?? null, low: args.low ?? null, high: args.high ?? null },
+    assessment: { score: args.score, provisional: args.provisional, label: args.scoreLabel, basis: args.scoreBasis, withheldReason: args.withheldReason, missing: (args.missing ?? []).join(' and the '), coverage: args.coverage ?? null, low: args.low ?? null, high: args.high ?? null, concerns: args.concerns ?? [] },
     pet: args.pet ? { name: petPlaceholder(args.pet.species), species: args.pet.species, fit: args.pet.fit, headline: args.pet.headline } : null,
-    positives: args.positives.map((h) => ({ title: h.title, detail: (h.full ?? h.detail).slice(0, 160), value: h.value })),
-    cautions: args.cautions.map((h) => ({ title: h.title, detail: (h.full ?? h.detail).slice(0, 160), value: h.value, severity: h.severity, rule: h.rule })),
+    positives: args.positives.map((h) => ({ title: h.title, detail: h.full ?? h.detail, value: h.value })),
+    cautions: args.cautions.map((h) => ({ title: h.title, detail: h.full ?? h.detail, value: h.value, severity: h.severity, rule: h.rule })),
     unresolved: args.unresolved.slice(0, 3),
   };
-  return args.pet?.name ? replaceName(input, args.pet.name, petPlaceholder(args.pet.species)) : input;
+  // The name is replaced in the whole texts first: a text cut through the name would leave part of it in.
+  const input = args.pet?.name ? replaceName(full, args.pet.name, petPlaceholder(args.pet.species)) : full;
+  return { ...input, positives: input.positives.map((h) => ({ ...h, detail: cut(h.detail, 160) })), cautions: input.cautions.map((h) => ({ ...h, detail: cut(h.detail, 160) })) };
+}
+
+/** At most `n` characters, ending at a sentence or word boundary. */
+function cut(s: string, n: number): string {
+  if (s.length <= n) return s;
+  const head = s.slice(0, n);
+  const stop = head.lastIndexOf('. ');
+  if (stop > n * 0.5) return head.slice(0, stop + 1);
+  const space = head.lastIndexOf(' ');
+  return (space > n * 0.6 ? head.slice(0, space) : head).replace(/[,;:]$/, '').trim();
 }
 
 /** What the model calls the pet instead of its name. */
@@ -76,7 +90,7 @@ export const verdictKey = (input: VerdictInput, model: string) => createHash('sh
 
 const words = (s: string) => s.trim().split(/\s+/).filter(Boolean);
 const sentence = (s: string) => {
-  const t = s.trim().replace(/…$/, '');
+  const t = s.trim().replace(/…$/, '').replace(/[,;:]$/, '');
   return /[.!?]$/.test(t) ? t : `${t}.`;
 };
 
@@ -92,33 +106,40 @@ export function ruleVerdict(input: VerdictInput): string {
   const first = input.cautions[0];
   const name = input.product.name;
   const a = input.assessment;
-  const score = (short: boolean) =>
-    a.score === null
-      ? short
-        ? 'Not rated yet.'
-        : `Purrbi hasn’t rated it yet${a.missing ? `: a rating needs the ${a.missing}` : ''}.`
-      : a.label === 'Serious concern'
-        ? `Its Purrbi score is capped at ${a.score}/100 for that reason.`
-        : short
-          ? `Purrbi score: ${a.score}/100 (${a.label.toLowerCase()}).`
-          : `Purrbi scores ${name} ${a.score}/100 (${a.label.toLowerCase()}).`;
   // The most serious caution first, without repeating the ingredient's name ("propylene glycol: …").
   const lead = first?.title.split(':')[0] ?? '';
   const alert = first?.severity === 'alert' ? (first.detail.toLowerCase().startsWith(lead.toLowerCase()) ? first.detail : `${first.title}: ${first.detail}`) : '';
   const opening = alert || (input.pet?.headline && input.pet.fit !== 'fits' ? input.pet.headline : '');
+  // A capped score names its cause unless the opening sentence already did; an unscored product says only
+  // that it is not rated yet (the screen lists what a rating needs).
+  const cause = a.concerns?.length && !alert ? ` because it contains ${a.concerns.slice(0, 2).join(' and ')}, a documented ingredient concern` : '';
+  const score = (short: boolean) =>
+    a.score === null
+      ? 'Not rated yet.'
+      : a.label === 'Serious concern'
+        ? `Its Purrbi score is ${a.score}/100 (serious concern)${cause}.`
+        : short
+          ? `Purrbi score: ${a.score}/100 (${a.label.toLowerCase()}).`
+          : `Purrbi scores ${name} ${a.score}/100 (${a.label.toLowerCase()}).`;
   const fits = (parts: string[]) => words(parts.join(' ')).length <= MAX_WORDS;
   let required = [opening, score(false)].filter(Boolean).map(sentence);
   if (!fits(required)) required = [opening, score(true)].filter(Boolean).map(sentence);
-  const optional = [
-    input.positives[0] ? `Good to know: ${input.positives[0].detail}` : '',
-    first && first.severity !== 'alert' ? `To check: ${first.detail}` : '',
-    input.cautions[1] ? `Also check: ${input.cautions[1].detail}` : '',
-    input.positives[1] ? `Also: ${input.positives[1].detail}` : '',
-    input.unresolved[0] ?? '',
-    'The details and their sources are listed below.',
-  ].filter(Boolean).map(sentence);
+  // Each finding as its sentence, or by its title when the sentence would not fit.
+  const lowerFirst = (t: string) => (/^[A-Z][a-z]/.test(t) ? t[0].toLowerCase() + t.slice(1) : t);
+  const item = (prefix: string, h: VerdictInput['positives'][number] | undefined): [string, string] => (h ? [`${prefix}: ${h.detail}`, `${prefix}: ${lowerFirst(h.title)}`] : ['', '']);
+  const optional: [string, string][] = [
+    item('Good to know', input.positives[0]),
+    first && first.severity !== 'alert' ? item('To check', first) : ['', ''],
+    item('Also check', input.cautions[1]),
+    item('Also', input.positives[1]),
+    [input.unresolved[0] ?? '', ''],
+    ['The details and their sources are listed below.', ''],
+  ];
   const out = [...required];
-  for (const x of optional) if (fits([...out, x])) out.push(x);
+  for (const [long, short] of optional) {
+    if (long && fits([...out, sentence(long)])) out.push(sentence(long));
+    else if (short && fits([...out, sentence(short)])) out.push(sentence(short));
+  }
   const closing = 'Purrbi’s findings come from the label information it found and are not a veterinary review.';
   if (words(out.join(' ')).length < MIN_WORDS && fits([...out, closing])) out.push(closing);
   let text = out.join(' ');
@@ -142,7 +163,9 @@ export function checkVerdict(text: string, input: VerdictInput): string | null {
   // It must interpret the findings, not restate the score's missing-information message.
   if (/not enough information to score|label score is not|preventing a full assessment|scoring engine|partial assessment|between \d+ and \d+/i.test(text)) return 'repeats the missing-information message instead of interpreting the findings';
   if (/…|\.\.\./.test(text)) return 'trailing ellipsis';
-  if (FORBIDDEN.test(text)) return `claim Purrbi does not make (“${FORBIDDEN.exec(text)![0]}”)`;
+  // A product's own name ("Perfect Portions", "Healthy Kitten") is not a claim Purrbi makes.
+  const claims = [input.product.name, input.product.brand].filter((x) => x && x.length > 2).reduce((t, x) => t.replace(new RegExp(escapeRe(x), 'gi'), ' '), text);
+  if (FORBIDDEN.test(claims)) return `claim Purrbi does not make (“${FORBIDDEN.exec(claims)![0]}”)`;
   // A score in the sentence must be the score; every other number must be one the assessment states.
   for (const m of text.matchAll(/(\d+(?:[.,]\d+)?)\s*(?:\/|out of)\s*100\b/gi)) {
     if (input.assessment.score === null || Number(m[1]) !== input.assessment.score) return `score not the assessment’s (${m[1]})`;
@@ -159,8 +182,22 @@ export function checkVerdict(text: string, input: VerdictInput): string | null {
   if (input.assessment.score === null && /\d+\s*(?:\/|out of)\s*100\b/i.test(text)) return 'gives a score to an unscored product';
   const first = input.cautions[0];
   if (first?.severity === 'alert') {
-    const named = [first.value, ...(first.rule === 'G-RECALL' ? ['recall'] : []), ...(first.rule === 'P-SPECIES' ? ['dog', 'cat'] : [])].filter(Boolean);
-    if (named.length && !named.some((k) => text.toLowerCase().includes(k.toLowerCase()))) return 'does not name the most serious caution';
+    // Named by what it is: the recall, the ingredient (a documented concern or the pet's allergen), or who
+    // the product is made for ("your cat" does not count: the placeholder is in every verdict).
+    const lower = text.toLowerCase();
+    const withoutPet = input.pet ? lower.replace(new RegExp(escapeRe(petPlaceholder(input.pet.species)), 'g'), ' ') : lower;
+    const madeFor = input.product.species === 'cat' ? ['cats', 'cat food', 'cat treat', 'for cats'] : input.product.species === 'dog' ? ['dogs', 'dog food', 'dog treat', 'for dogs'] : [];
+    const named = (
+      first.rule === 'G-RECALL' || first.rule === 'P-ALERT'
+        ? ['recall']
+        : first.rule === 'P-SPECIES'
+          ? madeFor
+          : first.rule === 'P-HAZARD' || first.rule === 'G-KB-CONCERN'
+            ? [first.title.split(':')[0]]
+            : [first.value]
+    ).filter((x) => x && x.length > 2);
+    const haystack = first.rule === 'P-SPECIES' ? withoutPet : lower;
+    if (named.length && !named.some((k) => haystack.includes(k.toLowerCase()))) return 'does not name the most serious caution';
   }
   // With findings to interpret, at least one of them is named.
   const findingNames = [...input.positives, ...input.cautions].flatMap((h) => [h.title, h.value]).filter((x) => x && x.length > 2);

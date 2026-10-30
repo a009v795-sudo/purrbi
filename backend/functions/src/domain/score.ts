@@ -21,7 +21,7 @@
 //  - Supplements get no number: their purpose, dose and evidence vary by ingredient.
 import { lifeStageLabel } from './adequacy';
 import { ingredientNotes, KB_VERSION } from './kb';
-import { describeCalories, dryMatterPercent, findNutrient, hasCoreGuaranteedAnalysis } from './nutrition';
+import { aafcoTarget, describeCalories, dryMatterPercent, energyPerKgDm, findNutrient, hasCoreGuaranteedAnalysis } from './nutrition';
 import { nutritionContext, nutritionNotes } from './nutritionContext';
 import { normalizeIngredientName, parseIngredientList, type ParsedIngredient } from './ingredients';
 import { categoryLabel } from './scope';
@@ -93,6 +93,14 @@ export function speciesList(s: ScopeResult['species']): Species[] {
   return ['cat', 'dog'];
 }
 
+/**
+ * The species a product is assessed for: who it is for, or both while that is unconfirmed (a retailer's
+ * "Dog Trt …" listing alone): weak evidence never makes a result less careful than no evidence.
+ */
+export function assessedSpecies(scope: ScopeResult): Species[] {
+  return scope.speciesEvidence && !scope.speciesEvidence.confirmed ? ['cat', 'dog'] : speciesList(scope.species);
+}
+
 function band(score: number): { band: GeneralAssessment['scoreBand']; label: string; color: GeneralAssessment['ratingColor'] } {
   if (score >= 85) return { band: 'strong', label: 'Strong', color: 'green' };
   if (score >= 70) return { band: 'good', label: 'Good', color: 'green' };
@@ -110,11 +118,15 @@ const speciesNames = (s: ScopeResult['species']) => (s === 'cat' ? 'cats' : s ==
 
 // Ingredients that are not a source of the food: processing liquids, vitamin and mineral additions and
 // technological additives. Left out when judging how clearly the main ingredients are named.
-const NOT_A_SOURCE = /\b(water|broth|stock|vitamins?|minerals?|premix|supplement|chelate|proteinate|chloride|sulfate|sulphate|phosphate|carbonate|oxide|iodide|iodate|selenite|selenium yeast|taurine|choline|menadione|gum|carrageenan|agar|gelatin|tocopherols?|rosemary extract|citric acid|salt|colou?r)\b/;
+const NOT_A_SOURCE = /\b(water|broth|stock|vitamins?|minerals?|mineralstoffe|substances minerales|sels mineraux|sustancias minerales|sostanze minerali|mineralen|premix|supplement|chelate|proteinate|chloride|sulfate|sulphate|phosphate|carbonate|oxide|iodide|iodate|selenite|selenium yeast|taurine|choline|menadione|gum|carrageenan|agar|gelatin|tocopherols?|rosemary extract|citric acid|salt|colou?r)\b/;
 // Names that do not say which animal or plant the ingredient comes from ("meat by-products", "poultry fat",
 // "fish meal", "natural flavor"). "Chicken by-product meal" names its animal: what part of it is used is not
 // what this checks.
-const GENERIC_SOURCE = /^(?:meat|animal|poultry|fish|fowl|by-?products?|derivatives|digest|cereals?|grains?|vegetables?|vegetable (?:protein extracts?|oils?|fats?)|oils and fats|fats and oils|natural flavou?rs?|flavou?rs?|(?:sous|tierische)\b)\b/;
+// The same generic names in the EU label languages ("Viandes et sous-produits animaux", "Fleisch und tierische
+// Nebenerzeugnisse", "céréales", "huiles et graisses") and the common US ones ("ocean fish", "liver",
+// "natural and artificial flavors").
+const GENERIC_SOURCE =
+  /^(?:meats?|animal|poultry|fish|ocean fish|white fish|fowl|by-?products?|derivatives|digest|cereals?|grains?|vegetables?|vegetable (?:protein extracts?|oils?|fats?)|oils and fats|fats and oils|(?:natural|artificial)(?: and (?:natural|artificial))? flavou?rs?|flavou?rs?|liver$|viandes?|poissons?|cereales|sous[- ]produits|huiles? et graisses|graisses et huiles|extraits? de proteines vegetales|substances minerales|fleisch|fisch|tierische|getreide|pflanzliche|ole und fette|fette und ole|carnes?|pescados?|cereales|aceites y grasas|subproductos|carni|pesce|cereali|oli e grassi|sottoprodotti|vlees|vis|granen|olien en vetten|dierlijke bijproducten|plantaardige|sugars?|sucres?|zucker|azucares|zuccheri|suikers)\b/;
 
 /** Whether an ingredient name says which animal or plant it comes from ("chicken meal" yes, "meat by-products" no). */
 export function namedSource(name: string): boolean {
@@ -159,14 +171,16 @@ function proteinFatComponent(facts: ProductFacts, scope: ScopeResult, max: numbe
   if (!p || !f || p.unit !== '%' || f.unit !== '%') return null;
   const stages = facts.adequacy?.value.lifeStages ?? [];
   const stage = stages.some((x) => x === 'growth' || x === 'all_life_stages' || x === 'gestation_lactation') ? 'growth' : 'adult';
-  const species: Species[] = scope.species === 'dog' ? ['dog'] : scope.species === 'cat' ? ['cat'] : ['cat', 'dog'];
+  const species = assessedSpecies(scope);
   const moisture = findNutrient(ga, 'moisture');
   const dm = (v: number) => (moisture?.unit === '%' ? dryMatterPercent(v, moisture.value) : null);
+  // As the nutrition rows: a food denser than AAFCO's 4,000 kcal per kg of dry matter must contain more.
+  const energyDm = moisture?.unit === '%' ? energyPerKgDm(facts.calories?.value, moisture.value) : null;
   const meets = (value: number, min: number) => {
     const d = dm(value);
-    return d !== null ? d >= min : value >= min ? true : null;
+    return d !== null ? d >= aafcoTarget(min, energyDm).target : value >= min ? true : null;
   };
-  // A product for both species is held to the stricter (cat) minimums.
+  // A product for both species (or not yet confirmed for one) is held to the stricter (cat) minimums.
   const min = species.map((sp) => AAFCO_MIN[sp][stage]).reduce((a, b) => ({ protein: Math.max(a.protein, b.protein), fat: Math.max(a.fat, b.fat) }));
   const pm = meets(p.value, min.protein);
   const fm = meets(f.value, min.fat);
@@ -175,14 +189,35 @@ function proteinFatComponent(facts: ProductFacts, scope: ScopeResult, max: numbe
   const both = pm && fm;
   const points = both ? max : pm || fm ? Math.round(max * 0.4) : 0;
   const show = (v: number) => (dm(v) === null ? `${v}% as fed` : `≈ ${dm(v)}% of dry matter`);
+  const minText = (m: number) => {
+    const t = aafcoTarget(m, dm(p.value) === null ? null : energyDm);
+    return t.corrected ? `minimum ${m}%, ≈ ${t.target}% at this food’s energy density` : `minimum ${m}%`;
+  };
   return {
     key: 'protein_fat',
     label,
     points,
     maxPoints: max,
     status: both ? 'met' : points ? 'partly_met' : 'not_met',
-    explanation: `Protein ${show(p.value)} (minimum ${min.protein}%), fat ${show(f.value)} (minimum ${min.fat}%) for ${stage === 'growth' ? 'growth' : 'adult maintenance'}; from the guaranteed minimums, so actual amounts can be higher.`,
+    explanation: `Protein ${show(p.value)} (${minText(min.protein)}), fat ${show(f.value)} (${minText(min.fat)}) for ${stage === 'growth' ? 'growth' : 'adult maintenance'}; from the guaranteed minimums, so actual amounts can be higher.`,
   };
+}
+
+/**
+ * What a rating still needs, from the parts actually missing: the smallest sets of them that would bring the
+ * coverage to the minimum ("calorie content statement, or the feeding statement and the guaranteed analysis").
+ */
+function whatWouldReach(coverage: number, missing: ScoreComponent[]): string {
+  const sets: ScoreComponent[][] = [];
+  for (let mask = 1; mask < 1 << missing.length; mask++) {
+    const set = missing.filter((_, i) => mask & (1 << i));
+    if (coverage + set.reduce((s, c) => s + c.maxPoints, 0) >= MIN_COVERAGE) sets.push(set);
+  }
+  // Each alternative that suffices, without anything it doesn't need.
+  const minimal = sets.filter((s) => !sets.some((t) => t.length < s.length && t.every((x) => s.includes(x)))).sort((a, b) => a.length - b.length).slice(0, 3);
+  const name = (c: ScoreComponent) => c.label.toLowerCase().replace(/\s*\(.*\)$/, '');
+  const say = (set: ScoreComponent[], i: number) => (set.length === 1 ? `${i ? 'the ' : ''}${name(set[0])}` : `both the ${set.map(name).join(' and the ')}`);
+  return minimal.length ? minimal.map(say).join(', or ') : missing.map(name).join(' and the ');
 }
 
 function extraGuaranteesComponent(facts: ProductFacts, max: number): ScoreComponent {
@@ -204,7 +239,7 @@ const caloriesComponent = (facts: ProductFacts, max: number, why: string): Score
 
 export function assessGeneral(facts: ProductFacts, scope: ScopeResult): GeneralAssessment {
   const ingredients = productIngredients(facts);
-  const species = speciesList(scope.species);
+  const species = assessedSpecies(scope);
   const notes = ingredientNotes(ingredients, species);
   const findings: Finding[] = [];
   const base = { methodologyVersion: METHODOLOGY_VERSION, kbVersion: KB_VERSION, ingredientNotes: notes, nutritionNotes: [], nutritionContext: [], supplement: null, criticalConcerns: [] as string[] };
@@ -365,9 +400,7 @@ export function assessGeneral(facts: ProductFacts, scope: ScopeResult): GeneralA
   const assessed = components.filter((c) => c.status !== 'unverified');
   const coverage = assessed.reduce((s, c) => s + c.maxPoints, 0);
   const unverified = components.filter((c) => c.status === 'unverified');
-  if (!missingForScore.length && coverage < MIN_COVERAGE) {
-    missingForScore.push(category === 'complete_food' ? unverified.map((c) => c.label.toLowerCase()).join(' or ') : 'calorie content statement, or both the feeding statement and the guaranteed analysis');
-  }
+  if (!missingForScore.length && coverage < MIN_COVERAGE) missingForScore.push(whatWouldReach(coverage, unverified));
   const coverageText = assessed.length
     ? `Based on ${assessed.length} of ${category === 'complete_food' ? 5 : 4} parts: ${assessed.map((c) => c.label.toLowerCase()).join(', ')}${unverified.length ? ` (${unverified.map((c) => c.label.toLowerCase()).join(', ')} not found)` : ''}.`
     : '';
