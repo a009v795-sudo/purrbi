@@ -1,7 +1,7 @@
 # Purrbi assessment methodology
 
 Version: `purrbi-score-2.0.0` (score), `scope-2.1.0` (classification), `verdict-1.3.0` (verdict),
-`kb-2026-10-28-draft` (ingredient notes), `label-extract-2.2.0` (label reader), `research-1.7.0` (web research), `explain-1.2.0` (cited explanations).
+`kb-2026-10-28-draft` (ingredient notes), `label-extract-2.3.0` (label reader), `research-1.7.0` (web research), `explain-1.2.0` (cited explanations).
 A saved result records its score and ingredient-note versions (`scoreVersion`, `kbVersion`); the shared product record its
 classification version (`scopeVersion`); each fact read from a label or a web page its reader's version; each explanation its own.
 
@@ -182,14 +182,16 @@ Each fact shows where it came from:
 
 Nothing is marked as reviewed by a person unless it was.
 
-**How a label is read** (label photos and database label images; reader `label-extract-2.2.0`, `ai/labelExtract.ts`):
+**How a label is read** (label photos and database label images; reader `label-extract-2.3.0`, `ai/labelExtract.ts`):
 - The model only transcribes each visible panel, word for word, marking anything it cannot read with certainty. Two independent readings are made (two different models where configured); only what both say is kept.
 - Purrbi takes the values from the transcription with its own fixed rules (`domain/analysisText.ts` for the analysis):
   - the ingredient list only after a printed "Ingredients"/"Composition" heading;
+  - the adequacy statement as printed, also from a line a partly legible panel shows in full (no unreadable mark), without the composition that may follow it on the same line ("Aliment complet pour chat adulte. Composition : …");
   - analysis rows only from an analysis section ("Guaranteed analysis", "Constituants analytiques", "Analytische Bestandteile", …): a composition, additives, a feeding guide or a dry-matter table is not read, so an ingredient's percentage is never an analysis row;
   - rows printed one per line or inline as on EU packs ("Protéine : 37,0 %, Matières grasses : 13,0 %, …"); a name printed above its value, or a unit printed on the next line, is joined to it;
   - each row needs a name of its own that names one nutrient (or, for another row, a real word), with no other number in it and balanced brackets, and a printed unit (or a "(%)" heading);
   - nothing ambiguous is read: a printed line where a value has no name of its own ("1.0% / 1.5%", "30% 28%") or which gives a range is skipped; so are values printed before their names, values printed inline without units, a space that may be a thousands separator ("36 900 UI/kg"), one value under two nutrients ("oméga 3 et 6"), anything an unreadable mark touches, and a nutrient given two different values (two recipes, as fed and dry matter); "15,000 IU/kg" is fifteen thousand.
+- Readings made by `label-extract-2.2.0` stay in use as they are (2.3.0 only reads an adequacy line 2.2.0 left out); a database label image's nutrition panel is read again once.
 - Readings made by `label-extract-2.1.0` stay in use, without the analysis rows 2.1.0 may have misread (a row whose name holds another value, an ingredient's percentage, the tail of a thousands group): owners are not asked for those photos again. A database label image whose 2.1.0 analysis had such a row, or whose nutrition panel 2.1.0 could not read, is read again once.
 - The same analysis rules read the analysis printed on a manufacturer's or retailer's page (research `research-1.7.0`): the page's own analysis is used when it gives more than the model's answer, or when the answer disagrees with it.
 

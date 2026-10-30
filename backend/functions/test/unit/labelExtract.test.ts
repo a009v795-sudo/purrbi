@@ -97,6 +97,9 @@ describe('grounded label reading', () => {
     const asAnalysis: RawPanel = { ...block, kind: 'guaranteed_analysis' };
     const label = combineReadings(read([block]), read([asAnalysis], {}, 'model-b'), GTIN);
     expect(label.guaranteedAnalysis.map((e) => `${e.nutrient}:${e.value}`)).toEqual(['crude_protein:37', 'crude_fat:13', 'ash:7.5', 'crude_fiber:4', 'omega_6:2']);
+    // The statement on the partly legible panel's first line, without the composition printed after it.
+    expect(label.adequacy).toMatchObject({ type: 'complete', species: 'cat', lifeStages: ['adult_maintenance'], text: 'Aliment complet pour chat adulte.' });
+    expect(read([{ ...block, text: 'Aliment comp[?]et pour chat adulte. Composition : Saumon (15%)' }]).adequacy).toBeNull(); // not when a mark touches it
     // Two panels giving one nutrient two values (two recipes in a multipack): that nutrient is not read.
     const chicken: RawPanel = { kind: 'guaranteed_analysis', legibility: 'clear', heading: 'Constituants analytiques', text: 'Protéine 11 %\nMatières grasses 5 %' };
     const beef: RawPanel = { ...chicken, text: 'Protéine 10,5 %\nMatières grasses 5 %' };

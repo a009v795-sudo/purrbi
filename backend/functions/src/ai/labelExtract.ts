@@ -17,14 +17,14 @@ import { chatJson } from './openai';
 
 export { analysisRows };
 
-export const LABEL_EXTRACTION_VERSION = 'label-extract-2.2.0'; // 2.2.0: analyses printed inline ("Protéine 37 %, Matières grasses 13 %") are read row by row
+export const LABEL_EXTRACTION_VERSION = 'label-extract-2.3.0'; // 2.2.0: analyses printed inline ("Protéine 37 %, Matières grasses 13 %") are read row by row; 2.3.0: an adequacy line is read from a partly legible panel too
 /**
  * Readings still used as they were saved. 2.2.0 reads rows 2.1.0 left out (several values on one printed
  * line) and corrects rows 2.1.0 could misread; a 2.1.0 reading is used without those rows (`readingInUse`),
  * so owners are not asked for their photos again. Label images whose 2.1.0 analysis had such a row, or
  * whose analysis 2.1.0 could not read, are read again.
  */
-export const LABEL_READINGS_IN_USE: ReadonlySet<string> = new Set(['label-extract-2.1.0', LABEL_EXTRACTION_VERSION]);
+export const LABEL_READINGS_IN_USE: ReadonlySet<string> = new Set(['label-extract-2.1.0', 'label-extract-2.2.0', LABEL_EXTRACTION_VERSION]);
 
 /**
  * An analysis row that reader 2.1.0 may have misread: its name holds another row's value, values printed
@@ -155,6 +155,8 @@ const UNSURE = /\[\?\]/;
 const HEADING = '(?:ingredients?|ingr[eé]dients?|composition|composici[oó]n|composizione|composi[cç][aã]o|zusammensetzung|zutaten|ingredientes|ingredienti|samenstelling)';
 const HEADING_ALONE = new RegExp(`^\\s*${HEADING}\\b`, 'i');
 const HEADING_IN_TEXT = new RegExp(`(?:^|[\\n.;]\\s*)${HEADING}\\s*(?:[:：.]|\\n)`, 'i');
+// Where a composition starts on the same printed line as the text before it.
+const HEADING_IN_LINE = new RegExp(`(?<=[.;]\\s*|^)${HEADING}\\s*[:：]`, 'i');
 const NEXT_SECTION = new RegExp(`\\n?\\s*(?:${ANALYSIS_HEADING.source}|calorie content|feeding (?:guide|directions))[\\s\\S]*$`, 'iu');
 
 const textOf = (p: RawPanel) => (p.text ?? '').trim();
@@ -199,8 +201,12 @@ function caloriesIn(panels: RawPanel[]): CalorieStatement[] {
 
 function adequacyIn(panels: RawPanel[], before: string): AdequacyStatement | null {
   for (const p of panels) if (p.kind === 'adequacy_statement' && clear(p) && !UNSURE.test(textOf(p))) return parseAdequacyStatement(textOf(p));
-  // EU labels print it as a line above the composition; fronts may print "complete and balanced".
-  const lines = [before, ...panels.filter(clear).flatMap((p) => textOf(p).split(/\n+/))].filter((l) => l && !UNSURE.test(l));
+  // EU labels print it as a line above the composition, often on the same printed line ("Aliment complet pour
+  // chat adulte. Composition : …"); fronts may print "complete and balanced". Like an analysis row, a line a
+  // partly legible panel shows in full counts; the composition after it is not part of the statement.
+  const lines = [before, ...panels.filter(readable).flatMap((p) => textOf(p).split(/\n+/))]
+    .map((l) => l.split(HEADING_IN_LINE)[0].trim())
+    .filter((l) => l && !UNSURE.test(l));
   for (const l of lines) {
     const a = parseAdequacyStatement(l);
     if (a && a.type !== 'unclear') return a;
