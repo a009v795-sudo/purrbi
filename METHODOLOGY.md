@@ -1,7 +1,7 @@
 # Purrbi assessment methodology
 
 Version: `assessment-3.0.0` overall, made of `purrbi-score-3.0.0` (score), `scope-3.0.0` (classification), `verdict-2.1.0` (verdict),
-`kb-2026-10-28-draft` (ingredient notes), `label-extract-2.3.0` (label reader), `research-2.3.0` (web research), `explain-2.0.0` (claim-checked explanations).
+`kb-2026-10-28-draft` (ingredient notes), `label-extract-2.3.0` (label reader), `research-2.4.0` (web research), `explain-2.0.0` (claim-checked explanations).
 A saved result records `assessmentVersion` and its parts (`scoreVersion`, `kbVersion`, `scopeVersion`); the shared product record its
 classification version; each fact read from a label, page or document its reader's version; each explanation its own. When the app opens
 a result saved under an older `assessmentVersion` it asks for a re-check (section 10), so a known bad classification is corrected without
@@ -283,7 +283,7 @@ A result that uses the owner's photo before it is tied to the barcode says "Labe
 
 ## 10. Retrieval before photos, and keeping results current
 
-**Research `research-2.3.0`** (`sources/research.ts`, `pageEvidence.ts`). When the pet databases lack something, research looks for it before
+**Research `research-2.4.0`** (`sources/research.ts`, `pageEvidence.ts`). When the pet databases lack something, research looks for it before
 any photo is asked for:
 - With no name or brand from any database, a public barcode database (UPCitemdb's free lookup, `BARCODE_LOOKUP_ENABLED`) is asked for the
   product's title, only to tell research what to search for; nothing from it is shown or used as a fact. Its failure is recorded as such.
@@ -298,6 +298,11 @@ any photo is asked for:
 - The model may not recognise a page that shows the barcode, so each search's result pages are recorded in the trace (the query and the
   sites it returned) and Purrbi checks up to four of them for the barcode itself; the first that shows it is read by the model from Purrbi's
   copy of the page (no web search) and every value is checked on that page as usual.
+- A page that prints other barcodes besides this one in its text lists several products (a set, a range, its variants): the barcode is
+  one of them, not the page's own, so the page is a weak match (its analysis, ingredients and calories are not used), unless its markup
+  names this barcode alone. An analysis value from a web page counts only as the first number printed after its nutrient's name
+  ("Crude Protein (min.) 10.0%", "粗タンパク質 4.0%以上"), never a number found elsewhere on the page. (Research 2.3.0 took the protein
+  and fat of a sibling recipe from a Japanese shop's page that showed the barcode; its results are not used.)
 - Purrbi fetches each candidate page itself and reads its visible text, **image alternative text** (manufacturers publish ingredient lists
   as an image's alt text), barcodes in its **markup** (a shop widget's `ps-sku`, `data-upc`, JSON-LD `gtin`) or its **Shopify product
   record**, and **linked nutrition documents** (a "Nutrient Profiles" PDF: the AAFCO claim and calories per package).

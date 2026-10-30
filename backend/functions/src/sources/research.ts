@@ -15,11 +15,11 @@ import { parseActiveIngredients } from '../domain/supplements';
 import type { GuaranteedAnalysisEntry, PackageSize, ProductFacts, ProductSpecies, SourceRef } from '../domain/types';
 import { httpBytes, httpJson, httpRequest, SourceError } from '../util/http';
 import type { BarcodeHint } from './barcodeLookup';
-import { altTextIngredientLists, documentFacts, markupGtins, nameOnPage, nameTokens, nutritionDocLinks, pageText, parseShopifyProduct, pdfSafety, productHeading, shopifyProductUrl } from './pageEvidence';
+import { altTextIngredientLists, documentFacts, markupGtins, nameOnPage, nameTokens, nutritionDocLinks, pageText, parseShopifyProduct, pdfSafety, productHeading, shopifyProductUrl, textGtins } from './pageEvidence';
 
-export const RESEARCH_VERSION = 'research-2.3.0'; // 2.3.0: the search's own result pages are recorded and checked by Purrbi for the barcode; the first that shows it is read from Purrbi's copy. 2.2.0: the barcode is searched in the forms pages print it; a page tied to the barcode that shows nothing about the product (a price list) ends no search, and what such an answer named is searched for next; a barcode with other numbers beside it is still found. 2.1.0: a page tied to the product names it by its own heading; a web page's sentence that names no species, life stage or standard is not a feeding statement. 2.0.0: alt text, markup and Shopify barcodes, linked nutrition documents, a manufacturer follow-up, catalogue abbreviations, package sizes
+export const RESEARCH_VERSION = 'research-2.4.0'; // 2.4.0: a page printing other barcodes besides this one is a listing, not the product's page; each analysis value must be printed after its nutrient's name; the manufacturer's page is sought by the answer's name when no other is known. Results of 2.3.0 are not used (one took another variant's analysis). 2.3.0: the search's own result pages are recorded and checked by Purrbi for the barcode; the first that shows it is read from Purrbi's copy. 2.2.0: the barcode is searched in the forms pages print it; a page tied to the barcode that shows nothing about the product (a price list) ends no search, and what such an answer named is searched for next; a barcode with other numbers beside it is still found. 2.1.0: a page tied to the product names it by its own heading; a web page's sentence that names no species, life stage or standard is not a feeding statement. 2.0.0: alt text, markup and Shopify barcodes, linked nutrition documents, a manufacturer follow-up, catalogue abbreviations, package sizes
 /** Research results still used as they were saved (older ones are read again: they could take who a product is for from a retailer's title). */
-export const RESEARCH_RESULTS_IN_USE: ReadonlySet<string> = new Set([RESEARCH_VERSION, 'research-2.2.0', 'research-2.1.0', 'research-2.0.0']);
+export const RESEARCH_RESULTS_IN_USE: ReadonlySet<string> = new Set([RESEARCH_VERSION, 'research-2.2.0', 'research-2.1.0', 'research-2.0.0']); // not 2.3.0
 
 const nullableString = { type: ['string', 'null'] };
 const SCHEMA = {
@@ -216,6 +216,40 @@ const missingFields = (f: Partial<ProductFacts>) =>
     (x): x is string => !!x,
   );
 
+// A nutrient's name as label pages print it: English, the European label languages and Japanese.
+const NUTRIENT_NAMES: Record<string, { latin: string; cjk: string }> = {
+  crude_protein: { latin: 'proteins?|prot[ée]ines?|prote[íi]nas?|proteine|eiwei(?:ß|ss)|eiwit|protidi', cjk: '粗たんぱく質|粗タンパク質|たんぱく質|タンパク質|粗蛋白質?|蛋白質' },
+  crude_fat: { latin: 'fats?|mati[èe]res? grasses?|grasas?|grassi|rohfett|fett|lipides?|oli e grassi|vet', cjk: '粗脂肪|脂肪|脂質' },
+  crude_fiber: { latin: 'fib(?:er|re)s?|fibras?|fibra grezza|rohfaser|cellulose brute|vezels?|ruwe celstof', cjk: '粗繊維|繊維' },
+  moisture: { latin: 'moisture|humidit[ée]|humedad|umidit[àa]|feuchtigkeit|feuchte|vocht|water', cjk: '水分' },
+  ash: { latin: 'ash|cendres?|cenizas?|ceneri|rohasche|asche|ruwe as|mati[èe]res? min[ée]rales', cjk: '粗灰分|灰分' },
+};
+
+/**
+ * Whether the page prints this value as the first number after its nutrient's name ("Crude Protein (min.)
+ * 10.0%", "粗タンパク質 4.0%以上"; the answer's own label words for other nutrients), not a number found
+ * elsewhere near it.
+ */
+function printedAfterName(raw: string, nutrient: string, label: string, value: number): boolean {
+  const names = NUTRIENT_NAMES[nutrient];
+  const own = wordsKey(label)
+    .split(' ')
+    .filter((w) => w.length > 3 && !/^(crude|min|max|minimum|maximum|not|less|more|than)$/.test(w))
+    .map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const latin = names?.latin ?? (own.length ? own.join('|') : '');
+  if (!latin && !names?.cjk) return false;
+  const re = new RegExp([latin ? `(?<!\\p{L})(?:${latin})` : '', names?.cjk ? `(?:${names.cjk})` : ''].filter(Boolean).join('|'), 'giu');
+  for (const m of raw.matchAll(re)) {
+    const start = (m.index ?? 0) + m[0].length;
+    const first = /(?<!\d)(\d+(?:[.,]\d+)*|[.,]\d+)/.exec(raw.slice(start, start + 60))?.[1];
+    if (!first) continue;
+    // A decimal comma ("34,0") or a thousands separator ("10,000").
+    const readings = [Number(first.replace(',', '.')), Number(first.replace(/,/g, ''))];
+    if (readings.some((n) => Number.isFinite(n) && Math.abs(n - value) < 1e-9)) return true;
+  }
+  return false;
+}
+
 /** Whether a page's facts say anything about the product itself, beyond its brand and package size. */
 const aboutProduct = (f: Partial<ProductFacts>) =>
   !!(f.productName || f.ingredients?.value.length || f.guaranteedAnalysis?.value.length || f.adequacy || f.calories?.value.length || f.activeIngredients?.value.length || f.classificationSignals?.length);
@@ -337,7 +371,8 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
   const still = missingFields({ ...found.facts, ...(opts.knownIngredients?.length && !found.facts.ingredients ? { ingredients: { value: opts.knownIngredients, source: found.sources[0] } } : {}) });
   // What the manufacturer's page must match: a name shown on the page proven to be this product, or the database's.
   const trustedName = found.facts.productName?.value ?? found.pageTitle ?? opts.knownName;
-  const mName = trustedName ?? name;
+  // Without a name shown on a page or a database's, the answer's (search words only: its page must then show the barcode).
+  const mName = trustedName ?? name ?? found.lead?.name ?? undefined;
   const mBrand = found.facts.brand?.value ?? brand;
   // Only after a retailer's page: a manufacturer's page that lacks a field is not searched for again.
   if (retailerOnly && mBrand && mName) {
@@ -422,8 +457,12 @@ async function fetchPage(url: string, opts: ResearchOptions): Promise<FetchedPag
   const title = (/<title[^>]*>([^<]*)<\/title>/i.exec(html)?.[1] ?? '').replace(/\s+/g, ' ').trim();
   let heading = productHeading(html);
   const gtins = markupGtins(html);
-  let barcode: FetchedPage['barcode'] = textContainsGtin(plain, opts.gtin14) ? 'text' : gtins.length === 1 && gtins[0] === opts.gtin14 ? 'markup' : null;
-  let family = !barcode && gtins.includes(opts.gtin14) ? gtins.length : 0;
+  // A page that prints other barcodes beside this one lists several products (a set, a range, variants):
+  // the barcode is one of them, not the page's own, unless its markup names this one alone.
+  const inText = textContainsGtin(plain, opts.gtin14);
+  const others = inText ? textGtins(plain).filter((g) => g !== opts.gtin14) : [];
+  let barcode: FetchedPage['barcode'] = inText && !others.length ? 'text' : gtins.length === 1 && gtins[0] === opts.gtin14 ? 'markup' : null;
+  let family = !barcode && (gtins.includes(opts.gtin14) || inText) ? Math.max(gtins.length, others.length + 1) : 0;
   let variantSize: PackageSize | null = null;
   // A Shopify product page: its product record lists each variant's barcode and the full description.
   const js = shopifyProductUrl(res.url || url);
@@ -616,7 +655,7 @@ async function readPageAttempt(opts: ResearchOptions, page: FetchedPage, ask: st
     maxTokens: 3000,
   });
   if (!data.found) return { facts: null, sources: [], discarded: ['the model found no product details on the page'], model };
-  return verifyAnswer(opts, { ...data, source_urls: [page.url] }, [page], 'barcode', model, []);
+  return { ...(await verifyAnswer(opts, { ...data, source_urls: [page.url] }, [page], 'barcode', model, [])), lead: { name: data.product_name ?? null, brand: data.brand ?? null } };
 }
 
 async function researchAttempt(opts: ResearchOptions, user: string, mode: Mode): Promise<ResearchOutcome> {
@@ -747,7 +786,7 @@ async function verifyAnswer(opts: ResearchOptions, data: RawResearch, pages: Fet
   const identity: ResearchOutcome['identity'] = id === 'barcode' ? 'barcode' : sameRecipe ? 'recipe' : id;
   const verified: string[] = [];
   if (page.barcode) verified.push(`${host || 'The page'} shows this product’s barcode${page.barcode === 'text' ? '' : page.barcode === 'markup' ? ' in its page data' : ' in its product record'}.`);
-  if (id === 'family') verified.push(`${host || 'The page'} lists this barcode among ${page.family} barcodes of the product’s sizes or variants, not as the one shown.`);
+  if (id === 'family') verified.push(`${host || 'The page'} lists this barcode among ${page.family} barcodes (sizes, variants or other products), not as the one shown.`);
   if (sameRecipe) verified.push(`Same recipe on ${host || 'the page'}: ${same} of the first ${compared} ingredients match ${refList} in order (${parsed.slice(0, 4).map((x) => x.name).join(', ')} …).`);
   const knownSpecies = opts.knownSpecies && opts.knownSpecies !== 'unknown' ? (opts.knownSpecies as ProductSpecies) : null;
   if (!strongIdentity && !knownSpecies) {
@@ -818,7 +857,9 @@ async function verifyAnswer(opts: ResearchOptions, data: RawResearch, pages: Fet
   if (size) facts.packageSize = { value: size, source };
 
   const offered = nameLevel ? [] : data.guaranteed_analysis ?? [];
-  const notOnPage = offered.filter((g) => !numberOnPage(page.raw, Number(g.value)));
+  // Each value as the page prints it after its nutrient's name, not a number found elsewhere on the page
+  // (2026-10-30, trace 864a81dd-46a: another variant's protein and fat were taken from a page in Japanese).
+  const notOnPage = offered.filter((g) => !printedAfterName(page.raw, nutrientKeyFromLabel(g.label), g.label, Number(g.value)));
   const checked = validateGuaranteedAnalysis(
     offered
       .filter((g) => !notOnPage.includes(g))

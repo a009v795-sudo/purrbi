@@ -113,6 +113,21 @@ export function markupGtins(html: string): string[] {
   return found.size > 3 ? [] : [...found];
 }
 
+/**
+ * The barcodes a page prints in its text: whole 12-, 13- or 14-digit numbers with a valid check digit, and
+ * UPC-As spaced as under the bars ("0 76344 88657 0"), as 14-digit keys. A page that prints several is a
+ * listing or a set, not one product's page.
+ */
+export function textGtins(text: string): string[] {
+  const found = new Set<string>();
+  for (const m of text.matchAll(/(?<![\d.,])(\d{12,14})(?![\d]|[.,]\d)/g)) if (validGtin(m[1])) found.add(m[1].padStart(14, '0'));
+  for (const m of text.matchAll(/(?<![\d.,])(\d) (\d{5}) (\d{5}) (\d)(?![\d]|[.,]\d)/g)) {
+    const d = m.slice(1, 5).join('');
+    if (validGtin(d)) found.add(d.padStart(14, '0'));
+  }
+  return [...found];
+}
+
 /** A Shopify product page publishes its product, with each variant's barcode, at "<product url>.js". */
 export function shopifyProductUrl(url: string): string | null {
   try {

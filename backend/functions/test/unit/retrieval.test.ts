@@ -317,7 +317,7 @@ describe('barcode-only research (tests A/B/C, 2026-10-30)', () => {
     expect(bodies[0]).toContain('A catalogue, price list or search-results page is not the product’s page');
   });
   it('B: a price list showing the barcode ends no search; the name its answer gave is searched for, and only a page showing the barcode is used', async () => {
-    const priceList = '<html><head><title>2024 North Complete Price List</title></head><body><p>Item UPC Description Pack Size Price</p><p>89133 076344886570 WEL HI GRVY CHKN TRKY 24 3OZ 1.79</p><p>89134 076344886587 WEL HI MRSL CHKN TRKY 24 3OZ 1.79</p></body></html>';
+    const priceList = '<html><head><title>2024 North Complete Price List</title></head><body><p>Item UPC Description Pack Size Price</p><p>89133 076344886570 WEL HI GRVY CHKN TRKY 24 3OZ 1.79</p><p>89140 WEL CORE SIG SEL 24 2.8OZ 2.19</p></body></html>';
     const maker = `<html><head><title>Complete Health Healthy Indulgence Gravies Chicken &amp; Turkey</title></head><body><h1>Wellness Complete Health Healthy Indulgence Gravies Chicken &amp; Turkey</h1>
       <img alt="Chicken Broth, Water Sufficient For Processing, Chicken, Potato Starch, Turkey, Eggs, Chicken Liver, Carrots, Natural Flavor, Salt, Guar Gum, Tricalcium Phosphate, Potassium Chloride, Taurine">
       <p>Guaranteed Analysis</p><p>Crude Protein (min.) 4% Crude Fat (min.) 2% Crude Fiber (max.) 1% Moisture (max.) 85% Ash (max.) 2.5%</p><div class="ps-widget" ps-sku=" 076344886570 "></div><p>Available Sizes: 3 Ounce Retort Pouch</p></body></html>`;
@@ -450,5 +450,36 @@ describe('the search’s result pages, checked by Purrbi (test B rerun, trace cd
     const r = await researchProduct({ apiKey: 'k', model: 'm', gtin14: GRAVIES, barcode: '076344886570', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-10-30T00:00:00Z') });
     expect(sent.map((b) => 'include' in b)).toEqual([true, false]);
     expect(r.discarded).toContain('barcode search: model reported no matching product (1 search, 0 citations)');
+  });
+});
+
+// Rerun of test B on research 2.3.0 (2026-10-30 16:34Z, trace 864a81dd-46a, backend a8b9838): a Japanese shop's page
+// that shows the barcode gave protein 9 % and fat 3 %, while the manufacturer and US shops print 4 % and 2 % for
+// these Gravies (9 % and 3 % fit the sibling Morsels recipe). The page could not be read from the test sandbox
+// (its network policy blocks the host), so the pages below are synthetic, laid out as such pages print it.
+describe('another variant’s analysis is not taken from a page that shows the barcode (test B, trace 864a81dd-46a)', () => {
+  const GRAVIES = '00076344886570';
+  const run = async (html: string, analysis: { label: string; value: number }[]) => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.startsWith('https://api.openai.com/')) return openAi(modelAnswer({ product_name: 'ウェルネス ヘルシーインダルジェンス グレービー チキン＆ターキー', brand: 'Wellness', intended_for: 'cats', guaranteed_analysis: analysis.map((g) => ({ ...g, qualifier: 'min', unit: '%' })), source_urls: ['https://store.example.jp/56nyan/c0012.html'] }));
+      return new Response(html, { status: 200 });
+    }));
+    return researchProduct({ apiKey: 'k', model: 'm', gtin14: GRAVIES, barcode: '076344886570', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-10-30T00:00:00Z') });
+  };
+  it('a page printing other barcodes besides this one is a listing, so nothing from it is used', async () => {
+    const { textGtins } = await import('../../src/sources/pageEvidence');
+    const listing = '<html><head><title>ウェルネス パウチ</title></head><body><h1>Wellness ヘルシーインダルジェンス</h1><p>グレービー チキン＆ターキー 85g JAN 076344886570 粗タンパク質 4.0%以上 粗脂肪 2.0%以上</p><p>モーセル チキン＆ターキー 85g JAN 076344886587 粗タンパク質 9.0%以上 粗脂肪 3.0%以上</p></body></html>';
+    expect(textGtins('JAN 076344886570 / JAN 076344886587 / 0 76344 88657 0 / 1.79 / 89133')).toEqual(['00076344886570', '00076344886587']);
+    const r = await run(listing, [{ label: 'Crude Protein', value: 9 }, { label: 'Crude Fat', value: 3 }]);
+    expect(r.facts).toBeNull();
+    expect(r.discarded).toContain('barcode search: store.example.jp matches only as one of several sizes or variants (no ingredient list to compare), and it is not yet known whether this product is for cats or dogs, so nothing from it was used');
+  });
+  it('on the product’s own page, a value counts only where it is printed after its nutrient’s name', async () => {
+    const own = '<html><head><title>ウェルネス グレービー チキン＆ターキー 85g</title></head><body><h1>Wellness ヘルシーインダルジェンス グレービー チキン＆ターキー</h1><p>JAN 076344886570</p><p>保証成分 粗タンパク質 4.0%以上 粗脂肪 2.0%以上 粗繊維 1.0%以下 水分 85.0%以下</p><p>まとめ買い 9個 3袋セット</p></body></html>';
+    const wrong = await run(own, [{ label: 'Crude Protein', value: 9 }, { label: 'Crude Fat', value: 3 }]);
+    expect(wrong.facts?.guaranteedAnalysis).toBeUndefined();
+    expect(wrong.discarded).toContain('barcode search: guaranteed analysis: values not found on the cited page');
+    const right = await run(own, [{ label: 'Crude Protein', value: 4 }, { label: 'Crude Fat', value: 2 }]);
+    expect(right.facts?.guaranteedAnalysis?.value.map((g) => `${g.nutrient}:${g.value}`)).toEqual(['crude_protein:4', 'crude_fat:2']);
   });
 });

@@ -419,11 +419,12 @@ describe('manufacturer research', () => {
     const r = await run();
     expect(r.facts?.guaranteedAnalysis?.value.map((g) => `${g.nutrient}:${g.value}`)).toEqual(['crude_protein:34', 'crude_fat:12.5', 'crude_fiber:3.5']);
     expect(r.discarded).toEqual(['barcode search: guaranteed analysis: the answer’s Protéine 33 is not on the page; the analysis printed on the page was used']);
-    // The answer's value is on the page, but as another row's (fibre's 3,5 % given as protein).
+    // The answer's value is on the page, but as another row's (fibre's 3,5 % given as protein): since research
+    // 2.4.0 a value counts only where the page prints it after its nutrient's name, so it is not on the page.
     stub(answer({ guaranteed_analysis: [{ label: 'Protéine', qualifier: 'not_stated', value: 3.5, unit: '%' }] }), PAGE_EAN);
     const differ = await run();
     expect(differ.facts?.guaranteedAnalysis?.value.map((g) => `${g.nutrient}:${g.value}`)).toEqual(['crude_protein:34', 'crude_fat:12.5', 'crude_fiber:3.5']);
-    expect(differ.discarded).toEqual(['barcode search: guaranteed analysis: the answer’s Protéine 3.5 differs from the analysis printed on the page, which was used']);
+    expect(differ.discarded).toEqual(['barcode search: guaranteed analysis: the answer’s Protéine 3.5 is not on the page; the analysis printed on the page was used']);
   });
   it('a value counts as on the page only where the page prints it as a number of its own', async () => {
     // "7" is printed only inside "17%" (the salmon's share), so an ash of 7 % is not on the page.
