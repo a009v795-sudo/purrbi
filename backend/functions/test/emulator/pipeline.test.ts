@@ -164,13 +164,13 @@ const sources: Sources = {
     if (explainUnverified) {
       return o.terms.map((t) => ({
         key: explanationKey(o.species, t.kind, t.term), term: t.term, kind: t.kind, species: o.species, status: 'unverified' as const,
-        summary: '', role: '', sourceTitle: '', sourceUrl: '', quote: '', reason: explainUnverified!, checkedAt: ((o as { now?: Date }).now ?? NOW).toISOString(), model: 'mock', version: EXPLAIN_VERSION,
+        summary: '', role: '', sourceTitle: '', sourceUrl: '', quote: '', reason: explainUnverified!, checkedAt: ((o as { now?: Date }).now ?? NOW).toISOString(), model: 'mock', version: EXPLAIN_VERSION, claims: [], rejected: [], judgeModel: 'mock',
       }));
     }
     return o.terms.map((t) => ({
       key: explanationKey(o.species, t.kind, t.term), term: t.term, kind: t.kind, species: o.species, status: 'verified' as const,
       summary: `TEST FIXTURE explanation of ${t.term}.`, role: 'test role', sourceTitle: 'TEST FIXTURE source', sourceUrl: 'https://www.fda.gov/test-fixture',
-      quote: 'TEST FIXTURE quote copied from the cited page.', reason: '', checkedAt: NOW.toISOString(), model: 'mock', version: 'test',
+      quote: 'TEST FIXTURE quote copied from the cited page.', reason: '', checkedAt: NOW.toISOString(), model: 'mock', version: EXPLAIN_VERSION, claims: [], rejected: [], judgeModel: 'mock',
     }));
   },
   async verdict(o) {
