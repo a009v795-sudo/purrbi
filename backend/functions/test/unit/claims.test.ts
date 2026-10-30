@@ -252,7 +252,7 @@ describe('the support check (model call mocked)', () => {
   });
   it('shows nothing from a batch whose support check fails, never the unchecked claims', async () => {
     const plain = raw(GUAR_GUM, 'function', 'In human foods, guar gum (E 412) is authorised as a food additive in the European Union.');
-    vi.mocked(researchJson).mockResolvedValueOnce({ data: { items: [{ n: 1, term: 'Guar Gum', english_name: 'guar gum', claims: [plain] }] }, citations: [], searches: 1, model: 'model-a' });
+    vi.mocked(researchJson).mockResolvedValueOnce({ data: { items: [{ n: 1, term: 'Guar Gum', english_name: 'guar gum', claims: [plain] }] }, citations: [], searches: 1, model: 'model-a', searchLog: [] });
     chat.mockRejectedValueOnce(new SourceError('OpenAI', 'timeout', 'no response within 45000 ms'));
     vi.stubGlobal('fetch', vi.fn(async () => new Response(fixturePage(GUAR_GUM.title, GUAR_GUM.passage), { status: 200 })));
     const [e] = await explainTerms({ apiKey: 'k', model: 'model-a, model-b', species: 'cat', terms: [{ term: 'Guar Gum', kind: 'ingredient' }], userAgent: 'test', now: NOW });
@@ -263,7 +263,7 @@ describe('the support check (model call mocked)', () => {
   it('keeps each claim with its passage, source, evidence kind and dates, alongside the earlier single-explanation fields', async () => {
     const plain = raw(GUAR_GUM, 'function', 'In human foods, guar gum (E 412) is authorised as a food additive in the European Union.');
     const petFeed = raw(GUAR_GUM, 'function', 'Regulatory and safety reviews (EFSA) find guar gum efficacious for these technological uses in pet feed.');
-    vi.mocked(researchJson).mockResolvedValueOnce({ data: { items: [{ n: 1, term: 'Guar Gum', english_name: 'guar gum', claims: [petFeed, plain] }] }, citations: [], searches: 1, model: 'model-a' });
+    vi.mocked(researchJson).mockResolvedValueOnce({ data: { items: [{ n: 1, term: 'Guar Gum', english_name: 'guar gum', claims: [petFeed, plain] }] }, citations: [], searches: 1, model: 'model-a', searchLog: [] });
     chat.mockResolvedValueOnce({ data: { verdicts: [verdict({ id: 0 })] }, model: 'model-a', usage: null });
     const pages = vi.fn(async () => new Response(fixturePage(GUAR_GUM.title, GUAR_GUM.passage, '<meta property="article:published_time" content="2017-06-01">'), { status: 200 }));
     vi.stubGlobal('fetch', pages);
