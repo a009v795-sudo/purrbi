@@ -4,7 +4,7 @@
 // windows, and species words. Read-only; no credentials. Published as the "Page probe" report.
 //   node probe-page.mjs <url> [url...] [--barcode <digits>]
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { publish } from './report.mjs';
@@ -69,9 +69,17 @@ for (const url of urls) {
       const file = join(mkdtempSync(join(tmpdir(), 'probe-')), 'doc.pdf');
       writeFileSync(file, Buffer.from(await res.arrayBuffer()));
       try {
-        entry.pdfText = execFileSync('pdftotext', ['-layout', file, '-'], { encoding: 'utf8' }).replace(/[ \t]+/g, ' ').slice(0, 6000);
+        entry.pdfText = execFileSync('pdftotext', ['-layout', file, '-'], { encoding: 'utf8' }).replace(/[ \t]+/g, ' ').slice(0, 3000);
       } catch (e) {
         entry.pdfText = `pdftotext unavailable or failed: ${String(e?.message ?? e).slice(0, 200)}`;
+      }
+      // The text Purrbi's backend gets from the same file (unpdf, installed by the workflow for PDFs).
+      try {
+        const { extractText, getDocumentProxy } = await import(process.env.UNPDF_PATH ?? 'unpdf');
+        const doc = await getDocumentProxy(new Uint8Array(readFileSync(file)));
+        entry.unpdfText = (await extractText(doc, { mergePages: true })).text.slice(0, 4500);
+      } catch (e) {
+        entry.unpdfText = `unpdf unavailable or failed: ${String(e?.message ?? e).slice(0, 200)}`;
       }
       report.pages.push(entry);
       console.log(JSON.stringify(entry, null, 1));

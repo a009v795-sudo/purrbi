@@ -37,5 +37,5 @@ jobs:
           BARCODES: ${{ inputs.barcodes }}
           FIND: ${{ inputs.find }}
         run: |
-          case "$URLS" in *.pdf*) sudo apt-get install -y -qq poppler-utils >/dev/null 2>&1 || true;; esac
+          case "$URLS" in *.pdf*) sudo apt-get install -y -qq poppler-utils >/dev/null 2>&1 || true; mkdir -p "$RUNNER_TEMP/unpdf" && npm i --prefix "$RUNNER_TEMP/unpdf" --no-save unpdf@1.8.1 >/dev/null 2>&1 || true; export UNPDF_PATH="$RUNNER_TEMP/unpdf/node_modules/unpdf/dist/index.mjs";; esac
           node backend/tools/probe-page.mjs $URLS --barcode ${BARCODES%% *} ${FIND:+--find "$FIND"}
