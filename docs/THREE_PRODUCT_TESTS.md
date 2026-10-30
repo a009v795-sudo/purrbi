@@ -183,3 +183,16 @@ only read.
 - **Barcode database:** the free UPCitemdb tier limits each address to 100 requests a day, shared by all Cloud
   Functions instances. It is paused until its own reset time, not retried. A paid key or a fixed outbound
   address would avoid this; both are account and billing decisions, and neither was made.
+
+## Android APK, build 8
+
+| | |
+|---|---|
+| Workflow run | `android-apk` 41101143210, succeeded 2026-10-30 18:00:58Z |
+| Source revision | `638eb45caae9e972e9137e3ce46c7267fe0b2882` (the app export above; the code the final runs used) |
+| Version | versionName 1.0.0, **versionCode 8** (`--build-number=8`); application id `com.mycompany.purrbiv2development` |
+| File | `app-release.apk`, 113,130,790 bytes, SHA-256 `3545784c6cbbffae01ff8239b340377763a609b1aec1ecbb0f19ba002e864bf4` |
+| Artifact | `purrbi-android-apk-8` (54,760,368 bytes zipped, kept until 2027-01-28) |
+| Backend environment | development project `purrbi-49c21`, backend `1021e47` (deploy 41096553777) |
+| Signing | The development key that builds 6 and 7 used, restored from the workflow's cache (`purrbi-dev-debug-keystore-v1`), so it updates build 7 in place. This session can't read the cache or job logs, so the cache hit itself is not shown here. |
+| Installation test | **NOT RUN.** There is no Android device or emulator in this environment. |
