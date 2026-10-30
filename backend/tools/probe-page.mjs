@@ -3,6 +3,10 @@
 // the label sections (ingredients, guaranteed analysis, calories, feeding statement) as short text
 // windows, and species words. Read-only; no credentials. Published as the "Page probe" report.
 //   node probe-page.mjs <url> [url...] [--barcode <digits>]
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { publish } from './report.mjs';
 
 const UA = 'Purrbi/0.1 (page probe; contact@valenciainnovations.com)';
@@ -60,6 +64,19 @@ for (const url of urls) {
     const res = await fetch(url, { headers: { 'User-Agent': UA, Accept: 'text/html' }, redirect: 'follow', signal: AbortSignal.timeout(20000) });
     entry.status = res.status;
     entry.finalUrl = res.url;
+    if ((res.headers.get('content-type') ?? '').includes('pdf')) {
+      // A linked nutrition document: its text (pdftotext, when the runner has it).
+      const file = join(mkdtempSync(join(tmpdir(), 'probe-')), 'doc.pdf');
+      writeFileSync(file, Buffer.from(await res.arrayBuffer()));
+      try {
+        entry.pdfText = execFileSync('pdftotext', ['-layout', file, '-'], { encoding: 'utf8' }).replace(/[ \t]+/g, ' ').slice(0, 6000);
+      } catch (e) {
+        entry.pdfText = `pdftotext unavailable or failed: ${String(e?.message ?? e).slice(0, 200)}`;
+      }
+      report.pages.push(entry);
+      console.log(JSON.stringify(entry, null, 1));
+      continue;
+    }
     const html = await res.text();
     const t = text(html);
     entry.title = (/<title[^>]*>([^<]*)<\/title>/i.exec(html)?.[1] ?? '').trim().slice(0, 200);
