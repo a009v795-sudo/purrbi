@@ -18,6 +18,8 @@ export interface Highlight {
   full?: string;
 }
 
+const evidenceLabel = (facts: ProductFacts) => (facts.guaranteedAnalysis?.source.sourceType === 'manufacturer' ? 'Manufacturer web page' : 'Product label');
+
 const oneLine = (s: string, max = 110) => {
   const t = s.replace(/\s+/g, ' ').trim();
   return t.length <= max ? t : `${t.slice(0, max - 1).replace(/\s+\S*$/, '')}…`;
@@ -51,14 +53,15 @@ export function buildHighlights(args: { facts: ProductFacts; scope: ScopeResult;
   if (recall?.status === 'exact_active') cautions.push({ kind: 'caution', severity: 'alert', title: 'Recall match', detail: oneLine(recall.summary), value: recall.records[0]?.recallNumber ?? '', evidence: 'Official notice (openFDA)', rule: 'G-RECALL' });
   for (const f of withPet ? pf('P-HAZARD', 'alert') : gf('G-KB-CONCERN', 'alert')) cautions.push(caution(f, hazardTitle(f), 'alert'));
   for (const f of pf('P-SPECIES', 'alert')) cautions.push(caution(f, 'Made for another species', 'alert'));
-  for (const f of [...pf('P-ALLERGEN', 'review'), ...pf('P-SENSITIVITY', 'review')]) {
+  for (const f of [...pf('P-ALLERGEN', 'alert'), ...pf('P-SENSITIVITY', 'review')]) {
     if (/^Contains /.test(f.text)) cautions.push(caution(f, f.rule === 'P-ALLERGEN' ? 'In the allergy profile' : 'In the sensitivity profile', 'alert', recorded(f.text)));
   }
+  for (const f of pf('P-SPECIES', 'review')) cautions.push(caution(f, 'Who it is for isn’t confirmed', 'review'));
   if (recall?.status === 'possible_active') cautions.push({ kind: 'caution', severity: 'review', title: 'Possible recall match', detail: oneLine(recall.summary), value: '', evidence: 'Official notice (openFDA)', rule: 'G-RECALL' });
   for (const f of pf('P-LIFESTAGE', 'review')) cautions.push(caution(f, 'Life stage', 'review'));
   for (const f of pf('P-LARGEGROWTH', 'review')) cautions.push(caution(f, 'Large-breed growth', 'review'));
   for (const f of [...pf('P-ALLERGEN', 'review'), ...pf('P-SENSITIVITY', 'review')]) {
-    if (/^Lists /.test(f.text)) cautions.push(caution(f, 'May match the allergy profile', 'review'));
+    if (/^Compatibility with /.test(f.text)) cautions.push(caution(f, 'Allergy match unconfirmed', 'review', /recorded (.+?) (?:allergy|sensitivity)/.exec(f.text)?.[1] ?? ''));
   }
   for (const f of pf('P-VET', 'review')) cautions.push(caution(f, 'Vet-directed diet', 'review'));
   for (const f of gf('G-ADEQUACY', 'review')) cautions.push(caution(f, 'Feeding statement', 'review'));
@@ -72,7 +75,13 @@ export function buildHighlights(args: { facts: ProductFacts; scope: ScopeResult;
   if (adequacy?.type === 'complete' && !positives.length) {
     for (const f of gf('G-ADEQUACY', 'positive')) positives.push(positive(f, 'Complete and balanced', adequacy.lifeStages.map(lifeStageLabel).join(', ')));
   }
-  for (const f of pf('P-ALLERGEN', 'positive')) positives.push(positive(f, 'No listed allergy match'));
+  // What the score's parts found (each with its evidence), never "no concerns".
+  const met = (key: string) => general.components.find((c) => c.key === key && c.status === 'met');
+  const pfMet = met('protein_fat');
+  if (pfMet) positives.push({ kind: 'positive', severity: 'info', title: 'Protein and fat above AAFCO minimums', detail: oneLine(pfMet.explanation), value: '', evidence: evidenceLabel(facts), rule: 'G-PROTEIN-FAT' });
+  const named = met('named_sources');
+  if (named) positives.push({ kind: 'positive', severity: 'info', title: 'Main ingredients named by source', detail: oneLine(named.explanation), value: '', evidence: 'Ingredient list', rule: 'G-NAMED' });
+  for (const f of pf('P-ALLERGEN', 'positive')) positives.push(positive(f, 'Not on the ingredient list'));
   // No positive for "no documented concerns": Purrbi's reviewed list is short, so absence is not a strength.
   if ((general.category === 'treat' || general.category === 'complementary') && facts.calories?.value.length) {
     positives.push({ kind: 'positive', severity: 'info', title: 'Calories listed', detail: 'Helps keep treats and toppers under about 10% of daily calories.', value: describeCalories(facts.calories.value[0]), evidence: 'Product label', rule: 'G-CALORIES' });

@@ -45,6 +45,13 @@ export const DEFAULT_LIMITS: Limits = {
   explanationsPerCall: 8,
 };
 
+/**
+ * The version of everything that decides a result (classification, research, score, ingredient knowledge,
+ * explanations, verdict). Saved with each result; the app asks for a refresh of a result saved under an
+ * older version when it is opened, so a known bad classification is corrected without deleting history.
+ */
+export const ASSESSMENT_VERSION = 'assessment-3.0.0';
+
 export const SCAN_STATUS = {
   queued: 'queued',
   identifying: 'identifying',

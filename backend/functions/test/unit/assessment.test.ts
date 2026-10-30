@@ -166,6 +166,29 @@ describe('personal fit', () => {
     expect(personalize(pet({ conditionsStatus: 'reported', medicationsStatus: 'none_reported' }), f, scope, g, noRecall, NOW).state).toBe('review');
     expect(personalize(pet({ reproductiveStatus: 'pregnant', medicationsStatus: 'none_reported' }), f, scope, g, noRecall, NOW).findings.some((x) => x.rule === 'P-REPRO')).toBe(true);
   });
+  it('states a species mismatch only when the product’s own evidence confirms it; a retailer’s listing alone is a review', () => {
+    const f = facts({ productName: { value: 'TEST FIXTURE Dog Trt Frz Dr Wld Salmn', source: SRC }, classificationSignals: [], adequacyText: 'Intended for intermittent or supplemental feeding only.' });
+    const weak = { ...scopeOf(f), species: 'dog' as const, speciesEvidence: { set: ['dog' as const], confirmed: false, basis: 'retailer_listing' as const, disputed: false, note: '' } };
+    const p = personalize(pet(), f, weak, assessGeneral(f, weak), noRecall, NOW);
+    expect(p.state).toBe('review');
+    expect(p.findings.find((x) => x.rule === 'P-SPECIES')).toMatchObject({ kind: 'review', text: 'Only a retailer’s listing says who it is for (dogs); Purrbi couldn’t confirm whether it is also for cats.' });
+    const strong = { ...weak, speciesEvidence: { ...weak.speciesEvidence, confirmed: true, basis: 'manufacturer_page' as const } };
+    expect(personalize(pet(), f, strong, assessGeneral(f, strong), noRecall, NOW).state).toBe('not_for_species');
+    const both = { ...weak, species: 'cat_and_dog' as const, speciesEvidence: { set: ['cat' as const, 'dog' as const], confirmed: true, basis: 'manufacturer_page' as const, disputed: false, note: '' } };
+    expect(personalize(pet(), f, both, assessGeneral(f, both), noRecall, NOW).findings.find((x) => x.rule === 'P-SPECIES')?.text).toBe('Made for cats and dogs (the manufacturer).');
+  });
+  it('an unspecified source is an unresolved allergy question, never a confirmed match; absent allergens are one qualified line', () => {
+    const f = facts();
+    const scope = scopeOf(f);
+    const p = personalize(pet({ name: 'milly', allergiesStatus: 'reported', allergies: ['pork', 'wheat', 'soy'] }), f, scope, assessGeneral(f, scope), noRecall, NOW);
+    expect(p.findings.filter((x) => x.rule === 'P-ALLERGEN').map((x) => x.text)).toEqual([
+      'Compatibility with milly’s recorded pork allergy is unconfirmed: the source of natural flavor isn’t stated on the label.',
+      'Wheat and soy aren’t on the ingredient list Purrbi found (labels don’t cover cross-contact during manufacturing).',
+    ]);
+    expect(JSON.stringify(p)).not.toMatch(/may include pork/);
+    const chicken = personalize(pet({ allergiesStatus: 'reported', allergies: ['chicken'] }), f, scope, assessGeneral(f, scope), noRecall, NOW);
+    expect(chicken.findings.find((x) => x.rule === 'P-ALLERGEN')).toMatchObject({ kind: 'alert' });
+  });
   it('does not use breed', () => {
     const f = facts();
     const scope = scopeOf(f);

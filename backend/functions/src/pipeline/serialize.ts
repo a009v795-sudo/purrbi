@@ -3,7 +3,9 @@
 import { lifeStageLabel } from '../domain/adequacy';
 import { categoryLabel, speciesLabel } from '../domain/scope';
 import { evidenceLabel } from '../domain/score';
-import { describeCalories, describeEntry, dryMatterPercent, findNutrient } from '../domain/nutrition';
+import { caloriesForPackage, describeCalories, describeEntry, dryMatterPercent, findNutrient } from '../domain/nutrition';
+import { SCOPE_VERSION } from '../domain/scope';
+import { ASSESSMENT_VERSION } from './config';
 import type { GeneralAssessment, PersonalAssessment, ProductFacts, RecallCheck, ScopeResult } from '../domain/types';
 import type { ResultState } from '../domain/summary';
 import type { Highlight } from '../domain/highlights';
@@ -101,8 +103,15 @@ export function resultFields(args: {
     imageUrl: facts.imageUrl?.value ?? '',
     productSpecies: scope.species,
     productSpeciesLabel: speciesLabel(scope.species),
+    // Every species the product is for (["cat", "dog"] for a dog-and-cat treat), and what that rests on.
+    productSpeciesSet: scope.speciesEvidence?.set ?? (scope.species === 'cat_and_dog' ? ['cat', 'dog'] : scope.species === 'unknown' ? [] : [scope.species]),
+    speciesBasis: scope.speciesEvidence?.basis ?? '',
+    speciesConfirmed: scope.speciesEvidence?.confirmed ?? scope.species !== 'unknown',
+    speciesNote: scope.speciesEvidence?.note ?? '',
     productCategory: general.category,
     productCategoryLabel: categoryLabel(general.category),
+    categoryBasis: scope.categoryBasis ?? '',
+    packageSizeText: facts.packageSize?.value.text ?? '',
     scope: scope.status,
     scopeReason: scope.reason,
     outOfScopeKind: scope.outOfScopeKind ?? '',
@@ -149,7 +158,8 @@ export function resultFields(args: {
     nutritionSource: facts.guaranteedAnalysis ? evidenceLabel(facts.guaranteedAnalysis.source) : '',
     nutritionContext: general.nutritionContext,
     activeIngredientsSource: facts.activeIngredients ? evidenceLabel(facts.activeIngredients.source) : '',
-    caloriesText: (facts.calories?.value ?? []).map(describeCalories).join('; '),
+    // Per kg and, of the package-specific values, the scanned package's (values for other sizes are not interchangeable).
+    caloriesText: caloriesForPackage(facts.calories?.value, facts.packageSize?.value).map(describeCalories).join('; '),
     adequacyText: adequacy?.text ?? '',
     adequacySummary: adequacy
       ? adequacy.type === 'complete'
@@ -186,6 +196,9 @@ export function resultFields(args: {
     supplementLimitations: general.supplement?.limitations ?? [],
     supplementQualitySignals: general.supplement?.qualitySignals ?? [],
 
+    assessmentVersion: ASSESSMENT_VERSION,
+    scopeVersion: SCOPE_VERSION,
+
     summary: args.summary,
     ingredientsPreview: `${(facts.ingredients?.value ?? []).slice(0, 5).join(', ')}${(facts.ingredients?.value.length ?? 0) > 5 ? ', …' : ''}`,
     ingredientsCount: facts.ingredients?.value.length ?? 0,
@@ -216,9 +229,18 @@ export function recallDisplay(recall: RecallCheck | null): Record<string, unknow
   const severity = status === 'exact_active' ? 'alert' : status === 'possible_active' ? 'review' : status === 'unavailable' ? 'review' : 'info';
   const checked = recall?.checkedAt ? new Date(recall.checkedAt) : null;
   const day = checked ? checked.toISOString().slice(0, 10) : '';
+  // The icon says what kind of outcome it is, never a certification: a search that found nothing is neutral.
+  const icon = { exact_active: 'alert', possible_active: 'warning', brand_history: 'history', none_found: 'searched', unavailable: 'error', not_checked: 'unknown' }[status];
+  const match = recall?.records[0]?.match;
   return {
     recallStatusLabel: label,
     recallSeverity: severity,
+    recallIcon: icon,
+    recallCoverage:
+      status === 'not_checked' || status === 'unavailable'
+        ? ''
+        : 'Searched FDA enforcement reports (openFDA, updated weekly) by barcode, then by brand and product name. FDA’s recall web page, manufacturers’ own notices and lot codes were not checked.',
+    recallMatchBasis: match === 'exact_barcode' ? 'barcode' : match === 'brand_and_product' ? 'brand and product name' : match === 'brand_only' ? 'brand only' : '',
     // Only a check that was made says "Checked"; a failed one says when it failed.
     recallCheckedLabel: !checked || status === 'not_checked' ? '' : status === 'unavailable' ? `Check failed on ${day}` : `Checked ${day} in FDA enforcement reports (openFDA, updated weekly)`,
   };

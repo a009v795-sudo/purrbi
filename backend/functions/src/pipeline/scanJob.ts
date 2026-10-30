@@ -28,7 +28,7 @@ import { RESEARCH_RESULTS_IN_USE, RESEARCH_VERSION, researchProduct as researchI
 import { currentCalls, errorDetail, runWithCallLog } from '../util/diagnostics';
 import { SourceError } from '../util/http';
 import { rematchAnalysis } from '../domain/nutrition';
-import { SCAN_STATUS, STUCK_AFTER_MS, WORKING_STATUSES, type ErrorCode, type RuntimeConfig } from './config';
+import { ASSESSMENT_VERSION, SCAN_STATUS, STUCK_AFTER_MS, WORKING_STATUSES, type ErrorCode, type RuntimeConfig } from './config';
 import { corroborateLabel } from './corroborate';
 import { dropStaleImageReads, enrichmentFacts, fillMissing, labelToFacts, missingInfo, type PhotoRequest } from './facts';
 import { explanationFields, highlightFields, jobFields, resultFields, type JobInfo } from './serialize';
@@ -300,7 +300,7 @@ async function publicEvidence(deps: Deps, job: JobInfo, o: AssessOptions, stored
     );
     if (!sister && stored?.facts.sources.length) {
       // The record is gone from the databases: the saved facts stay (never downgraded because a record is absent).
-      job.evidenceNotes.push('Its database record is no longer published; Purrbi’s saved record is used.');
+      job.evidenceNotes.push(stored.origin === 'web' || stored.origin === 'label' ? 'Not in the pet databases; Purrbi’s saved record from earlier research is used (and checked again where it is out of date).' : 'Its database record is no longer published; Purrbi’s saved record is used.');
       return { facts: stored.facts, origin: (stored.origin as DatabaseOrigin) ?? 'label', fetchedPublic: false, notes: [], openFacts: null };
     }
     // Earlier verified enrichment (label images, matched web pages and label photos) is kept in every branch.
@@ -996,9 +996,15 @@ export async function handleScanUpdate(deps: Deps, uid: string, scanId: string, 
   }
   if (rising('refreshPersonalRequested') && [SCAN_STATUS.complete, SCAN_STATUS.needsPhotos].includes(after.status as never)) {
     const job = newJob('refresh', (after.traceId as string) || randomUUID().slice(0, 12), deps.now());
+    // A result saved under older rules (the app asks for a refresh when it opens one) is assessed again in
+    // full: the product's evidence is re-read where its saved record is out of date (bounded by the same
+    // per-product freshness as a scan) and explanations are checked under the current rules. A pet change on
+    // a current result only re-runs the assessment on the saved evidence.
+    const stale = after.assessmentVersion !== ASSESSMENT_VERSION;
+    if (stale) job.evidenceNotes.push(`Re-checked under Purrbi’s current rules (${ASSESSMENT_VERSION}); the earlier result was made under ${typeof after.assessmentVersion === 'string' && after.assessmentVersion ? after.assessmentVersion : 'older rules'}.`);
     await runWithCallLog(async () => {
       try {
-        await runAssessment(deps, job, { uid, scanId, barcode, petId: (after.petId as string) ?? null, allowFetch: false, allowExplain: false, skipPhotos: after.skipPhotos === true || after.status === SCAN_STATUS.complete });
+        await runAssessment(deps, job, { uid, scanId, barcode, petId: (after.petId as string) ?? null, allowFetch: stale, allowExplain: stale, skipPhotos: after.skipPhotos === true || after.status === SCAN_STATUS.complete });
         await ref.update({ refreshPersonalRequested: false });
       } catch (err) {
         // The earlier result stays: the scan is never left "assessing".

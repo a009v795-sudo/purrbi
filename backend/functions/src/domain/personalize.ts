@@ -46,17 +46,26 @@ export function personalize(
     add('review', 'An active FDA recall from this brand may involve this product. Compare the lot codes before feeding.', 'Official notice (openFDA)', 'P-ALERT');
   }
 
-  // P-SPECIES
+  // P-SPECIES: a mismatch is stated only when the product's own evidence confirms who it is for. A
+  // retailer's catalogue title ("Dog Trt …") is not that: it may leave out a second species.
   const productSpecies = scope.species;
-  trace.push({ input: 'species', value: pet.species, rule: 'P-SPECIES', effect: `Compared with the product's labeled species (${productSpecies})` });
+  const ev = scope.speciesEvidence;
+  const confirmed = ev ? ev.confirmed : true;
+  const basisText = ev?.basis === 'retailer_listing' ? 'a retailer’s listing' : ev?.basis === 'manufacturer_page' ? 'the manufacturer' : ev?.basis === 'adequacy_statement' ? 'the label’s feeding statement' : 'the product label';
+  trace.push({ input: 'species', value: pet.species, rule: 'P-SPECIES', effect: `Compared with who the product is for (${productSpecies}${ev ? `, from ${ev.basis.replace(/_/g, ' ')}` : ''})` });
   if (productSpecies === 'unknown') {
-    unresolved.push('We couldn’t confirm which species this product is for.');
+    unresolved.push(ev?.disputed ? ev.note : 'We couldn’t confirm which species this product is for.');
     state = worse(state, 'incomplete');
   } else if (productSpecies !== 'cat_and_dog' && productSpecies !== pet.species) {
-    state = worse(state, 'not_for_species');
-    add('alert', `This product is labeled for ${productSpecies}s, and ${name} is a ${pet.species}.`, 'Product label', 'P-SPECIES');
+    if (confirmed) {
+      state = worse(state, 'not_for_species');
+      add('alert', `This product is made for ${productSpecies}s (${basisText}), and ${name} is a ${pet.species}.`, 'Product label', 'P-SPECIES');
+    } else {
+      state = worse(state, 'review');
+      add('review', `Only ${basisText} says who it is for (${productSpecies}s); Purrbi couldn’t confirm whether it is also for ${pet.species}s.`, 'Retailer listing', 'P-SPECIES');
+    }
   } else {
-    add('positive', `Made for ${pet.species}s.`, 'Product label', 'P-SPECIES');
+    add('positive', productSpecies === 'cat_and_dog' ? `Made for cats and dogs (${basisText}).` : `Made for ${pet.species}s.`, confirmed ? 'Product label' : 'Retailer listing', 'P-SPECIES');
   }
 
   // P-HAZARD: an entry of Purrbi's reviewed list, judged for this pet's species (one finding per entry).
@@ -140,6 +149,7 @@ export function personalize(
 
   // P-ALLERGEN / P-SENSITIVITY / P-AVOID
   const ingredients = productIngredients(facts);
+  const absent: { label: string; rule: string }[] = [];
   const checkList = (status: PetProfile['allergiesStatus'], keys: string[] | undefined, field: string, rule: string, severity: 'mismatch' | 'review') => {
     if (status === 'not_sure') {
       unresolved.push(`You weren’t sure about ${field}; compare the ingredient list with your vet if symptoms appear.`);
@@ -155,20 +165,28 @@ export function personalize(
       trace.push({ input: field, value: allergenLabel(key), rule, effect: m.status });
       if (m.status === 'contains') {
         state = worse(state, severity);
-        add('review', `Contains ${m.matches.join(', ')} — you recorded ${allergenLabel(key)} as ${rule === 'P-ALLERGEN' ? 'an allergy' : 'a sensitivity'}.`, 'Owner-recorded + product label', rule);
+        // A confirmed allergy match is a serious pet-specific conflict (it never changes the general score).
+        add(rule === 'P-ALLERGEN' ? 'alert' : 'review', `Contains ${m.matches.join(', ')} — you recorded ${allergenLabel(key)} as ${rule === 'P-ALLERGEN' ? 'an allergy' : 'a sensitivity'} for ${name}.`, 'Owner-recorded + product label', rule);
       } else if (m.status === 'possible') {
         state = worse(state, 'review');
-        add('review', `Lists ${m.matches.join(', ')}, which may include ${allergenLabel(key)}; the label doesn’t say.`, 'Owner-recorded + product label', rule);
+        // An unspecified source ("natural flavor") is unresolved, never a confirmed match.
+        add('review', `Compatibility with ${name}’s recorded ${allergenLabel(key)} ${rule === 'P-ALLERGEN' ? 'allergy' : 'sensitivity'} is unconfirmed: the source of ${m.matches.join(', ')} isn’t stated on the label.`, 'Owner-recorded + product label', rule);
       } else if (m.status === 'unknown') {
         state = worse(state, 'incomplete');
         unresolved.push(`The ingredient list isn’t available, so ${allergenLabel(key)} couldn’t be checked.`);
       } else {
-        add('positive', `No listed ingredient matches ${allergenLabel(key)} (labels don’t cover cross-contact).`, 'Owner-recorded + product label', rule);
+        absent.push({ label: allergenLabel(key), rule });
       }
     }
   };
   checkList(pet.allergiesStatus, pet.allergies, 'allergies', 'P-ALLERGEN', 'mismatch');
   checkList(pet.sensitivitiesStatus, pet.sensitivities, 'suspected sensitivities', 'P-SENSITIVITY', 'review');
+  // One qualified line for everything not on the list (it is not an allergen-free claim).
+  if (absent.length) {
+    const labels = [...new Set(absent.map((a) => a.label))];
+    const list = labels.length === 1 ? `${labels[0]} isn’t` : `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]} aren’t`;
+    add('positive', `${list[0].toUpperCase()}${list.slice(1)} on the ingredient list Purrbi found (labels don’t cover cross-contact during manufacturing).`, 'Owner-recorded + product label', absent[0].rule);
+  }
 
   for (const key of pet.avoidIngredients ?? []) {
     const m = matchAllergen(key, ingredients);
