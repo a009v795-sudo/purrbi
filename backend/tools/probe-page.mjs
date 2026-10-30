@@ -39,6 +39,12 @@ for (const url of urls) {
     entry.speciesWords = { cat: (t.match(/\bcats?\b|\bkittens?\b|\bfeline\b/gi) ?? []).length, dog: (t.match(/\bdogs?\b|\bpupp(y|ies)\b|\bcanine\b/gi) ?? []).length };
     const ga = /guaranteed analysis\s*[:：]?\s*(.{10,400}?)(ingredients|calorie|feeding|$)/i.exec(t);
     entry.guaranteedAnalysis = ga ? ga[1].trim().slice(0, 300) : null;
+    // EU labels: "Constituants analytiques", "Analytische Bestandteile", "Componentes analíticos", … (every occurrence).
+    entry.analyticalConstituents = [...t.matchAll(/(constituants analytiques|composants analytiques|analytical constituents|analytische bestandteile|componentes anal[ií]ticos|componenti analitici|analytische bestanddelen|constituintes anal[ií]ticos)\s*[:：]?\s*(.{10,400})/gi)]
+      .map((m) => `${m[1]}: ${m[2]}`.slice(0, 420))
+      .slice(0, 4);
+    // Where protein is mentioned with a number (marketing copy often gives protein alone).
+    entry.proteinMentions = [...t.matchAll(/.{0,80}prot[eé]in[a-z]*.{0,80}/gi)].map((m) => m[0]).filter((x) => /\d/.test(x)).slice(0, 6);
     const aafco = /(formulated to meet[^.]{10,200}\.|complete and balanced[^.]{0,200}\.)/i.exec(t);
     entry.adequacy = aafco ? aafco[1].slice(0, 250) : null;
   } catch (e) {
