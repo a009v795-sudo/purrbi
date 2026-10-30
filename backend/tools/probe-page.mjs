@@ -9,7 +9,9 @@ const UA = 'Purrbi/0.1 (page probe; contact@valenciainnovations.com)';
 const args = process.argv.slice(2);
 const bi = args.indexOf('--barcode');
 const barcode = bi >= 0 ? args[bi + 1] : null;
-const urls = args.filter((a, i) => /^https:\/\//.test(a) && i !== bi + 1);
+const fi = args.indexOf('--find');
+const find = fi >= 0 ? args[fi + 1] : null; // a phrase looked for in the raw HTML (where a page keeps a section)
+const urls = args.filter((a, i) => /^https:\/\//.test(a) && i !== bi + 1 && i !== fi + 1);
 
 const text = (html) =>
   html
@@ -70,6 +72,11 @@ for (const url of urls) {
     }
     entry.speciesWords = { cat: (t.match(/\bcats?\b|\bkittens?\b|\bfeline\b/gi) ?? []).length, dog: (t.match(/\bdogs?\b|\bpupp(y|ies)\b|\bcanine\b/gi) ?? []).length };
     entry.windows = windows(t);
+    if (find) {
+      const at = [...html.matchAll(new RegExp(find.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+'), 'gi'))].slice(0, 3);
+      entry.found = at.map((m) => html.slice(Math.max(0, m.index - 400), m.index + 900).replace(/\s+/g, ' '));
+      entry.foundInText = new RegExp(find.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+'), 'i').test(t);
+    }
     // Shopify stores publish the product (variants with barcodes, description) at <product url>.js.
     if (/\/products\/[^/?#]+\/?$/.test(new URL(res.url).pathname)) {
       try {

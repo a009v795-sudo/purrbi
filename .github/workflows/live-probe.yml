@@ -11,6 +11,10 @@ on:
         description: Product page URLs to read (optional, space separated); the first barcode is looked for on them
         required: false
         default: ''
+      find:
+        description: A phrase to locate in the pages' raw HTML (optional)
+        required: false
+        default: ''
 
 jobs:
   probe:
@@ -31,4 +35,5 @@ jobs:
         env:
           URLS: ${{ inputs.urls }}
           BARCODES: ${{ inputs.barcodes }}
-        run: node backend/tools/probe-page.mjs $URLS --barcode ${BARCODES%% *}
+          FIND: ${{ inputs.find }}
+        run: node backend/tools/probe-page.mjs $URLS --barcode ${BARCODES%% *} ${FIND:+--find "$FIND"}
