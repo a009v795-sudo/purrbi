@@ -1,5 +1,5 @@
 // Merging product facts from several sources and deciding what is still missing.
-import { misreadBy21, type ValidatedLabel } from '../ai/labelExtract';
+import { ingredientsInUse, rowsInUse21, type ValidatedLabel } from '../ai/labelExtract';
 import { hasCoreGuaranteedAnalysis } from '../domain/nutrition';
 import type { ProductCategory, ProductFacts, ScopeResult, SourceRef } from '../domain/types';
 
@@ -41,11 +41,13 @@ const ENRICHMENT_SOURCES = new Set(['database_image', 'manufacturer', 'retailer_
  * by a label reader no longer in use, and facts or statements taken from web pages by older research rules.
  */
 export function dropStaleImageReads(facts: ProductFacts, readersInUse: ReadonlySet<string>, researchInUse?: ReadonlySet<string>): { facts: ProductFacts; dropped: string[]; setAside: string[] } {
-  // An analysis read by label reader 2.1.0 with a row it may have misread: a database image's is read again
-  // (dropped); a matched label photo's, which cannot be read again, keeps only its other rows.
+  // What label reader 2.1.0 read, as the current rules use it. An analysis with a row it may have misread:
+  // a database image's is read again (dropped); a matched label photo's, which cannot be read again, keeps
+  // only its plain rows. An ingredient list it let run into an analysis is cut again.
   const ga = facts.guaranteedAnalysis;
-  if (ga && ga.source.readerVersion === 'label-extract-2.1.0' && ga.value.some(misreadBy21)) {
-    const kept = ga.value.filter((e) => !misreadBy21(e));
+  const from21 = (f: { source: SourceRef } | undefined) => f?.source.readerVersion === 'label-extract-2.1.0';
+  const kept = ga && from21(ga) ? rowsInUse21(ga.value) : null;
+  if (ga && kept && kept.length < ga.value.length) {
     const out: ProductFacts = { ...facts };
     const reread = ga.source.sourceType === 'database_image';
     if (reread || !kept.length) delete out.guaranteedAnalysis;
@@ -54,6 +56,19 @@ export function dropStaleImageReads(facts: ProductFacts, readersInUse: ReadonlyS
     const n = ga.value.length - kept.length;
     const note = `${n} analysis row${n === 1 ? '' : 's'} from ${ga.source.sourceName} that the earlier label reader may have misread ${n === 1 ? 'was' : 'were'} set aside${reread ? '; the image is read again' : ''}`;
     return { facts: rest.facts, dropped: rest.dropped, setAside: [note, ...rest.setAside] };
+  }
+  const list = facts.ingredientsText && from21(facts.ingredientsText) ? ingredientsInUse(facts.ingredientsText.value) : null;
+  if (list && list.text !== facts.ingredientsText!.value) {
+    const out: ProductFacts = { ...facts };
+    if (list.ingredients.length) {
+      out.ingredientsText = { ...facts.ingredientsText!, value: list.text };
+      out.ingredients = { value: list.ingredients, source: facts.ingredientsText!.source };
+    } else {
+      delete out.ingredientsText;
+      delete out.ingredients;
+    }
+    const rest = dropStaleImageReads(out, readersInUse, researchInUse);
+    return { facts: rest.facts, dropped: rest.dropped, setAside: [`The ingredient list from ${facts.ingredientsText!.source.sourceName} was cut where its analysis starts (the earlier label reader ran on into it)`, ...rest.setAside] };
   }
   const stale = (s: SourceRef | undefined) =>
     (s?.sourceType === 'database_image' && !readersInUse.has(s.readerVersion ?? '')) ||

@@ -43,6 +43,7 @@ import {
   readProductMeta,
   readVerdict,
   recordContribution,
+  restageLabelPhoto,
   saveLabelExtraction,
   saveVerdict,
   stripPrivate,
@@ -362,7 +363,19 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   const inputsAt = deps.now();
   const extractions = (await readLabelExtractions(db, o.uid, gtin)).filter((e) => e.label.status === 'processed');
   // Readings by an earlier reader still in use, without the rows it may have misread.
-  const current = extractions.filter((e) => LABEL_READINGS_IN_USE.has(e.label.version ?? '')).map((e) => ({ ...e, label: readingInUse(e.label) }));
+  // A reading whose rows changed is compared with the public record again: a conflict that came only from a
+  // row set aside no longer disputes it (the photo's stage and note are updated too).
+  const current = await Promise.all(
+    extractions
+      .filter((e) => LABEL_READINGS_IN_USE.has(e.label.version ?? ''))
+      .map(async (e) => {
+        const label = readingInUse(e.label);
+        if (label === e.label) return { ...e, label };
+        const c = corroborateLabel(label, facts);
+        if (c.stage !== e.stage) await restageLabelPhoto(db, o.uid, gtin, e.photoId, c);
+        return { ...e, label, stage: c.stage, agreements: c.agreements, conflicts: c.conflicts };
+      }),
+  );
   const setAsideRows = extractions.reduce((n, e) => n + (LABEL_READINGS_IN_USE.has(e.label.version ?? '') ? e.label.guaranteedAnalysis.length - readingInUse(e.label).guaranteedAnalysis.length : 0), 0);
   if (setAsideRows) job.diagnosticNotes.push(`${setAsideRows} analysis row${setAsideRows === 1 ? '' : 's'} of your label photo${setAsideRows === 1 ? '' : 's'} that the earlier label reader may have misread ${setAsideRows === 1 ? 'was' : 'were'} set aside.`);
   // A reading verified against this barcode fills gaps in the shared record (backend only, no account id).
@@ -441,7 +454,9 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
     }
     meta.enrichment.databaseImagesAt = now;
     // Definitive outcomes of earlier attempts are kept, so a panel already found unreadable is not read again.
-    const keep = (prev: string[] | undefined, next: string[]) => [...new Set([...(prev ?? []).filter((x) => !next.some((y) => panelOf(y) === panelOf(x))), ...next])];
+    // Outcomes of earlier attempts are kept, except the earlier reader's nutrition panel (read again by this one,
+    // and retried after a technical failure like any other panel).
+    const keep = (prev: string[] | undefined, next: string[]) => [...new Set([...(prev ?? []).filter((x) => !next.some((y) => panelOf(y) === panelOf(x)) && !(earlierReader && panelOf(x) === 'nutrition')), ...next])];
     meta.enrichment.databaseImages = { read: keep(lastImages?.read, r.read), skipped: keep(lastImages?.skipped, r.skipped), failed: r.failed ?? [], version: LABEL_EXTRACTION_VERSION };
     job.diagnosticNotes.push(...r.skipped.slice(0, 4).map((x) => `Database label image ${x}`), ...(r.failed ?? []).slice(0, 2).map((x) => `Database label image not read (tried again later): ${x}`));
     metaChanged = true;
@@ -484,6 +499,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       metaChanged = true;
       const pageKind = src?.sourceType === 'manufacturer' ? 'manufacturer page' : 'web page';
       if (r.facts && r.verified?.length) job.evidenceNotes.push(...r.verified);
+      if (r.analysisNote && filled.includes('guaranteedAnalysis')) job.evidenceNotes.push(r.analysisNote);
       const confirmed = r.facts?.classificationSignals?.find((c) => c.kind === 'research' && /^intended for /.test(c.text))?.text;
       if (confirmed && src) job.evidenceNotes.push(`${src.sourceName} (${pageKind}) says it is ${confirmed}; checked on the page.`);
       job.evidenceNotes.push(

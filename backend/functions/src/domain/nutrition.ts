@@ -6,7 +6,7 @@ import type { CalorieStatement, CaloriePer, GuaranteedAnalysisEntry, NutrientKey
 // "analytical constituents" terms in French, German, Spanish/Portuguese, Italian and Dutch.
 const NUTRIENT_PATTERNS: [RegExp, NutrientKey][] = [
   [/\b(crude )?protein\b|\bprotei(ne|nes|na|nas)\b|\brohprotein\b|\b(ruw )?eiwit\b/, 'crude_protein'],
-  [/\b(crude )?fat\b|\bfat content\b|\boils and fats\b|\bmatieres? grasses?\b|\bgraisses?\b|\blipides?\b|\brohfett\b|\bfett(gehalt)?\b|\bgrasas?\b|\bmateria grasa\b|\bgrass[io]\b|\b(ruw )?vet(gehalte)?\b|\bgordura\b/, 'crude_fat'],
+  [/\b(crude )?fat\b|\bfat content\b|\b(crude )?oils and fats\b|\bmatieres? grasses?\b|\bgraisses?\b|\blipides?\b|\brohfett\b|\bfett(gehalt)?\b|\bgrasas?\b|\bmateria grasa\b|\bmateria grassa\b|(?<!\bacidi )\bgrass[io]\b|\b(ruw )?vet(gehalte)?\b|\bgordura\b/, 'crude_fat'],
   [/\b(crude )?fib(er|re)s?\b|\bcellulose brute\b|\brohfaser\b|\bfibras?\b|\bruwe? (celstof|vezels?)\b/, 'crude_fiber'],
   [/\bmoisture\b|\bwater\b|\bhumidite\b|\bfeuchtigkeit\b|\bfeuchte\b|\bwasser(gehalt)?\b|\bhumedad\b|\bhumidade\b|\bumidita\b|\bvocht(gehalte)?\b/, 'moisture'],
   [/\b(crude )?ash\b|\binorganic matter\b|\bcendres?\b|\bmatieres? minerales?\b|\brohasche\b|\bcenizas?\b|\bcinzas?\b|\bmateria (mineral|inorganica)\b|\bceneri\b|\bruwe as\b/, 'ash'],
@@ -37,15 +37,24 @@ export function plainLabel(label: string): string {
 export function nutrientKeyFromLabel(label: string): NutrientKey {
   const t = plainLabel(label);
   if (COMPOUND.test(t)) return 'other';
-  for (const [re, key] of NUTRIENT_PATTERNS) if (re.test(t)) return key;
+  for (const [re, key] of NUTRIENT_PATTERNS) if (re.test(t) && !(key === 'crude_fiber' && FIBRE_FRACTION.test(t))) return key;
   return 'other';
 }
+
+// A fibre fraction (total dietary, soluble, insoluble fibre) is not the crude fibre guarantee.
+const FIBRE_FRACTION = /\b(?:total dietary|dietary|soluble|insoluble)\s+fib(?:er|re)s?\b|\bfib(?:er|re)s?\s+(?:alimentaires?|solubles?|insolubles?)\b|\bballaststoff|\bfibra (?:alimentaria|dietetica|soluble|insoluble)\b/;
 
 /** Every nutrient a label names: a label naming two ("Calcium/Phosphore", a name carried onto another row's) is ambiguous; a compound names none. */
 export function nutrientKeysIn(label: string): NutrientKey[] {
   const t = plainLabel(label);
   if (COMPOUND.test(t)) return [];
-  return NUTRIENT_PATTERNS.filter(([re]) => re.test(t)).map(([, key]) => key);
+  return NUTRIENT_PATTERNS.filter(([re, key]) => re.test(t) && !(key === 'crude_fiber' && FIBRE_FRACTION.test(t))).map(([, key]) => key);
+}
+
+/** Whether a label starts with a nutrient's name ("Crude" + "Protein" does; "complet" + "Protéine" does not). */
+export function startsWithNutrientName(label: string): boolean {
+  const t = plainLabel(label);
+  return !COMPOUND.test(t) && NUTRIENT_PATTERNS.some(([re]) => re.exec(t)?.index === 0);
 }
 
 /**

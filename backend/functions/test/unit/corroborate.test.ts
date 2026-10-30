@@ -21,6 +21,8 @@ describe('label photo stages', () => {
     expect(corroborateLabel(reading({ adequacy: f.adequacy!.value, calories: [{ kcal: 3800, per: 'kg' }] }), f).note).toBe(soFar);
     expect(corroborateLabel(reading({ ingredients: ['Chicken', 'chicken meal', 'brown rice'] }), f).note).toBe(soFar); // three in order: too few
     expect(corroborateLabel(reading({ guaranteedAnalysis: GA_FULL.slice(0, 1) }), f).note).toBe(soFar); // one guarantee: too few
+    // A newer bag sharing 4 of its first 6 ingredients with the record, in order: neither confirmed nor disputed.
+    expect(corroborateLabel(reading({ ingredients: ['Chicken', 'chicken meal', 'peas', 'brown rice', 'lentils', 'chicken fat (preserved with mixed tocopherols)'] }), f).note).toBe('Read twice, with the same result. Part of it agrees with this barcode’s public record; not enough to confirm it yet.');
     // The front's name ("ONE") is not the record's, but the calories printed on the front are.
     expect(corroborateLabel(reading({ productName: 'ONE', calories: [{ kcal: 3800, per: 'kg' }] }), f).note).toBe('Read twice, with the same result. Part of it agrees with this barcode’s public record; not enough to confirm it yet.');
   });

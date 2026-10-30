@@ -824,5 +824,249 @@
    "ash:5.5%",
    "moisture:10%"
   ]
+ },
+ {
+  "id": "R01 Italian additives heading after the analysis",
+  "pct": false,
+  "text": "Componenti analitici: proteina grezza 32 %, grassi grezzi 15 %, ceneri grezze 7 %, fibra grezza 2,5 %, umidità 8 %.\nAdditivi nutrizionali: vitamina A 25.000 UI/kg, taurina 2.000 mg/kg.",
+  "expect": [
+   "crude_protein:32%",
+   "crude_fat:15%",
+   "ash:7%",
+   "crude_fiber:2.5%",
+   "moisture:8%"
+  ]
+ },
+ {
+  "id": "R02 French additives heading with a bracket wrapped across lines",
+  "pct": false,
+  "text": "Constituants analytiques : Protéine 32 %, Matières grasses 15 %. Additifs (au\nkg) : Vitamine A 21000 UI/kg, Taurine 2000 mg/kg.",
+  "expect": [
+   "crude_protein:32%",
+   "crude_fat:15%"
+  ]
+ },
+ {
+  "id": "R03 Spanish and per-kg additives headings",
+  "pct": false,
+  "text": "Componentes analíticos: proteína bruta 30 %, grasa bruta 16 %.\nAditivos nutricionales: vitamina A 18.000 UI/kg.\nAdditives per kg: Taurine 1500 mg.",
+  "expect": [
+   "crude_protein:30%",
+   "crude_fat:16%"
+  ]
+ },
+ {
+  "id": "R04 values before names, after a \"Min.\" line",
+  "pct": false,
+  "text": "GUARANTEED ANALYSIS\nMin.\n30% Crude Protein\n18% Crude Fat\nMax.\n4% Crude Fiber\n10% Moisture",
+  "expect": [],
+  "why": "values printed before their names: which is whose is unclear"
+ },
+ {
+  "id": "R05 values before names, inline",
+  "pct": false,
+  "text": "Guaranteed Analysis - Minimum: 30% Crude Protein, 18% Crude Fat; Maximum: 4% Crude Fiber, 10% Moisture",
+  "expect": [],
+  "why": "values printed before their names: which is whose is unclear"
+ },
+ {
+  "id": "R06 a dry-matter list introduced by its own line",
+  "pct": false,
+  "text": "Guaranteed Analysis\nCrude Protein (min) 10%\nCrude Fat (min) 5%\nMoisture (max) 78%\nDry Matter Basis\nProtein 45%\nFat 22%",
+  "expect": [
+   "crude_protein:10%:min",
+   "crude_fat:5%:min",
+   "moisture:78%:max"
+  ]
+ },
+ {
+  "id": "R07 a \"Dry Matter Analysis:\" heading",
+  "pct": false,
+  "text": "Guaranteed Analysis\nCrude Protein (min) 10%\nCrude Fat (min) 5%\nMoisture (max) 78%\nDry Matter Analysis:\nProtein 45%\nFat 22%",
+  "expect": [
+   "crude_protein:10%:min",
+   "crude_fat:5%:min",
+   "moisture:78%:max"
+  ]
+ },
+ {
+  "id": "R08 Canadian table with the French name under each row",
+  "pct": false,
+  "text": "GUARANTEED ANALYSIS / ANALYSE GARANTIE\nCrude Protein (min.) 30.0%\nProtéines brutes (min.)\nCrude Fat (min.) 18.0%\nMatières grasses brutes (min.)\nLinoleic Acid (min.) 3.0%\nAcide linoléique (min.)\nCrude Fiber (max.) 3.0%\nCellulose brute (max.)\nMoisture (max.) 10.0%\nHumidité (max.)\nVitamin E (min.) 150 IU/kg\nVitamine E (min.)",
+  "expect": [
+   "crude_protein:30%:min",
+   "crude_fat:18%:min",
+   "other:3%:min",
+   "crude_fiber:3%:max",
+   "moisture:10%:max",
+   "other:150IU/kg:min"
+  ]
+ },
+ {
+  "id": "R09 a complete name above another row",
+  "pct": false,
+  "text": "Crude Fat (min)\nLinoleic Acid (min) 3.5%",
+  "expect": [
+   "other:3.5%:min"
+  ]
+ },
+ {
+  "id": "R10 a group sub-heading above a row",
+  "pct": false,
+  "text": "Water-soluble vitamins\nVitamin C (min) 50 mg/kg",
+  "expect": [
+   "other:50mg/kg:min"
+  ]
+ },
+ {
+  "id": "R11 an analysis heading broken across lines, inline",
+  "pct": false,
+  "text": "Composition : poulet (26 %), riz, maïs. Constituants\nanalytiques : Protéine 32 %, Matières grasses 15 %, Cendres brutes 7 %.",
+  "expect": [
+   "crude_protein:32%",
+   "crude_fat:15%",
+   "ash:7%"
+  ]
+ },
+ {
+  "id": "R12 an analysis heading broken across lines, one row per line",
+  "pct": false,
+  "text": "Composition : poulet (26 %), riz, maïs.\nConstituants\nanalytiques :\nProtéine 30 %\nMatières grasses 15 %\nCendres brutes 7 %",
+  "expect": [
+   "crude_protein:30%",
+   "crude_fat:15%",
+   "ash:7%"
+  ]
+ },
+ {
+  "id": "R13 a \"min\" wrapped onto the next line",
+  "pct": false,
+  "text": "Guaranteed Analysis: Crude Protein 10.0% min, Crude Fat 6.0%\nmin, Crude Fiber 1.0% max, Moisture 78.0% max.",
+  "expect": [
+   "crude_protein:10%:min",
+   "crude_fat:6%:min",
+   "crude_fiber:1%:max",
+   "moisture:78%:max"
+  ]
+ },
+ {
+  "id": "R14 total dietary fibre next to crude fibre",
+  "pct": false,
+  "text": "Crude Protein (min) 30.0%\nCrude Fat (min) 9.0%\nCrude Fiber (max) 11.0%\nTotal Dietary Fiber (max) 20.0%\nMoisture (max) 10.0%",
+  "expect": [
+   "crude_protein:30%:min",
+   "crude_fat:9%:min",
+   "crude_fiber:11%:max",
+   "other:20%:max",
+   "moisture:10%:max"
+  ]
+ },
+ {
+  "id": "R15 total dietary fibre, EU inline",
+  "pct": false,
+  "text": "Analytical constituents: Protein 34% - Fat content 9% - Crude ash 7.3% - Crude fibres 15.4% - Moisture 5.5% - Total dietary fibre 26.2%",
+  "expect": [
+   "crude_protein:34%",
+   "crude_fat:9%",
+   "ash:7.3%",
+   "crude_fiber:15.4%",
+   "moisture:5.5%",
+   "other:26.2%"
+  ]
+ },
+ {
+  "id": "R16 Italian fatty acids are not fat",
+  "pct": false,
+  "text": "Componenti analitici\nProteina grezza 32 %\nGrassi grezzi 15 %\nAcidi grassi Omega-3 0,5 %\nAcidi grassi Omega-6 3,2 %",
+  "expect": [
+   "crude_protein:32%",
+   "crude_fat:15%",
+   "omega_3:0.5%",
+   "omega_6:3.2%"
+  ]
+ },
+ {
+  "id": "R17 Italian \"materia grassa\" and essential fatty acids",
+  "pct": false,
+  "text": "Componenti analitici: proteina grezza 30 %, materia grassa grezza 15 %, ceneri grezze 7 %, fibra grezza 2 %, umidità 8 %, acidi grassi essenziali 4 %.",
+  "expect": [
+   "crude_protein:30%",
+   "crude_fat:15%",
+   "ash:7%",
+   "crude_fiber:2%",
+   "moisture:8%",
+   "other:4%"
+  ]
+ },
+ {
+  "id": "R18 a name wrapped inside its brackets",
+  "pct": false,
+  "text": "Crude Protein (min) 30.0%\nDHA (Docosahexaenoic\nAcid)* (min) 0.10%",
+  "expect": [
+   "crude_protein:30%:min",
+   "dha:0.1%:min"
+  ]
+ },
+ {
+  "id": "R19 a French name wrapped inside its brackets",
+  "pct": false,
+  "text": "Cendres brutes (matières\nminérales) 7 %\nCellulose brute 3 %",
+  "expect": [
+   "ash:7%",
+   "crude_fiber:3%"
+  ]
+ },
+ {
+  "id": "R20 a Swedish block after the analysis",
+  "pct": false,
+  "text": "Analytical constituents: Protein 30%, Fat content 15%, Crude ash 7%, Crude fibres 2%, Moisture 8%.\nSE Sammansättning: kyckling 26 %, ris, animaliskt fett 5 %, hydrolyserat protein 3 %.",
+  "expect": [
+   "crude_protein:30%",
+   "crude_fat:15%",
+   "ash:7%",
+   "crude_fiber:2%",
+   "moisture:8%"
+  ]
+ },
+ {
+  "id": "R21 a Polish block after the analysis",
+  "pct": false,
+  "text": "Analytical constituents: Protein 8%, Fat content 4.5%, Crude ash 2.5%, Crude fibres 0.3%, Moisture 82%.\nPL Skład: mięso i produkty pochodzenia zwierzęcego (40%, w tym 4% kurczaka), zboża. Składniki analityczne: białko 8%, tłuszcz 4,5%, popiół surowy 2,5%.",
+  "expect": [
+   "crude_protein:8%",
+   "crude_fat:4.5%",
+   "ash:2.5%",
+   "crude_fiber:0.3%",
+   "moisture:82%"
+  ]
+ },
+ {
+  "id": "R22 an \"Analytical composition\" heading",
+  "pct": false,
+  "text": "Analytical composition:\nProtein 30%\nFat content 15%\nCrude ash 7%",
+  "expect": [
+   "crude_protein:30%",
+   "crude_fat:15%",
+   "ash:7%"
+  ]
+ },
+ {
+  "id": "R23 a \"Nutritional composition\" heading",
+  "pct": false,
+  "text": "Nutritional composition\nProtein 30%\nFat content 15%",
+  "expect": [
+   "crude_protein:30%",
+   "crude_fat:15%"
+  ]
+ },
+ {
+  "id": "R24 the next name wrapped after its first word",
+  "pct": false,
+  "text": "Guaranteed Analysis: Crude Fat (min) 16.0%, Zinc (min) 150 mg/kg, Crude\nProtein (min) 30.0%",
+  "expect": [
+   "crude_fat:16%:min",
+   "other:150mg/kg:min",
+   "crude_protein:30%:min"
+  ]
  }
 ]

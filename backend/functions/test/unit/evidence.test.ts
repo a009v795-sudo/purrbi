@@ -332,7 +332,27 @@ describe('manufacturer research', () => {
     expect(r.facts?.adequacy?.value).toMatchObject({ type: 'complete', species: 'cat', lifeStages: ['adult_maintenance'] });
     // The model's answer gave protein and fat; the analysis printed on the page also gives fibre ("3,5 %").
     expect(r.facts?.guaranteedAnalysis?.value.map((g) => `${g.nutrient}:${g.value}`)).toEqual(['crude_protein:34', 'crude_fat:12.5', 'crude_fiber:3.5']);
-    expect(r.verified).toEqual(['Read the analysis printed on purina.fr (3 rows).']);
+    expect(r.verified).toEqual([]);
+    expect(r.analysisNote).toBe('Read the analysis printed on purina.fr (3 rows).'); // shown only when the result uses it
+  });
+  it('reads the printed analysis only from a page shown to be this product, not from another variant fetched with it', async () => {
+    // As reproduced in review: the first page is the brand's page of another flavour; the second, a retailer's
+    // page showing this barcode, prints the answer's values.
+    const variant = PAGE.replace(/Saumon/g, 'Poulet').replace(/34 %/, '37 %').replace('12,5 %', '14 %').replace('3,5 %', '2,5 %');
+    const retailer = `<html><body><h1>PURINA ONE® Stérilisé Croquettes au Saumon</h1><p>EAN 7613032759155</p><h2>Composition</h2><p>Saumon (17%), protéines de volaille déshydratées, blé, maïs</p><h2>Constituants analytiques</h2><p>Protéine : 34 %, Matières grasses brutes : 12,5 %, Cellulose brute : 3,5 %</p></body></html>`;
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => (url.startsWith('https://api.openai.com/')
+      ? new Response(JSON.stringify({ output: [{ type: 'web_search_call' }, { type: 'message', content: [{ type: 'output_text', text: JSON.stringify(answer({ source_urls: ['https://www.purina.fr/chat/purina-one-sterilise-poulet', 'https://www.shop.example/purina-one-saumon'] })), annotations: [] }] }] }), { status: 200 })
+      : new Response(url.includes('poulet') ? variant : retailer, { status: 200 }))));
+    const r = await run();
+    expect(r.sources[0]).toMatchObject({ sourceName: 'shop.example', matchConfidence: 'exact_barcode' });
+    expect(r.facts?.guaranteedAnalysis?.value.map((g) => g.value)).toEqual([34, 12.5, 3.5]);
+    expect(r.verified).toContain('shop.example shows this product’s barcode.');
+  });
+  it('a heading mentioned without rows (a tab bar) does not hide the page’s analysis', async () => {
+    const { pageAnalysis } = await import('../../src/sources/research');
+    expect(pageAnalysis('Description Ingredients Guaranteed Analysis Feeding Instructions Reviews ... Guaranteed Analysis Crude Protein (min) 26.0%, Crude Fat (min) 16.0%, Crude Fiber (max) 4.0%').map((g) => `${g.nutrient}:${g.value}`)).toEqual(['crude_protein:26', 'crude_fat:16', 'crude_fiber:4']);
+    // A retailer's table: the header cells are not part of the first row's name.
+    expect(pageAnalysis('Guaranteed Analysis Nutrient Guaranteed Units Crude Protein 26.0% Min Crude Fat 16.0% Min').map((g) => g.label)).toEqual(['Crude Protein', 'Crude Fat']);
   });
   it('prefers the analysis printed on the page to an answer that disagrees with it', async () => {
     // The answer's value is nowhere on the page: the page's own analysis is used, and the note says so.
@@ -380,7 +400,7 @@ describe('manufacturer research', () => {
       : new Response(page5, { status: 200 }))));
     const recipe = await run({ knownSpecies: 'unknown', knownIngredients: ['Saumon (17%)', 'protéines de volaille déshydratées', 'blé', 'maïs', 'graisses animales'] });
     expect(recipe.facts?.classificationSignals?.map((c) => c.text)).toContain('intended for cats');
-    expect(recipe.verified).toEqual(['Same recipe on purina.fr: 5 of the first 5 ingredients match the database record in order (Saumon (17%), protéines de volaille déshydratées, blé, maïs …).', 'Read the analysis printed on purina.fr (3 rows).']);
+    expect(recipe.verified).toEqual(['Same recipe on purina.fr: 5 of the first 5 ingredients match the database record in order (Saumon (17%), protéines de volaille déshydratées, blé, maïs …).']);
   });
   it('says what it looked for when the page does not show the product', async () => {
     stub(answer({ product_name: 'Purina Gourmet Gold Mousse au Thon' }));

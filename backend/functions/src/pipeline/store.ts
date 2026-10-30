@@ -313,6 +313,14 @@ export async function saveLabelExtraction(db: Firestore, uid: string, gtin: stri
   );
 }
 
+/** A saved reading staged again (its rows changed under the current rules): the reading and the photo say so. */
+export async function restageLabelPhoto(db: Firestore, uid: string, gtin: string, photoId: string, c: { stage: string; agreements: string[]; conflicts: string[]; note: string }): Promise<void> {
+  const batch = db.batch();
+  batch.set(db.doc(`users/${uid}/labelFacts/${gtin}`), { extractions: { [photoId]: { stage: c.stage, agreements: c.agreements, conflicts: c.conflicts } } }, { merge: true });
+  batch.set(db.doc(`users/${uid}/photos/${photoId}`), { stage: c.stage, stageNote: c.note, statusMessage: c.stage === 'disputed' ? 'Label read, but it doesn’t match this barcode’s record' : 'Label read' }, { merge: true });
+  await batch.commit();
+}
+
 /** Audit entry for label facts an owner's verified photo added to the shared record (no account id: a one-way hash). */
 export async function recordContribution(db: Firestore, gtin: string, c: { photoKey: string; contributor: string; fields: string[]; agreements: string[]; traceId: string; now: Date }): Promise<void> {
   await db.doc(`products/${gtin}/contributions/${c.photoKey}`).set({ contributor: c.contributor, fields: c.fields, agreements: c.agreements, traceId: c.traceId, at: Timestamp.fromDate(c.now) });

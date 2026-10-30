@@ -30,9 +30,10 @@ export function corroborateLabel(label: ValidatedLabel, record: ProductFacts | n
   const agreements: string[] = [];
   const conflicts: string[] = [];
   let tied = false;
-  // For the note when nothing confirms the photo yet: what both show, and whether it agrees so far.
+  // For the note when nothing confirms the photo yet: what both show, and whether it agrees so far or in part.
   let compared = 0;
   let agreeing = 0;
+  let partly = 0;
   if (label.barcodeMatch) {
     agreements.push('the barcode on the photo is the scanned one');
     tied = true;
@@ -48,8 +49,11 @@ export function corroborateLabel(label: ValidatedLabel, record: ProductFacts | n
     } else if (r.compared >= 5 && r.same / r.compared < 0.6) {
       conflicts.push(`its ingredient list differs from this barcode’s record (${r.same} of the first ${r.compared} match)`);
     }
-    compared++;
-    if (r.compared > 0 && r.same === r.compared) agreeing++; // the same so far, if too few to confirm
+    if (r.compared > 0) {
+      compared++;
+      if (r.same === r.compared) agreeing++; // the same so far, if too few to confirm
+      else if (r.same > 0) partly++; // a newer bag, or a cut-off photo
+    }
   }
 
   const analysis = pub(record?.guaranteedAnalysis);
@@ -108,7 +112,7 @@ export function corroborateLabel(label: ValidatedLabel, record: ProductFacts | n
     ? 'Read twice, with the same result. Nothing public to compare it with yet.'
     : agreeing === compared
       ? 'Read twice, with the same result. It agrees with this barcode’s public record so far, but not enough to confirm it.'
-      : agreeing
+      : agreeing || partly
         ? 'Read twice, with the same result. Part of it agrees with this barcode’s public record; not enough to confirm it yet.'
         : 'Read twice, with the same result. What it shows could not be matched to this barcode’s public record yet.';
   return { stage: 'extracted', agreements, conflicts, note };

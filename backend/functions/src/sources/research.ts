@@ -120,9 +120,11 @@ export function pageAnalysis(plain: string): GuaranteedAnalysisEntry[] {
     const end = body.search(PAGE_SECTION_END);
     return validateGuaranteedAnalysis(analysisRows(`${h[0]} ${end >= 0 ? body.slice(0, end) : body}`, false)).valid;
   });
+  // A heading mentioned without rows under it (a tab bar, a menu) is not another analysis.
+  const read = sections.filter((rows) => rows.length);
   const key = (rows: GuaranteedAnalysisEntry[]) => rows.map((r) => `${r.nutrient}:${r.value}${r.unit}`).join('|');
-  if (!sections.length || !sections[0].length || sections.some((s) => key(s) !== key(sections[0]))) return [];
-  return sections[0];
+  if (!read.length || read.some((rows) => key(rows) !== key(read[0]))) return [];
+  return read[0];
 }
 
 const coreRows = (rows: GuaranteedAnalysisEntry[]) => CORE_GA.filter((k) => rows.some((r) => r.nutrient === k && r.unit === '%')).length;
@@ -173,6 +175,7 @@ export interface ResearchOutcome {
   discarded: string[];
   model: string;
   verified?: string[]; // how the page was matched to this product (barcode shown, same recipe), for the evidence notes
+  analysisNote?: string; // the analysis printed on the page was read: for the evidence notes when the result uses it
   /** No candidate page could be reached (timeout, 429, 5xx): a technical failure, tried again soon, not a negative. */
   fetchFailed?: boolean;
 }
@@ -261,7 +264,14 @@ async function researchAttempt(opts: ResearchOptions, user: string): Promise<Res
     return { facts: null, sources: [], discarded: [...discarded, `the cited page does not show this product’s barcode or its brand and name (${sought})`], model };
   }
 
-  const page = pages[0];
+  // The source is a page shown to be this product by itself: the one with the barcode, or else one with the
+  // brand and name. Only that page's printed analysis is read (another fetched page may be another variant).
+  const onThisPage = (p: (typeof pages)[number], needle: string | null) => {
+    const n = wordsKey(needle ?? '');
+    return !!n && p.text.includes(` ${n} `);
+  };
+  const thisProduct = (p: (typeof pages)[number]) => textContainsGtin(p.raw, opts.gtin14) || (onThisPage(p, brand) && onThisPage(p, name));
+  const page = pages.find((p) => textContainsGtin(p.raw, opts.gtin14)) ?? pages.find(thisProduct) ?? pages[0];
   let host = '';
   try {
     host = new URL(page.url).hostname.replace(/^www\./, '');
@@ -322,16 +332,17 @@ async function researchAttempt(opts: ResearchOptions, user: string): Promise<Res
       .map((g) => ({ nutrient: nutrientKeyFromLabel(g.label), label: g.label, qualifier: qualifierFrom(g.qualifier), value: Number(g.value), unit: normalizeUnit(g.unit) })),
   );
   let ga = checked.valid;
+  let analysisNote: string | undefined;
   // The analysis printed on the source page, read by Purrbi itself with the label rules, is the page's own
   // word: it is used when it gives more of the analysis than the model's answer, or when the answer's values
   // disagree with it (a value found elsewhere on the page, e.g. fibre's given as protein).
-  const printed = pageAnalysis(page.plain);
+  const printed = thisProduct(page) ? pageAnalysis(page.plain) : [];
   const differ = ga.filter((g) => g.nutrient !== 'other' && printed.some((p) => p.nutrient === g.nutrient && p.unit === g.unit && Math.abs(p.value - g.value) > 0.05));
   const usePrinted = printed.length > 0 && (differ.length > 0 || coreRows(printed) > coreRows(ga) || (coreRows(printed) === coreRows(ga) && printed.length > ga.length));
   const listed = (rows: { label: string; value: number }[]) => rows.slice(0, 3).map((g) => `${g.label} ${g.value}`).join(', ');
   if (usePrinted) {
     ga = printed;
-    verified.push(`Read the analysis printed on ${host || 'the page'} (${printed.length} row${printed.length === 1 ? '' : 's'}).`);
+    analysisNote = `Read the analysis printed on ${host || 'the page'} (${printed.length} row${printed.length === 1 ? '' : 's'}).`;
     if (differ.length) discarded.push(`guaranteed analysis: the answer’s ${listed(differ)} differs from the analysis printed on the page, which was used`);
     if (notOnPage.length) discarded.push(`guaranteed analysis: the answer’s ${listed(notOnPage)} is not on the page; the analysis printed on the page was used`);
   }
@@ -378,5 +389,5 @@ async function researchAttempt(opts: ResearchOptions, user: string): Promise<Res
   facts.classificationSignals = [name, data.product_type, intendedFor]
     .filter((t): t is string => !!t)
     .map((t) => ({ text: t, source: source.sourceId, kind: 'research' as const }));
-  return { facts, sources: [source], discarded, model, verified };
+  return { facts, sources: [source], discarded, model, verified, ...(analysisNote ? { analysisNote } : {}) };
 }

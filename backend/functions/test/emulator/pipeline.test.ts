@@ -339,6 +339,26 @@ describe('path B: missing label information', () => {
     expect(s.missingInfo).toEqual(['nutrition']);
     expect(s.diagnosticNotes).toContain('1 label photo reading was made by an older label reader and not used; the photo is asked for again if still needed.');
   });
+  it('a 2.1.0 photo disputed only by a row now set aside is compared again, used, and no longer says it conflicts', async () => {
+    const ref = await newScan('u1', BC.imageOnly); // the record's analysis: protein 26, fat 15, fibre 4, moisture 10
+    await processScan(deps(), 'u1', ref.id);
+    labelPatch = { guaranteedAnalysis: [
+      { nutrient: 'crude_protein', label: 'Crude Protein', qualifier: 'min', value: 26, unit: '%' },
+      { nutrient: 'crude_fat', label: 'Crude Fat', qualifier: 'min', value: 15, unit: '%' },
+      { nutrient: 'crude_fiber', label: 'Crude Fiber 4.0% Moisture', qualifier: 'max', value: 10, unit: '%' },
+    ] };
+    const photo = await db.collection('users/u1/photos').add({ scanId: ref.id, purpose: 'nutrition', imageUrl: 'https://firebasestorage.googleapis.com/v0/b/x/o/users%2Fu1%2Fuploads%2F1.jpg', status: 'uploaded', createdAt: Timestamp.fromDate(NOW) });
+    await processPhoto(deps(), 'u1', photo.id);
+    expect((await photo.get()).data()!.stage).toBe('disputed'); // fibre 10 % vs 4 %
+    const gtin = (await read(ref)).gtin;
+    await db.doc(`users/u1/labelFacts/${gtin}`).update({ [`extractions.${photo.id}.label.version`]: 'label-extract-2.1.0' }); // as 2.1.0 saved it
+    const again = await newScan('u1', BC.imageOnly);
+    await processScan(deps(), 'u1', again.id);
+    const s = await read(again);
+    expect(s.evidenceNotes.join(' ')).not.toMatch(/A label photo was not used/);
+    expect((await photo.get()).data()).toMatchObject({ stage: 'corroborated', statusMessage: 'Label read' });
+    expect((await db.doc(`users/u1/labelFacts/${gtin}`).get()).data()!.extractions[photo.id].stage).toBe('corroborated');
+  });
   it('uses a label photo read by label reader 2.1.0 without the analysis rows 2.1.0 may have misread', async () => {
     const a = await newScan('u1', BC.food);
     await processScan(deps(), 'u1', a.id);
@@ -819,6 +839,31 @@ describe('no permanent negative caching', () => {
     await processScan(at(13), 'u1', c.id);
     expect(calls.research).toBe(2);
     expect((await read(c)).status).toBe('complete');
+  });
+  it('an image the earlier label reader read, due again but failing for a technical reason, is retried after 6 hours', async () => {
+    const ref = await newScan('u1', BC.imageOnly);
+    await processScan(deps(), 'u1', ref.id);
+    const gtin = (await read(ref)).gtin;
+    // As 2.1.0 left it: an analysis with a misread row (fibre given moisture's value), and its bookkeeping.
+    const v21 = <T extends Record<string, unknown>>(x: T) => ({ ...x, readerVersion: 'label-extract-2.1.0' });
+    const facts = (await db.doc(`products/${gtin}`).get()).data()!.facts;
+    facts.sources = facts.sources.map((x: Record<string, unknown>) => (x.sourceType === 'database_image' ? v21(x) : x));
+    for (const k of ['guaranteedAnalysis', 'adequacy', 'calories']) facts[k].source = v21(facts[k].source);
+    facts.guaranteedAnalysis.value = facts.guaranteedAnalysis.value
+      .map((e: { nutrient: string }) => (e.nutrient === 'crude_fiber' ? { ...e, label: 'Crude Fiber 4.0% Moisture', value: 10 } : e))
+      .filter((e: { nutrient: string }) => e.nutrient !== 'moisture');
+    await db.doc(`products/${gtin}`).update({ facts });
+    await db.doc(`productMeta/${gtin}`).update({ 'enrichment.databaseImages': { read: ['nutrition'], skipped: [], failed: [], version: 'label-extract-2.1.0' } });
+    imagesDown = true;
+    await processScan(at(0), 'u1', (await newScan('u1', BC.imageOnly)).id);
+    expect(calls.dbImages).toBe(2); // due again (the analysis was set aside), but the image host fails
+    imagesDown = false;
+    const later = await newScan('u1', BC.imageOnly);
+    await processScan(at(7), 'u1', later.id);
+    expect(calls.dbImages).toBe(3); // tried again after 6 hours, not left for 30 days
+    expect((await read(later)).status).toBe('complete');
+    const product = (await db.doc(`products/${gtin}`).get()).data()!;
+    expect(product.facts.guaranteedAnalysis.value.find((e: { nutrient: string }) => e.nutrient === 'crude_fiber').value).toBe(4);
   });
   it('a needed panel the database has no image of does not make the other images due again (no repeated paid reads)', async () => {
     for (let i = 0; i < 4; i++) {

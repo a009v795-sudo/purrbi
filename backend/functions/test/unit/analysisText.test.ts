@@ -3,7 +3,8 @@
 // is read only when it is unambiguous; where Purrbi deliberately reads less than a person might, `why` says so.
 import { describe, expect, it } from 'vitest';
 import { analysisRows } from '../../src/domain/analysisText';
-import { misreadBy21, readingInUse, type ValidatedLabel } from '../../src/ai/labelExtract';
+import { readingInUse, rowsInUse21, type ValidatedLabel } from '../../src/ai/labelExtract';
+import type { GuaranteedAnalysisEntry } from '../../src/domain/types';
 import corpus from '../fixtures/analysis-corpus.json';
 
 const key = (r: { nutrient: string; value: number; unit: string; qualifier: string }, withQualifier: boolean) =>
@@ -79,6 +80,10 @@ describe('analysis rows: generated inline panels', () => {
     expect(wrong).toBe(0);
     expect(lost).toBe(0);
   });
+  it('reads nothing from a panel that only mentions a heading word in a sentence (a front panel)', () => {
+    expect(analysisRows('Mit ausgewählten Inhaltsstoffen\nHuhn 26 %, Lachs 4 %', false, false)).toEqual([]);
+    expect(analysisRows('Composition : poulet (26 %), riz.\nConstituants analytiques : Protéine 32 %', false, false).map((r) => `${r.nutrient}:${r.value}`)).toEqual(['crude_protein:32']);
+  });
   it('stays fast on hostile text (a photo is untrusted)', () => {
     for (const text of [`Protein${' '.repeat(6000)}30%`, `Protein ${'1 '.repeat(4000)}30%`, 'Protéine 30 %, '.repeat(2000), '('.repeat(5000), '[?] '.repeat(3000)]) {
       const t0 = Date.now();
@@ -89,21 +94,40 @@ describe('analysis rows: generated inline panels', () => {
 });
 
 describe('readings by label reader 2.1.0', () => {
-  const row = (label: string, value: number) => ({ nutrient: 'other' as const, label, qualifier: 'not_stated' as const, value, unit: '%' as const });
-  it('flags the rows 2.1.0 could misread, and none of the common names', () => {
-    // As 2.1.0 saved them: another row's value under a name, inline values without units, an ingredient's
-    // percentage, the tail of a thousands group.
-    for (const [label, value] of [['Crude Fiber 4.0% Moisture', 10], ['Protein 30% min (as fed) Fat', 18], ['Protéine 37, Matières grasses 13, Cendres', 7.5], ['Taurine : 1', 500], ['Vitamine A : 15', 0], ['Composition : protéines de volaille déshydratées (', 35], ['), riz (', 20], ['Calcium (min) 1.2% * Phosphorus (min)', 1], ['Vit A: 36', 900]] as const) {
-      expect(misreadBy21(row(label, value)), label).toBe(true);
-    }
-    for (const [label, value] of [['Crude Protein (min)', 30], ['Acides gras Oméga 6', 2], ['Omega-3 Fatty Acids*', 0.3], ['Vitamin D3', 500], ['Vitamin B12', 100], ['Taurine', 0.15], ['Matières grasses brutes', 8], ['Teneur en matières grasses', 13], ['Proteína bruta', 30], ['Omega 3', 400], ['Cendres brutes', 7.5], ['Moisture', 10]] as const) {
-      expect(misreadBy21(row(label, value)), label).toBe(false);
-    }
+  const row = (nutrient: string, label: string, value: number, unit = '%') => ({ nutrient, label, qualifier: 'not_stated', value, unit }) as GuaranteedAnalysisEntry;
+  it('keeps only the plain rows the current rules read the same way', () => {
+    // As 2.1.0 saved them (each from a real layout the reviews reproduced with the 2.1.0 reader).
+    const misread = [
+      row('crude_protein', 'Crude Protein Crude Fat', 18), // a name without its value, carried onto the next row's
+      row('magnesium', 'Magnesium (max)', 9), // ".09%" without its point
+      row('taurine', 'Taurine (min)', 10), // ".10%"
+      row('omega_3', 'Omega-3 Fatty Acids* (min)', 30), // ".30%"
+      row('other', 'Vitamin A (min)', 15, 'IU/kg'), // "15,000 IU/kg" read as 15
+      row('crude_fiber', 'Crude Fiber 4.0% Moisture', 10), // another row's value
+      row('crude_protein', 'Protein 30 Fat', 15), // "Protein 30 Fat 15%"
+      row('calcium', 'Calcium 1,0 -', 1.5), // a range
+      row('other', 'grezze', 15.3), // a wrapped fragment
+      row('other', 'Composition : protéines de volaille déshydratées (', 35), // an ingredient's share
+    ];
+    expect(rowsInUse21(misread)).toEqual([]);
+    const plain = [row('crude_protein', 'Crude Protein (min)', 30), row('crude_fat', 'Teneur en matières grasses', 13), row('ash', 'Cendres brutes', 7.5), row('omega_6', 'Acides gras Oméga 6', 2), row('omega_3', 'Omega-3 Fatty Acids* (min)', 0.3), row('taurine', 'Taurine (min)', 0.1), row('magnesium', 'Magnesium (max)', 0.09)];
+    expect(rowsInUse21(plain)).toEqual(plain);
+    // A dry-matter table read as a second set of values: that nutrient is not used.
+    expect(rowsInUse21([row('crude_protein', 'Crude Protein (min)', 30), row('crude_protein', 'Protein', 33.3), row('crude_fat', 'Crude Fat (min)', 18)]).map((e) => e.nutrient)).toEqual(['crude_fat']);
   });
-  it('a 2.1.0 reading is used without those rows; a current reading is used as it is', () => {
-    const base = { status: 'processed', reason: '', panels: ['guaranteed_analysis'], productName: null, brand: null, species: 'cat', productTypeClaim: null, ingredientsText: null, ingredients: [], calories: [], adequacy: null, feedingDirections: null, activeIngredients: [], uncertainFields: [], rejected: [], model: 'test' } as unknown as ValidatedLabel;
-    const ga = [{ ...row('Crude Protein', 30), nutrient: 'crude_protein' as const }, { ...row('Crude Fiber 4.0% Moisture', 10), nutrient: 'crude_fiber' as const }];
-    expect(readingInUse({ ...base, version: 'label-extract-2.1.0', guaranteedAnalysis: ga }).guaranteedAnalysis.map((e) => e.label)).toEqual(['Crude Protein']);
-    expect(readingInUse({ ...base, version: 'label-extract-2.2.0', guaranteedAnalysis: ga }).guaranteedAnalysis).toHaveLength(2);
+  it('a 2.1.0 reading is used without those rows and with its ingredient list cut where the analysis starts', () => {
+    const base = { status: 'processed', reason: '', panels: ['ingredients'], productName: null, brand: null, species: 'cat', productTypeClaim: null, calories: [], adequacy: null, feedingDirections: null, activeIngredients: [], uncertainFields: [], rejected: [], model: 'test' } as unknown as ValidatedLabel;
+    // 2.1.0 did not know the German heading "Inhaltsstoffe" and let the list run into the analysis.
+    const ingredientsText = 'Fleisch und tierische Nebenerzeugnisse (davon Huhn 4%), Getreide, pflanzliche Eiweißextrakte, Mineralstoffe, Zucker.\nInhaltsstoffe: Rohprotein 8,5%, Fettgehalt 5,0%';
+    const reading = { ...base, version: 'label-extract-2.1.0', ingredientsText, ingredients: ['x'], guaranteedAnalysis: [row('crude_protein', 'Crude Protein', 30), row('crude_fiber', 'Crude Fiber 4.0% Moisture', 10)] };
+    const used = readingInUse(reading);
+    expect(used.guaranteedAnalysis.map((e) => e.label)).toEqual(['Crude Protein']);
+    expect(used.ingredientsText).toBe('Fleisch und tierische Nebenerzeugnisse (davon Huhn 4%), Getreide, pflanzliche Eiweißextrakte, Mineralstoffe, Zucker.');
+    expect(used.ingredients).toHaveLength(5);
+    // Readings by 2.2.0 and the current reader are used as they are.
+    for (const version of ['label-extract-2.2.0', 'label-extract-2.3.0']) {
+      const later = { ...reading, version };
+      expect(readingInUse(later)).toBe(later);
+    }
   });
 });

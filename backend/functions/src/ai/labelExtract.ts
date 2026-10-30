@@ -8,10 +8,10 @@
 import { parseAdequacyStatement } from '../domain/adequacy';
 import { normalizeBarcode, sameGtin } from '../domain/barcode';
 import { normalizeIngredientName, parseIngredientList } from '../domain/ingredients';
-import { ANALYSIS_HEADING, analysisRows, distinctRows } from '../domain/analysisText';
-import { parseCalorieText, validateGuaranteedAnalysis } from '../domain/nutrition';
+import { ANALYSIS_HEADING, analysisRows, balanced, distinctRows, strayNumber } from '../domain/analysisText';
+import { nutrientKeysIn, parseCalorieText, validateGuaranteedAnalysis } from '../domain/nutrition';
 import { parseActiveIngredients } from '../domain/supplements';
-import type { ActiveIngredient, AdequacyStatement, CalorieStatement, GuaranteedAnalysisEntry, ProductSpecies } from '../domain/types';
+import type { ActiveIngredient, AdequacyStatement, CalorieStatement, GuaranteedAnalysisEntry, NutrientKey, ProductSpecies } from '../domain/types';
 import { SourceError } from '../util/http';
 import { chatJson } from './openai';
 
@@ -19,35 +19,50 @@ export { analysisRows };
 
 export const LABEL_EXTRACTION_VERSION = 'label-extract-2.3.0'; // 2.2.0: analyses printed inline ("Protéine 37 %, Matières grasses 13 %") are read row by row; 2.3.0: an adequacy line is read from a partly legible panel too
 /**
- * Readings still used as they were saved. 2.2.0 reads rows 2.1.0 left out (several values on one printed
- * line) and corrects rows 2.1.0 could misread; a 2.1.0 reading is used without those rows (`readingInUse`),
- * so owners are not asked for their photos again. Label images whose 2.1.0 analysis had such a row, or
- * whose analysis 2.1.0 could not read, are read again.
+ * Readings still used: by 2.2.0 as they were saved (2.3.0 only reads an adequacy line 2.2.0 left out); by
+ * 2.1.0 as the current rules use them (`readingInUse`), so owners are not asked for their photos again.
  */
 export const LABEL_READINGS_IN_USE: ReadonlySet<string> = new Set(['label-extract-2.1.0', 'label-extract-2.2.0', LABEL_EXTRACTION_VERSION]);
 
+// Food-level bounds for minor nutrients: above them, 2.1.0 probably dropped a leading point (".09%" read as 9).
+const MINOR_BOUND: Partial<Record<NutrientKey, number>> = { magnesium: 1, taurine: 1, sodium: 3, calcium: 6, phosphorus: 5, omega_3: 5, omega_6: 10, dha: 3, epa: 3 };
+const COMPOSITION_START = /^(?:composition|composici[oó]n|composizione|composi[cç][aã]o|zusammensetzung|zutaten|ingr[eé]dients?|ingredientes|ingredienti|samenstelling)(?!\p{L})/iu;
+
 /**
- * An analysis row that reader 2.1.0 may have misread: its name holds another row's value, values printed
- * inline without units, an ingredient's percentage ("Saumon (15%)"), or the tail of a thousands group
- * ("Taurine : 1" with 500 for "1 500 mg/kg").
+ * The analysis rows of a label-extract-2.1.0 reading still used: only plain rows the current rules read the
+ * same way. 2.1.0 could give a row another row's value (a name carried from the line above, a number left in
+ * the name), read "15,000 IU/kg" as 15 and ".09%" as 9, take an ingredient's percentage or a wrapped fragment
+ * for a row, and read a dry-matter table as a second set of values. A kept row names one nutrient, with no
+ * other number and balanced brackets, in %, within food-level bounds; a nutrient with two values is dropped.
  */
-export function misreadBy21(e: GuaranteedAnalysisEntry): boolean {
-  const label = (e.label ?? '').trim();
-  return (
-    /\d\s*(?:%|mg\/kg|iu\/kg|ui\/kg|ie\/kg|ppm|cfu)/iu.test(label) ||
-    /\d(?:[.,]\d+)?\s*[,;]\s*\p{L}/u.test(label) ||
-    /\(\s*$/.test(label) ||
-    /^(?:composition|composici[oó]n|composizione|composi[cç][aã]o|zusammensetzung|zutaten|ingr[eé]dients?|ingredientes|ingredienti|samenstelling)(?!\p{L})/iu.test(label) ||
-    // A number that ends the name, not part of it ("Taurine : 1" for "1 500"; "Oméga 6" and "D3" are names).
-    (/(?<![\p{L}\d.,-])\d{1,3}$/u.test(label) && !/(?:om[eé]ga|ω)[\s-]*\d{1,2}$/iu.test(label) && Number.isInteger(e.value) && e.value < 1000)
-  );
+export function rowsInUse21(rows: GuaranteedAnalysisEntry[]): GuaranteedAnalysisEntry[] {
+  const plain = rows.filter((e) => {
+    const label = (e.label ?? '').trim();
+    const keys = nutrientKeysIn(label);
+    return (
+      e.unit === '%' && keys.length === 1 && e.nutrient === keys[0] && balanced(label) && !/\(\s*$/.test(label) &&
+      !strayNumber(label) && !COMPOSITION_START.test(label) && e.value <= (MINOR_BOUND[e.nutrient] ?? 100)
+    );
+  });
+  const values = new Map<string, Set<number>>();
+  for (const e of plain) values.set(e.nutrient, (values.get(e.nutrient) ?? new Set()).add(e.value));
+  return plain.filter((e) => values.get(e.nutrient)!.size === 1);
 }
 
-/** A saved reading as the current rules use it: analysis rows that reader 2.1.0 may have misread are set aside. */
+/** An ingredient list cut where the current rules end it (2.1.0 did not know every analysis heading, e.g. "Inhaltsstoffe"). */
+export function ingredientsInUse(text: string): { text: string; ingredients: string[] } {
+  const cut = text.replace(NEXT_SECTION, '').trim();
+  return { text: cut, ingredients: cut ? parseIngredientList(cut).map((i) => i.name) : [] };
+}
+
+/** A saved reading as the current rules use it: a 2.1.0 reading without the rows it may have misread, its ingredient list cut again. */
 export function readingInUse(label: ValidatedLabel): ValidatedLabel {
   if (label.version !== 'label-extract-2.1.0') return label;
-  const kept = label.guaranteedAnalysis.filter((e) => !misreadBy21(e));
-  return kept.length === label.guaranteedAnalysis.length ? label : { ...label, guaranteedAnalysis: kept };
+  const guaranteedAnalysis = rowsInUse21(label.guaranteedAnalysis);
+  const list = label.ingredientsText ? ingredientsInUse(label.ingredientsText) : null;
+  const listChanged = !!list && list.text !== label.ingredientsText;
+  if (guaranteedAnalysis.length === label.guaranteedAnalysis.length && !listChanged) return label;
+  return { ...label, guaranteedAnalysis, ...(listChanged ? { ingredientsText: list!.text || null, ingredients: list!.ingredients } : {}) };
 }
 
 const nullableString = { type: ['string', 'null'] };
