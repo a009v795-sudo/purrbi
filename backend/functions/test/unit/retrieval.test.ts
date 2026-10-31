@@ -711,13 +711,13 @@ describe('a reasoning research model (gpt-5-mini, 2026-10-31)', () => {
     const first = JSON.parse(bodies[0].body);
     expect(first.reasoning).toEqual({ effort: 'low' });
     expect(first.temperature).toBeUndefined();
+    // The page the model opened is the more promising address, so it is checked first (research 2.9.0): it shows the barcode.
     expect(r.discarded.slice(0, 4)).toEqual([
       'barcode search: searched “"076344886570" | "0076344886570"” (1 result: chewy.com)',
       'barcode search: opened petsupermarket.com',
       'barcode search: model reported no matching product (1 search, 0 citations)',
-      'barcode search: result pages without this barcode: chewy.com',
+      'barcode search: petsupermarket.com (a page the model opened) shows this barcode, so Purrbi read it',
     ]);
-    expect(r.discarded).toContain('barcode search: petsupermarket.com (a page the model opened) shows this barcode, so Purrbi read it');
     // Both forms were searched in the first call, so the 13-digit form is not searched again.
     expect(r.discarded.some((d) => d.startsWith('barcode search (13-digit form)'))).toBe(false);
     expect(r.sources[0]).toMatchObject({ sourceName: 'petsupermarket.com', matchConfidence: 'exact_barcode' });
@@ -815,7 +815,7 @@ describe('research 2.8.0 review fixes', () => {
     expect(fetched).toEqual([]);
     expect(r.facts).toBeNull();
     expect(r.timeLimited).toBe(true);
-    expect(r.discarded).toContain('barcode search: result pages not checked (the scan’s time limit): chewy.com, petsupermarket.com');
+    expect(r.discarded).toContain('barcode search: result pages not checked (the scan’s time limit): petsupermarket.com, chewy.com');
   });
   it('checks the result pages before another paid search when only one of them fits (review: the name search ran, the free checks did not)', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
@@ -901,7 +901,7 @@ describe('research 2.8.1: what the cards and the trace say', () => {
     const results = [
       'https://beda.cz/files/cenik-2026.pdf',
       'http://e-chinalife.com/goods/099482517243',
-      ...Array.from({ length: 11 }, (_, i) => `https://shop${i}.example/p/${i}`),
+      ...Array.from({ length: 14 }, (_, i) => `https://shop${i}.example/p/${i}`),
     ];
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       if (url === 'https://api.openai.com/v1/responses') return new Response(JSON.stringify({ output: [{ type: 'web_search_call', action: { type: 'search', queries: ['"099482517243"', '"0099482517243"'], sources: results.map((u) => ({ type: 'url', url: u })) } }, { type: 'message', content: [{ type: 'output_text', text: JSON.stringify({ ...modelAnswer({}), found: false }), annotations: [] }] }] }), { status: 200 });
@@ -910,7 +910,7 @@ describe('research 2.8.1: what the cards and the trace say', () => {
     const r = await researchProduct({ apiKey: 'k', model: 'gpt-5-mini', gtin14: '00099482517243', barcode: '099482517243', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-10-31T06:00:00Z') });
     expect(r.discarded).toContain('barcode search: result documents not checked (Purrbi checks web pages only): https://beda.cz/files/cenik-2026.pdf');
     expect(r.discarded).toContain('barcode search: result pages not checked (no secure address): http://e-chinalife.com/goods/099482517243');
-    expect(r.discarded).toContain('barcode search: result pages not checked (at most 8 a run): shop8.example, shop9.example, shop10.example');
+    expect(r.discarded).toContain('barcode search: result pages not checked (at most 12 a run): shop12.example, shop13.example');
     // The scan keeps these in its trace (up to twenty research notes).
     const { retrievalStatus } = await import('../../src/pipeline/facts');
     expect(retrievalStatus('ingredients', { research: { outcome: 'done', discarded: r.discarded, source: '', at } }).status).toBe('not_found');
@@ -970,17 +970,86 @@ describe('research 2.8.1 review fixes', () => {
         call++;
         const sources =
           call === 1
-            ? ['https://www.chewy.com/p/1', 'https://www.chewy.com/p/2', 'https://www.chewy.com/p/3', 'https://www.chewy.com/p/4', 'https://beda.cz/files/cenik-2026.pdf', ...Array.from({ length: 6 }, (_, i) => `https://shop${i}.example/p`)]
+            ? ['https://www.chewy.com/p/1', 'https://www.chewy.com/p/2', 'https://www.chewy.com/p/3', 'https://www.chewy.com/p/4', 'https://beda.cz/files/cenik-2026.pdf', ...Array.from({ length: 10 }, (_, i) => `https://shop${i}.example/p`)]
             : ['https://beda.cz/files/cenik-2026.pdf', 'https://later.example/p/1'];
         return new Response(JSON.stringify({ output: [{ type: 'web_search_call', action: { type: 'search', queries: [call === 1 ? '"099482517243"' : '"0099482517243"'], sources: sources.map((u) => ({ type: 'url', url: u })) } }, { type: 'message', content: [{ type: 'output_text', text: JSON.stringify({ ...modelAnswer({}), found: false }), annotations: [] }] }] }), { status: 200 });
       }
       return new Response('<html><head><title>Shop</title></head><body><h1>Pet food</h1></body></html>', { status: 200 });
     }));
     const r = await researchProduct({ apiKey: 'k', model: 'gpt-5-mini', gtin14: '00099482517243', barcode: '099482517243', knownSpecies: 'unknown', userAgent: 'test', now: at });
-    // Search 1: chewy.com's third and fourth results go by the per-site rule (8 checks were not all needed for them).
+    // Search 1: chewy.com's third and fourth results go by the per-site rule (not by the run's limit).
     expect(r.discarded).toContain('barcode search: result pages not checked (at most two per site in a search): chewy.com');
     expect(r.discarded.filter((d) => d.includes('cenik-2026.pdf'))).toEqual(['barcode search: result documents not checked (Purrbi checks web pages only): https://beda.cz/files/cenik-2026.pdf']);
-    // Search 2 (the 13-digit form) comes after all 8 checks: its page is named, not checked.
-    expect(r.discarded).toContain('barcode search (13-digit form): result pages not checked (the run’s 8 checks or two reads were used): later.example');
+    // Search 2 (the 13-digit form) comes after all 12 checks: its page is named, not checked.
+    expect(r.discarded).toContain('barcode search (13-digit form): result pages not checked (the run’s 12 checks or two reads were used): later.example');
+  });
+});
+
+// Test A on research 2.8.1 (2026-10-31, trace 16590db9-020): the run's 8 checks went to the first search's results (a
+// document site, a home page, another brand's product) before the marketplace pages the search by name found, which
+// were never checked. Test C (trace eaaecc23-7a9): the checks went to GS1 help pages and lookup tools' home pages.
+describe('research 2.9.0: result pages ranked by their address', () => {
+  const A = { apiKey: 'k', model: 'gpt-5-mini', gtin14: '00099482481087', barcode: '099482481087', knownSpecies: 'unknown' as const, userAgent: 'test', now: new Date('2026-10-31T21:30:00Z') };
+  const answer = (found: boolean) => ({ ...modelAnswer({ product_name: found ? 'Whole Paws Grain-Free Salmon Paté Loaf 5.5 oz' : null, brand: found ? 'Whole Paws' : null }), found });
+  // Both printed forms in one search, as gpt-5-mini does: no separate 13-digit search, so the next call is the search by name.
+  const respond = (urls: string[], ans: unknown) =>
+    new Response(JSON.stringify({ output: [{ type: 'web_search_call', action: { type: 'search', queries: ['"099482481087"', '"0099482481087"'], sources: urls.map((url) => ({ type: 'url', url })) } }, { type: 'message', content: [{ type: 'output_text', text: JSON.stringify(ans), annotations: [] }] }] }), { status: 200 });
+  const plain = '<html><head><title>Page</title></head><body><h1>Something else</h1></body></html>';
+  it('checks the product pages first and skips home, help and tool pages, naming them', async () => {
+    const fetched: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url === 'https://api.openai.com/v1/responses')
+        return respond(['https://pi.bigparadox.com/', 'https://www.gs1us.org/tools/gs1-us-data-hub/search-and-verify', 'https://www.scribd.com/document/1/BROS-150', 'https://resources.gs1ie.org/helpdesk/how-do-i-find-out-who-owns-a-gtin', 'https://en.wikipedia.org/wiki/Universal_Product_Code', 'https://www.ubuy.com.lb/en/product/243GOJJA-whole-paws-grain-free-salmon-pate-5-5-oz', 'https://www.ebay.com/itm/317732737868', 'https://shop.example/search?q=099482481087'], { ...modelAnswer({}), found: false });
+      fetched.push(new URL(url).hostname);
+      return new Response(plain, { status: 200 });
+    }));
+    const r = await researchProduct({ ...A, knownBrand: 'Whole Paws', knownName: 'Whole Paws Salmon Pate' });
+    // The marketplace product pages first; the document page and the site's search page after them; no home, help or tool page.
+    expect(fetched.slice(0, 2)).toEqual(['www.ubuy.com.lb', 'www.ebay.com']);
+    expect(fetched).not.toContain('pi.bigparadox.com');
+    expect(fetched).not.toContain('www.gs1us.org');
+    expect(fetched).not.toContain('en.wikipedia.org');
+    expect(fetched).toContain('www.scribd.com');
+    expect(fetched).toContain('shop.example');
+    expect(r.discarded).toContain('barcode search: result pages not checked (home pages and tools, help, forum or category pages): pi.bigparadox.com, gs1us.org, resources.gs1ie.org, en.wikipedia.org');
+  });
+  it('a page whose address carries the barcode, and a shop’s product page filed under its brand pages, are checked before the manufacturer’s other products', async () => {
+    const fetched: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url === 'https://api.openai.com/v1/responses')
+        return respond(['https://www.wholepaws.example/product-catalog/whole-paws-chicken-pate/', 'https://www.wholepaws.example/product-catalog/whole-paws-turkey-pate/', 'https://www.barcodes.example/upc/099482481087', 'https://www.petsupermarket.com/brands/w/whole-paws/whole-paws-salmon-pate-5-5-oz/994824.html'], { ...modelAnswer({}), found: false });
+      fetched.push(url);
+      return new Response(plain, { status: 200 });
+    }));
+    await researchProduct({ ...A, knownBrand: 'Whole Paws', knownName: 'Whole Paws Salmon Pate' });
+    expect(fetched.slice(0, 3).map((u) => new URL(u).hostname)).toEqual(['www.barcodes.example', 'www.petsupermarket.com', 'www.wholepaws.example']);
+  });
+  it('A as it happened: the search by name’s marketplace pages are reached and the one showing the barcode is read', async () => {
+    let call = 0;
+    const fetched: string[] = [];
+    const desertcart = `<html><head><title>Whole Paws Grain-Free Salmon Pate 5.5 oz</title></head><body><h1>Whole Paws Grain-Free Salmon Paté Loaf Cat Food, 5.5 oz</h1>
+      <p>Ingredients: Salmon, Water Sufficient for Processing, Salmon Broth, Liver, Pea Protein, Natural Flavor, Guar Gum, Tricalcium Phosphate, Potassium Chloride, Salt</p>
+      <p>Guaranteed Analysis: Crude Protein (min) 9.0%, Crude Fat (min) 5.0%, Crude Fiber (max) 1.5%, Moisture (max) 78.0%</p><table><tr><td>UPC</td><td>099482481087</td></tr></table></body></html>`;
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url === 'https://api.openai.com/v1/responses') {
+        call++;
+        // Search 1 (the barcode): eleven pages, mostly not this product; search 2 (by the answer's name): marketplace pages.
+        return call === 1
+          ? respond(['https://www.scribd.com/document/1/BROS-150', 'https://pi.bigparadox.com/', ...Array.from({ length: 8 }, (_, i) => `https://salmon${i}.example/products/open-farm-salmon-pate-${i}`), 'https://www.pawdiet.com/reviews/whole-paws-salmon-pate'], answer(true))
+          : respond(['https://www.cats.com/whole-paws-cat-food-review', 'https://www.desertcart.in/products/12345-whole-paws-grain-free-salmon-pate-5-5-oz', 'https://pricehistory.app/p/whole-paws-grain-free-salmon-pate'], answer(false));
+      }
+      if (url.includes('chat/completions'))
+        return new Response(JSON.stringify({ model: 'gpt-5-mini', choices: [{ message: { content: JSON.stringify(modelAnswer({ product_name: 'Whole Paws Grain-Free Salmon Paté Loaf Cat Food, 5.5 oz', brand: 'Whole Paws', intended_for: 'cats', ingredients_verbatim: 'Salmon, Water Sufficient for Processing, Salmon Broth, Liver, Pea Protein, Natural Flavor, Guar Gum, Tricalcium Phosphate, Potassium Chloride, Salt' })) }, finish_reason: 'stop' }] }), { status: 200 });
+      fetched.push(new URL(url).hostname);
+      return new Response(url.includes('desertcart') ? desertcart : plain, { status: 200 });
+    }));
+    const r = await researchProduct(A);
+    // The answer named Whole Paws: in search 1 its review page comes before other brands' salmon pâtés, the home page is skipped.
+    expect(fetched[0]).toBe('www.pawdiet.com');
+    expect(fetched).not.toContain('pi.bigparadox.com');
+    expect(fetched).toContain('www.desertcart.in');
+    expect(r.discarded).toContain('search by the answer’s name: desertcart.in (a search result) shows this barcode, so Purrbi read it');
+    expect(r.sources[0]).toMatchObject({ sourceName: 'desertcart.in', matchConfidence: 'exact_barcode' });
+    expect((r.facts?.classificationSignals ?? []).map((c) => c.text)).toContain('intended for cats');
   });
 });

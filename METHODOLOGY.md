@@ -1,7 +1,7 @@
 # Purrbi assessment methodology
 
 Version: `assessment-3.0.0` overall, made of `purrbi-score-3.0.0` (score), `scope-3.0.0` (classification), `verdict-2.1.0` (verdict),
-`kb-2026-10-28-draft` (ingredient notes), `label-extract-2.3.0` (label reader), `research-2.8.1` (web research), `explain-2.0.0` (claim-checked explanations).
+`kb-2026-10-28-draft` (ingredient notes), `label-extract-2.3.0` (label reader), `research-2.9.0` (web research), `explain-2.0.0` (claim-checked explanations).
 A saved result records `assessmentVersion` and its parts (`scoreVersion`, `kbVersion`, `scopeVersion`); the shared product record its
 classification version; each fact read from a label, page or document its reader's version; each explanation its own. When the app opens
 a result saved under an older `assessmentVersion` it asks for a re-check (section 10), so a known bad classification is corrected without
@@ -283,7 +283,7 @@ A result that uses the owner's photo before it is tied to the barcode says "Labe
 
 ## 10. Retrieval before photos, and keeping results current
 
-**Research `research-2.8.1`** (`sources/research.ts`, `pageEvidence.ts`). When the pet databases lack something, research looks for it before
+**Research `research-2.9.0`** (`sources/research.ts`, `pageEvidence.ts`). When the pet databases lack something, research looks for it before
 any photo is asked for:
 - The research model is a setting (`OPENAI_RESEARCH_MODEL`; development uses `gpt-5-mini` since 2026-10-31, `gpt-4.1-mini` before).
   Each run records the model it used, and another model is a new method: a product still missing information is searched again with
@@ -307,6 +307,15 @@ any photo is asked for:
   A value or page rejected by a check is said before these. A note that only says what was searched, fetched or checked (a
   query may contain "ingredients") is never read as a rejected value, and a page that shows only the barcode is said to
   show it only when it does.
+- Result pages are checked in order of how likely their address is to be the product's page (2.9.0, after tests A and C on
+  2.8.1, where the checks went to a document site, a home page, GS1 help pages and lookup tools' home pages before the
+  marketplace pages the search by name found). The product's own marks weigh most: the barcode in the address's path, its
+  brand, the share of its name words (as known, or as an answer gave them: search words only); then a product page's
+  address form and being opened by the model. A site's search page counts a little less, and is still checked (its search
+  for one barcode often leads to the product's page). Home pages and tools, help, forum, encyclopedia or category pages
+  are not checked, and are named in the trace. Sites still take turns (a site's second page counts lower, a third is not
+  checked), and a run checks at most twelve pages (was eight), within the same time limit. The ranking only chooses which
+  pages Purrbi fetches: a page is used only when Purrbi finds the barcode on it.
 - The trace names the result pages left out of the checks: documents and pages without a secure address with their
   addresses (once a run), the others by site with the reason (eight a run, two per site in a search, or the run's checks
   or reads already used).
@@ -324,7 +333,7 @@ any photo is asked for:
   price), never as part of a longer number.
 - The model may not recognise a page that shows the barcode, so each search's result pages are recorded in the trace (the query and the
   sites it returned) and Purrbi checks them for the barcode itself, sites taking turns so one site's pages for other products do not use
-  up the checks (at most eight pages a run); the first that shows it is read by the model from Purrbi's
+  up the checks (at most twelve pages a run since 2.9.0, most promising first; eight before); the first that shows it is read by the model from Purrbi's
   copy of the page (no web search) and every value is checked on that page as usual.
 - The model makes one search per request, and search engines index a UPC-A's 13-digit form apart from its 12 digits. When the 12
   digits find nothing usable, the 13-digit form is searched on its own. Search words prefer a name in Latin script. A name a page
