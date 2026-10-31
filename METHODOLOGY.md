@@ -298,12 +298,18 @@ any photo is asked for:
   - a run the time limit cut short that found nothing (or left who the product is for unknown) did not finish: it is retried
     after 12 hours, 2 days and 7 days like unreachable pages, and the result says the search ran out of time, never "no page
     could be matched".
-- What the result says names what stopped the search (2.8.1, after test A on gpt-5-mini): the pages the search named for the
-  barcode that turn automated readers away (HTTP 401, 403; a page that is gone is not counted), also when the barcode
-  database was unavailable, instead of "found nothing"; with none, that no page it could check shows the barcode. A note that
-  only says what was searched or checked (a query may contain "ingredients") is never read as a rejected value. The trace
-  names the result pages left out of the checks: documents and pages without a secure address with their addresses, and
-  those past the eight checked by site.
+- What the result says names what stopped the search (2.8.1, after test A on gpt-5-mini), instead of "found nothing":
+  - first a page Purrbi found showing the barcode that gave nothing (its read found nothing or was cut short, or it shows
+    only the barcode, like a price list);
+  - then the pages the search named for the barcode that turn automated readers away (HTTP 401, 403; a page that is gone,
+    or a site read on another address in the same run, is not counted), also when the barcode database was unavailable;
+  - else that no page it could check shows the barcode.
+  A value or page rejected by a check is said before these. A note that only says what was searched, fetched or checked (a
+  query may contain "ingredients") is never read as a rejected value, and a page that shows only the barcode is said to
+  show it only when it does.
+- The trace names the result pages left out of the checks: documents and pages without a secure address with their
+  addresses (once a run), the others by site with the reason (eight a run, two per site in a search, or the run's checks
+  or reads already used).
 - When no product database record or owner label names the product and no name in Latin script is known (also when the only name came
   from a web page in another script), a public barcode database (UPCitemdb's free lookup, `BARCODE_LOOKUP_ENABLED`) is asked for the
   product's title, only to tell research what to search for; nothing from it is shown or used as a fact. Its failure is recorded as such.

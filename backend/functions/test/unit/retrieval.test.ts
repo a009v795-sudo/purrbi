@@ -907,9 +907,77 @@ describe('research 2.8.1: what the cards and the trace say', () => {
     const r = await researchProduct({ apiKey: 'k', model: 'gpt-5-mini', gtin14: '00099482517243', barcode: '099482517243', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-10-31T06:00:00Z') });
     expect(r.discarded).toContain('barcode search: result documents not checked (Purrbi checks web pages only): https://beda.cz/files/cenik-2026.pdf');
     expect(r.discarded).toContain('barcode search: result pages not checked (no secure address): http://e-chinalife.com/goods/099482517243');
-    expect(r.discarded).toContain('barcode search: result pages not checked (at most 8 a run, sites taking turns): shop8.example, shop9.example, shop10.example');
+    expect(r.discarded).toContain('barcode search: result pages not checked (at most 8 a run): shop8.example, shop9.example, shop10.example');
     // The scan keeps these in its trace (up to twenty research notes).
     const { retrievalStatus } = await import('../../src/pipeline/facts');
     expect(retrievalStatus('ingredients', { research: { outcome: 'done', discarded: r.discarded, source: '', at } }).status).toBe('not_found');
+  });
+});
+
+// Review of research 2.8.1 (workflow wf_4e18ac6b-e26).
+describe('research 2.8.1 review fixes', () => {
+  const at = new Date('2026-10-31T13:00:00Z');
+  it('a page Purrbi found showing the barcode is named, never “no page it checked shows this barcode” (read cut short, read found nothing, a price list)', async () => {
+    const { retrievalStatus } = await import('../../src/pipeline/facts');
+    const cut = ['barcode search: shop.example (a search result) shows this barcode, so Purrbi read it', 'reading shop.example: not run (the scan’s time limit)', 'barcode search (13-digit form): not run (the scan’s time limit)'];
+    expect(retrievalStatus('front', { research: { outcome: 'time_limited', discarded: cut, source: '', at } }).detail).toBe(
+      'A page showing this barcode was found (shop.example), but nothing about the product was taken from it before the search ran out of the scan’s time; Purrbi searches again later.',
+    );
+    const empty = ['barcode search: shop.example (a search result) shows this barcode, so Purrbi read it', 'reading shop.example: the model found no product details on the page'];
+    expect(retrievalStatus('front', { research: { outcome: 'hint_failed', discarded: empty, source: '', at } }).detail).toBe(
+      'A page showing this barcode was found (shop.example), but nothing about the product could be taken from it; the barcode database wasn’t available for more search words, so Purrbi searches again once it is.',
+    );
+    // A price list that shows only the barcode, in a finished search: named, and neither “no page could be matched” nor a rejection.
+    const prices = ['barcode search: prices.example shows this barcode but nothing else about the product (no name, ingredients, analysis or feeding statement), so the search went on'];
+    for (const purpose of ['front', 'ingredients', 'nutrition'] as const) {
+      expect(retrievalStatus(purpose, { research: { outcome: 'done', discarded: prices, source: '', at } }), purpose).toEqual({ purpose, status: 'not_found', detail: 'A page showing this barcode was found (prices.example), but nothing about the product could be taken from it.' });
+    }
+    // A page tied only by brand and name is not said to show the barcode, and is not a rejection either.
+    const named = ['name search: shop.example matches this product by brand and name but nothing else about the product (no name, ingredients, analysis or feeding statement), so the search went on'];
+    for (const purpose of ['front', 'ingredients', 'nutrition'] as const) {
+      const st = retrievalStatus(purpose, { research: { outcome: 'done', discarded: named, source: '', at } });
+      expect(st.status, purpose).not.toBe('rejected');
+      expect(st.detail, purpose).not.toMatch(/showing this barcode/);
+    }
+    // Named before pages that turn readers away.
+    expect(retrievalStatus('front', { research: { outcome: 'time_limited', discarded: [...cut, 'name search: ebay.com refuses automated readers (HTTP 403), so https://www.ebay.com/itm/1 could not be checked'], source: '', at } }).detail).toMatch(/^A page showing this barcode was found \(shop\.example\)/);
+  });
+  it('notes about pages not fetched or documents not read are never read as rejected values', async () => {
+    const { retrievalStatus } = await import('../../src/pipeline/facts');
+    const notes = [
+      'barcode search: nutrition document https://brand.example/guaranteed-analysis-gravies.pdf not read (HTTP 404)',
+      'barcode search: could not fetch https://brand.example/gravies-ingredients to verify it (HTTP 500)',
+      'name search: https://brand.example/gravies-calories not fetched (the scan’s time limit)',
+    ];
+    for (const purpose of ['front', 'ingredients', 'nutrition'] as const) {
+      expect(retrievalStatus(purpose, { research: { outcome: 'done', discarded: notes, source: '', at } }).status, purpose).not.toBe('rejected');
+    }
+  });
+  it('a site the same run read on another address is not said to turn readers away; a rejected variant is said first', async () => {
+    const { refusingHosts, retrievalStatus } = await import('../../src/pipeline/facts');
+    const refusedThenRead = ['barcode search: ebay.com refuses automated readers (HTTP 403), so https://www.ebay.com/itm/1111 could not be checked', 'barcode search: result pages without this barcode: ebay.com, chewy.com (lists it among 3 barcodes)'];
+    expect(refusingHosts(refusedThenRead)).toEqual([]);
+    const variant = ['barcode search: ebay.com refuses automated readers (HTTP 403), so https://www.ebay.com/itm/1111 could not be checked', 'name search: ebay.com is for dogs, but this product is for cats: another variant, so nothing from it was used'];
+    expect(retrievalStatus('front', { research: { outcome: 'done', discarded: variant, source: '', at } }).detail).toBe('The page found is for another variant of this product, so nothing from it was used.');
+  });
+  it('names a site’s third and later results by the per-site rule, lists a document once per run, and names a later search’s pages once the checks are used', async () => {
+    let call = 0;
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url === 'https://api.openai.com/v1/responses') {
+        call++;
+        const sources =
+          call === 1
+            ? ['https://www.chewy.com/p/1', 'https://www.chewy.com/p/2', 'https://www.chewy.com/p/3', 'https://www.chewy.com/p/4', 'https://beda.cz/files/cenik-2026.pdf', ...Array.from({ length: 6 }, (_, i) => `https://shop${i}.example/p`)]
+            : ['https://beda.cz/files/cenik-2026.pdf', 'https://later.example/p/1'];
+        return new Response(JSON.stringify({ output: [{ type: 'web_search_call', action: { type: 'search', queries: [call === 1 ? '"099482517243"' : '"0099482517243"'], sources: sources.map((u) => ({ type: 'url', url: u })) } }, { type: 'message', content: [{ type: 'output_text', text: JSON.stringify({ ...modelAnswer({}), found: false }), annotations: [] }] }] }), { status: 200 });
+      }
+      return new Response('<html><head><title>Shop</title></head><body><h1>Pet food</h1></body></html>', { status: 200 });
+    }));
+    const r = await researchProduct({ apiKey: 'k', model: 'gpt-5-mini', gtin14: '00099482517243', barcode: '099482517243', knownSpecies: 'unknown', userAgent: 'test', now: at });
+    // Search 1: chewy.com's third and fourth results go by the per-site rule (8 checks were not all needed for them).
+    expect(r.discarded).toContain('barcode search: result pages not checked (at most two per site in a search): chewy.com');
+    expect(r.discarded.filter((d) => d.includes('cenik-2026.pdf'))).toEqual(['barcode search: result documents not checked (Purrbi checks web pages only): https://beda.cz/files/cenik-2026.pdf']);
+    // Search 2 (the 13-digit form) comes after all 8 checks: its page is named, not checked.
+    expect(r.discarded).toContain('barcode search (13-digit form): result pages not checked (the run’s 8 checks or two reads were used): later.example');
   });
 });
