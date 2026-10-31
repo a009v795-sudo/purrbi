@@ -1284,7 +1284,7 @@ describe('fallbacks before asking the owner for photos', () => {
     const ref = await newScan('u1', BC.unknown);
     await processScan(deps({ researchEnabled: true }), 'u1', ref.id);
     const s = await read(ref);
-    const said = 'The pages found for this barcode (ebay.com) turn automated readers away, and the barcode database wasn’t available for more search words; Purrbi searches again once it is.';
+    const said = 'A page found for this barcode (on ebay.com) turns automated readers away, and the barcode database wasn’t available for more search words; Purrbi searches again once it is.';
     expect(s.fieldStatus[0]).toMatchObject({ status: 'source_unavailable', detail: said });
     expect(s.evidenceNotes).toContain(said);
     expect(s.diagnosticNotes.filter((n: string) => n.startsWith('Research (mock): '))).toHaveLength(20);
@@ -1292,8 +1292,8 @@ describe('fallbacks before asking the owner for photos', () => {
     const done = await newScan('u1', BC.unknown);
     await processScan({ ...deps({ researchEnabled: true }), now: () => new Date(NOW.getTime() + 13 * 3600 * 1000) }, 'u1', done.id);
     const d = await read(done);
-    expect(d.fieldStatus[0].detail).toBe('The pages found for this barcode (ebay.com) turn automated readers away, so it couldn’t be checked there.');
-    expect(d.evidenceNotes).toContain('The pages found for this barcode (ebay.com) turn automated readers away, so nothing could be checked there or added.');
+    expect(d.fieldStatus[0].detail).toBe('A page found for this barcode (on ebay.com) turns automated readers away, so nothing could be checked on it.');
+    expect(d.evidenceNotes).toContain('A page found for this barcode (on ebay.com) turns automated readers away, so nothing could be checked on it or added.');
   });
   it('after a research model switch, a search under the new model that fails says so, not the old model’s “not found” (review of research 2.8.0)', async () => {
     await processScan(deps({ researchEnabled: true }), 'u1', (await newScan('u1', BC.unknown)).id);

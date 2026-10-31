@@ -205,6 +205,15 @@ export function refusingHosts(discarded: string[]): string[] {
 }
 
 /**
+ * A page (or pages) the search named that turned automated readers away, said of the page, not the site: the same run
+ * may have read another page there (review of research 2.8.1).
+ */
+export function refusalOf(hosts: string[]): { said: string; it: string } {
+  const one = hosts.length === 1;
+  return { said: `${one ? 'A page' : 'Pages'} found for this barcode (on ${hosts.slice(0, 3).join(', ')}) ${one ? 'turns' : 'turn'} automated readers away`, it: one ? 'it' : 'them' };
+}
+
+/**
  * What a search that took nothing from a page came to, for the cards and the closing evidence note: a page that shows
  * the barcode but gave nothing (its read found nothing or was cut by the time limit, or it shows only the barcode),
  * else pages the search named that turn automated readers away, else that no page it could check shows the barcode
@@ -221,9 +230,9 @@ export function searchStop(outcome: 'done' | 'hint_failed' | 'time_limited', dis
       : `A page showing this barcode was found (${names(shown)}), but nothing about the product could be taken from it${later}.`;
   }
   if (refusing.length) {
-    const refused = `The pages found for this barcode (${names(refusing)}) turn automated readers away`;
+    const { said: refused, it } = refusalOf(refusing);
     return {
-      done: `${refused}, so it couldn’t be checked there.`,
+      done: `${refused}, so nothing could be checked on ${it}.`,
       hint_failed: `${refused}, and the barcode database wasn’t available for more search words; Purrbi searches again once it is.`,
       time_limited: `${refused}, and the search ran out of the scan’s time before it was done; Purrbi searches again later.`,
     }[outcome];

@@ -34,7 +34,7 @@ import { SourceError } from '../util/http';
 import { rematchAnalysis } from '../domain/nutrition';
 import { ASSESSMENT_VERSION, MAX_CACHE_LOOKUPS, MAX_NEW_TERMS, olderAssessment, RESEARCH_TIME_LIMIT_MS, SCAN_STATUS, STEP8_LATEST_START_MS, STUCK_AFTER_MS, WORKING_STATUSES, type ErrorCode, type RuntimeConfig } from './config';
 import { corroborateLabel } from './corroborate';
-import { barcodeHosts, dropStaleImageReads, enrichmentFacts, fillMissing, labelToFacts, missingInfo, refusingHosts, retrievalStatus, searchStop, supersededIdentity, type PhotoRequest, type RetrievalContext } from './facts';
+import { barcodeHosts, dropStaleImageReads, enrichmentFacts, fillMissing, labelToFacts, missingInfo, refusalOf, refusingHosts, retrievalStatus, searchStop, supersededIdentity, type PhotoRequest, type RetrievalContext } from './facts';
 import { explanationFields, highlightFields, ingredientRowFields, jobFields, resultFields, type JobInfo } from './serialize';
 import {
   aiBudgetLeft,
@@ -672,7 +672,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
                   : shown.length
                     ? `A page showing this barcode was found (${shown.slice(0, 3).join(', ')}), but nothing about the product could be taken from it, so nothing was added.`
                     : refusing.length
-                      ? `The pages found for this barcode (${refusing.slice(0, 3).join(', ')}) turn automated readers away, so nothing could be checked there or added.`
+                      ? `${refusalOf(refusing).said}, so nothing could be checked on ${refusalOf(refusing).it} or added.`
                       : 'Searched the manufacturer’s and retailers’ pages; nothing could be verified against a page, so nothing was added.',
       );
       // Every step's outcome up to twenty (the trace of trace 11f7cc1e-842 stopped before the page that mattered; test A on

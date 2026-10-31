@@ -609,7 +609,7 @@ describe('research 2.7.0 review fixes', () => {
     expect(r.discarded).toContain('barcode search: ebay.com refuses automated readers (HTTP 403), so https://www.ebay.com/itm/147318116815 could not be checked');
     const { retrievalStatus } = await import('../../src/pipeline/facts');
     expect(retrievalStatus('front', { research: { outcome: 'done', discarded: r.discarded, source: '', at: new Date('2026-10-31T00:00:00Z') } })).toEqual({
-      purpose: 'front', status: 'source_unavailable', detail: 'The pages found for this barcode (ebay.com, ubuy.com.lb) turn automated readers away, so it couldn’t be checked there.',
+      purpose: 'front', status: 'source_unavailable', detail: 'Pages found for this barcode (on ebay.com, ubuy.com.lb) turn automated readers away, so nothing could be checked on them.',
     });
   });
   it('an EAN-8 has no 13-digit search', async () => {
@@ -864,12 +864,15 @@ describe('research 2.8.1: what the cards and the trace say', () => {
     // The older note form (research 2.8.0 and before) is read the same way: only HTTP 401 and 403 count.
     expect(refusingHosts(['barcode search: a.example refuses automated readers or has no such page (HTTP 404), so x', 'barcode search: b.example refuses automated readers or has no such page (HTTP 403), so y'])).toEqual(['b.example']);
     expect(retrievalStatus('front', { research: { outcome: 'hint_failed', discarded: A_NOTES, source: '', at } }).detail).toBe(
-      'The pages found for this barcode (ebay.com, ubuy.com.lb) turn automated readers away, and the barcode database wasn’t available for more search words; Purrbi searches again once it is.',
+      'Pages found for this barcode (on ebay.com, ubuy.com.lb) turn automated readers away, and the barcode database wasn’t available for more search words; Purrbi searches again once it is.',
     );
     expect(retrievalStatus('front', { research: { outcome: 'time_limited', discarded: A_NOTES, source: '', at } }).detail).toBe(
-      'The pages found for this barcode (ebay.com, ubuy.com.lb) turn automated readers away, and the search ran out of the scan’s time before it was done; Purrbi searches again later.',
+      'Pages found for this barcode (on ebay.com, ubuy.com.lb) turn automated readers away, and the search ran out of the scan’s time before it was done; Purrbi searches again later.',
     );
-    expect(retrievalStatus('front', { research: { outcome: 'done', discarded: A_NOTES, source: '', at } }).detail).toBe('The pages found for this barcode (ebay.com, ubuy.com.lb) turn automated readers away, so it couldn’t be checked there.');
+    expect(retrievalStatus('front', { research: { outcome: 'done', discarded: A_NOTES, source: '', at } }).detail).toBe('Pages found for this barcode (on ebay.com, ubuy.com.lb) turn automated readers away, so nothing could be checked on them.');
+    // Said of the page, not the site: another page on the same site may have been read and rejected (review of 2.8.1, case D).
+    const sameSite = ['barcode search: shop.example refuses automated readers (HTTP 401), so https://shop.example/a could not be checked', 'barcode search: the cited page does not show this product’s barcode or its brand and name (brand "Wellness" found, no product name known to compare)'];
+    expect(retrievalStatus('front', { research: { outcome: 'done', discarded: sameSite, source: '', at } }).detail).toBe('A page found for this barcode (on shop.example) turns automated readers away, so nothing could be checked on it.');
     // Without such pages (test C): the search found pages, but none it could check shows the barcode.
     const C_NOTES = ['barcode search: searched “"099482517243" | "0099482517243" | "0 99482 51724 3"” (2 results: beda.cz, scribd.com)', 'barcode search: result pages that could not be read: fda.gov (HTTP 401)'];
     expect(retrievalStatus('front', { research: { outcome: 'hint_failed', discarded: C_NOTES, source: '', at } }).detail).toBe(
