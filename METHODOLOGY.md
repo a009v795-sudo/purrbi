@@ -1,7 +1,7 @@
 # Purrbi assessment methodology
 
 Version: `assessment-3.0.0` overall, made of `purrbi-score-3.0.0` (score), `scope-3.0.0` (classification), `verdict-2.1.0` (verdict),
-`kb-2026-10-28-draft` (ingredient notes), `label-extract-2.3.0` (label reader), `research-2.9.1` (web research), `explain-2.0.0` (claim-checked explanations).
+`kb-2026-10-28-draft` (ingredient notes), `label-extract-2.3.0` (label reader), `research-2.9.2` (web research), `explain-2.0.0` (claim-checked explanations).
 A saved result records `assessmentVersion` and its parts (`scoreVersion`, `kbVersion`, `scopeVersion`); the shared product record its
 classification version; each fact read from a label, page or document its reader's version; each explanation its own. When the app opens
 a result saved under an older `assessmentVersion` it asks for a re-check (section 10), so a known bad classification is corrected without
@@ -283,7 +283,7 @@ A result that uses the owner's photo before it is tied to the barcode says "Labe
 
 ## 10. Retrieval before photos, and keeping results current
 
-**Research `research-2.9.1`** (`sources/research.ts`, `pageEvidence.ts`). When the pet databases lack something, research looks for it before
+**Research `research-2.9.2`** (`sources/research.ts`, `pageEvidence.ts`). When the pet databases lack something, research looks for it before
 any photo is asked for:
 - The research model is a setting (`OPENAI_RESEARCH_MODEL`; development uses `gpt-5-mini` since 2026-10-31, `gpt-4.1-mini` before).
   Each run records the model it used, and another model is a new method: a product still missing information is searched again with
@@ -310,8 +310,9 @@ any photo is asked for:
 - Result pages are checked in order of how likely their address is to be the product's page (2.9.0, after tests A and C on
   2.8.1: the checks went to a document site, a home page, GS1 help pages and lookup tools' home pages, and desertcart.in,
   in A's own results, was left past the limit). From the address alone:
-  - not checked, and named in the trace: home pages (also a locale's, also with a tracking or language key), help, tool,
-    forum, encyclopedia, blog or news sections (also on their own host, such as help.…), and listings near the top;
+  - not checked, and named in the trace: home pages (also a locale's, also with only tracking or language keys such as
+    ?srsltid= or ?lang=; a root address with any other key is a page its query addresses, and is checked), help, about,
+    tool, forum, encyclopedia, blog or news sections (also on their own host, such as help.…), and listings near the top;
   - checked after the product pages: a site's search or listing page and a lookup page for the barcode (a site's search
     for one barcode may lead to the product's page; a lookup page gives a name, not the label);
   - otherwise, most promising first: the barcode in a shop's own address (Rakuten, Yahoo and others file items by it), a
@@ -320,7 +321,7 @@ any photo is asked for:
     brand's product), the share of the name's words (from the most trusted source only: a record's or a page's that
     showed the barcode, then the barcode database's title, then an answer's), opened by the model; a review counts
     lower. Address and name are read the same way (accents, apostrophes and split possessives such as Hill-s, catalogue
-    abbreviations).
+    abbreviations), and who the product is for (cat, dog, kitten, puppy) counts among the name's words.
   Sites take turns (a site's second page counts lower, a third is not checked). A run checks at most twelve pages (was
   eight), a search's pages with the checks the run has left, within the same time limit. The ranking only chooses which
   pages Purrbi fetches: a page is used only when Purrbi finds the barcode on it. (2.9.0 briefly gave each search a share

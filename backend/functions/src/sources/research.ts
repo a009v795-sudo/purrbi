@@ -17,9 +17,9 @@ import { httpBytes, httpJson, httpRequest, SourceError } from '../util/http';
 import type { BarcodeHint } from './barcodeLookup';
 import { altTextIngredientLists, documentFacts, markupGtins, nameOnPage, nameTokens, nutritionDocLinks, pageText, parseShopifyProduct, pdfSafety, productHeading, shopifyProductUrl, textGtins } from './pageEvidence';
 
-export const RESEARCH_VERSION = 'research-2.9.1'; // 2.9.1: the ranking's review fixes: each search's own pages with the run's remaining checks (no share per search); the brand counts in the address's host (the maker's own site) and in a split possessive (Hill-s); a parent company's brand does not sink a page carrying the product's name; the barcode in a shop's own address counts 3; a home page with a tracking or language key is still one; a listing ending in /products is no product page. 2.9.0: result pages are checked in order of how likely their address is to be the product's page (the barcode in its path, the product's brand and name words, a product page's address form, opened by the model); home pages and tools, help, forum or category pages are not checked; twelve checks a run (was eight). 2.8.1: the trace names the result pages left out of the checks (documents and pages without a secure address by address, once a run; the rest by site, with the reason: eight a run, two per site in a search, or the run's checks or reads used), says a page that refuses automated readers apart from one that is gone, and says a page that shows only the barcode is tied by it only when it is; notes that only say what was searched, fetched or checked are never read as a rejected value. 2.8.0: pages a reasoning model opened (or searched for words) are checked for the barcode like its search results; its calls get 90 s; each run records its model, and another research model is a new method. 2.7.0: the barcode's 13-digit form is searched too; search words prefer a Latin-script name (an import listing's title in another script finds that language's pages). 2.6.0: the barcode's digits are searched alone first. 2.5.0: the search's result pages are checked site by site (each site's first result, then its second), after every search of the run, at most eight. 2.4.0: a page printing other barcodes besides this one is a listing, not the product's page; each analysis value must be printed after its nutrient's name; the manufacturer's page is sought by the answer's name when no other is known. Results of 2.3.0 are not used (one took another variant's analysis). 2.3.0: the search's own result pages are recorded and checked by Purrbi for the barcode; the first that shows it is read from Purrbi's copy. 2.2.0: the barcode is searched in the forms pages print it; a page tied to the barcode that shows nothing about the product (a price list) ends no search, and what such an answer named is searched for next; a barcode with other numbers beside it is still found. 2.1.0: a page tied to the product names it by its own heading; a web page's sentence that names no species, life stage or standard is not a feeding statement. 2.0.0: alt text, markup and Shopify barcodes, linked nutrition documents, a manufacturer follow-up, catalogue abbreviations, package sizes
+export const RESEARCH_VERSION = 'research-2.9.2'; // 2.9.2: a root address is a home page only when no key but tracking ones (?srsltid=, ?ref=, ?lang=) is left, and more query keys and values address a product (?products_id=, ?route=product/…); /code/ and /jan/ addresses are lookups; cat, dog, kitten and puppy count among the name's words. 2.9.1: the ranking's review fixes: each search's own pages with the run's remaining checks (no share per search); the brand counts in the address's host (the maker's own site) and in a split possessive (Hill-s); a parent company's brand does not sink a page carrying the product's name; the barcode in a shop's own address counts 3; a home page with a tracking or language key is still one; a listing ending in /products is no product page. 2.9.0: result pages are checked in order of how likely their address is to be the product's page (the barcode in its path, the product's brand and name words, a product page's address form, opened by the model); home pages and tools, help, forum or category pages are not checked; twelve checks a run (was eight). 2.8.1: the trace names the result pages left out of the checks (documents and pages without a secure address by address, once a run; the rest by site, with the reason: eight a run, two per site in a search, or the run's checks or reads used), says a page that refuses automated readers apart from one that is gone, and says a page that shows only the barcode is tied by it only when it is; notes that only say what was searched, fetched or checked are never read as a rejected value. 2.8.0: pages a reasoning model opened (or searched for words) are checked for the barcode like its search results; its calls get 90 s; each run records its model, and another research model is a new method. 2.7.0: the barcode's 13-digit form is searched too; search words prefer a Latin-script name (an import listing's title in another script finds that language's pages). 2.6.0: the barcode's digits are searched alone first. 2.5.0: the search's result pages are checked site by site (each site's first result, then its second), after every search of the run, at most eight. 2.4.0: a page printing other barcodes besides this one is a listing, not the product's page; each analysis value must be printed after its nutrient's name; the manufacturer's page is sought by the answer's name when no other is known. Results of 2.3.0 are not used (one took another variant's analysis). 2.3.0: the search's own result pages are recorded and checked by Purrbi for the barcode; the first that shows it is read from Purrbi's copy. 2.2.0: the barcode is searched in the forms pages print it; a page tied to the barcode that shows nothing about the product (a price list) ends no search, and what such an answer named is searched for next; a barcode with other numbers beside it is still found. 2.1.0: a page tied to the product names it by its own heading; a web page's sentence that names no species, life stage or standard is not a feeding statement. 2.0.0: alt text, markup and Shopify barcodes, linked nutrition documents, a manufacturer follow-up, catalogue abbreviations, package sizes
 /** Research results still used as they were saved (older ones are read again: they could take who a product is for from a retailer's title). */
-export const RESEARCH_RESULTS_IN_USE: ReadonlySet<string> = new Set([RESEARCH_VERSION, 'research-2.9.0', 'research-2.8.1', 'research-2.8.0', 'research-2.7.0', 'research-2.6.0', 'research-2.5.0', 'research-2.4.0', 'research-2.2.0', 'research-2.1.0', 'research-2.0.0']); // not 2.3.0
+export const RESEARCH_RESULTS_IN_USE: ReadonlySet<string> = new Set([RESEARCH_VERSION, 'research-2.9.1', 'research-2.9.0', 'research-2.8.1', 'research-2.8.0', 'research-2.7.0', 'research-2.6.0', 'research-2.5.0', 'research-2.4.0', 'research-2.2.0', 'research-2.1.0', 'research-2.0.0']); // not 2.3.0
 
 const nullableString = { type: ['string', 'null'] };
 const SCHEMA = {
@@ -754,8 +754,11 @@ interface RankWords {
 // Words that say nothing of which product it is (nameTokens already drops cat, dog, food, pack and the like; variant
 // words such as grain free, adult or original are kept).
 const GENERIC_WORDS = new Set(['foods', 'pouches', 'cans', 'flavor', 'flavour', 'ounce', 'ounces']);
-/** An address's or a name's words, the same way on both sides: accents and apostrophes dropped, catalogue abbreviations written out. */
-const rankTokens = (s: string) => nameTokens(s.replace(/[’`´]/g, '')).filter((w) => w.length > 2 && !GENERIC_WORDS.has(w));
+/**
+ * An address's or a name's words, the same way on both sides: accents and apostrophes dropped, catalogue abbreviations
+ * written out; who it is for (cat, dog, kitten, puppy) kept, as it tells variants apart.
+ */
+const rankTokens = (s: string) => nameTokens(s.replace(/[’`´]/g, ''), { species: true }).filter((w) => w.length > 2 && !GENERIC_WORDS.has(w));
 /**
  * The brand from the first source that has one; the name from the most trusted source that gives words: a database
  * record's or a page's that showed the barcode, then the barcode database's title, then an answer's (unverified: it
@@ -770,8 +773,12 @@ function rankWords(brands: (string | null | undefined)[], names: (string | null 
 
 // A product page's address (a shop's or marketplace's item page; a trailing "/p" too, VTEX).
 const PRODUCT_ADDRESS = /\/(?:products?|p|dp|itm|items?|ip|goods|pd|prod|sku|product-catalog)\/|\/(?:gp|catalog)\/product\/|-p-\d+|\/p$/;
-// A product page addressed by its query at the site's root (/?pid=…, /?product=…).
-const PRODUCT_KEYS = /^(?:pid|product|product_id|productid|item|item_id|sku)$/i;
+// A product page addressed by its query at the site's root (/?pid=…, /?product=…, osCommerce ?products_id=, OpenCart
+// ?route=product/product).
+const PRODUCT_KEYS = /^(?:pid|product|products?_id|productid|item|item_id|itemid|goods_?id|sku)$/i;
+const PRODUCT_VALUE = /^product(?:[/_]|$)/i;
+// Keys that say where a visit came from or how a page is shown, not which page it is.
+const TRACKING_KEYS = /^(?:srsltid|gclid|gbraid|wbraid|fbclid|msclkid|igshid|ref|ref_|referrer|source|lang|hl|locale|currency|country|region|mc_cid|mc_eid|_ga|_gl|spm|si)$/i;
 // Not checked: sections that hold no product pages (on their own host too), and listings near the top. Test C,
 // 2026-10-31: the checks went to GS1 help pages and lookup tools' home pages; test A: to a home page.
 const SECTION_HOSTS = /^(?:help|support|forums?|community|wiki|docs|blog|news)\./;
@@ -780,7 +787,7 @@ const SECTION_ADDRESS = /^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?(?:tools?|help|helpdesk
 const LISTING_ADDRESS = /^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?(?:categor(?:y|ies)|collections|brands?|tags?)(?:\/[^/]+)?\/?$/;
 // Checked after the product pages: a site's search or listing page and a lookup page for the barcode (a site's search
 // for one barcode may lead to the product's page; a lookup page gives a name, not the label).
-const SEARCH_ADDRESS = /^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?(?:s|search|b|c|browse|brand)(?:\/|$)|\/w\/wholesale-|\/(?:upc|gtin|ean|barcode|lookup)\//;
+const SEARCH_ADDRESS = /^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?(?:s|search|b|c|browse|brand)(?:\/|$)|\/w\/wholesale-|\/(?:upc|gtin|ean|jan|barcode|code|lookup)\//;
 const SEARCH_KEYS = /^(?:q|s|k|query|search|searchterm|term|keywords?|text|w|_nkw|kw|wd|st)$/i;
 
 /**
@@ -808,14 +815,18 @@ function addressPromise(u: string, gtin14: string, words: RankWords, opened: boo
   // A split possessive is rejoined, as the name's words drop the apostrophe (Hill-s, hill-39-s → hills).
   path = path.toLowerCase().replace(/([a-z])-(?:39-)?s(?=[-_/.]|$)/g, '$1s');
   const host = url.hostname.toLowerCase().replace(/^www\./, '');
-  const keys = [...url.searchParams.keys()];
+  // Keys that only say where the visit came from or how the page is shown do not address a page.
+  const keys = [...url.searchParams.keys()].filter((k) => !TRACKING_KEYS.test(k));
   const root = path === '/' || path === '' || /^\/[a-z]{2}(?:-[a-z]{2})?\/?$/.test(path);
-  const product = PRODUCT_ADDRESS.test(path) || (root && keys.some((k) => PRODUCT_KEYS.test(k)));
-  // A home page (a locale's too), also with a tracking or language key (?srsltid=, ?lang=); not a page its query addresses.
-  if (root && !product && !keys.some((k) => SEARCH_KEYS.test(k)) && !queryCarries(u, gtin14)) return { score: -4, share: 0 };
+  // (A site search is no product address, whatever else its query says: WooCommerce ?s=…&post_type=product.)
+  const searchKey = keys.some((k) => SEARCH_KEYS.test(k));
+  const product = PRODUCT_ADDRESS.test(path) || (root && !searchKey && (keys.some((k) => PRODUCT_KEYS.test(k)) || [...url.searchParams.values()].some((v) => PRODUCT_VALUE.test(v))));
+  // A home page (a locale's too, also with a tracking or language key). A root address with any other key is a page
+  // its query addresses, and is checked: a missed product page costs more than one free fetch.
+  if (root && !keys.length) return { score: -4, share: 0 };
   if (!product && (SECTION_HOSTS.test(host) || SECTION_ADDRESS.test(path) || LISTING_ADDRESS.test(path))) return { score: -3, share: 0 };
   const onlyBarcode = /^\/[\d -]+\/?$/.test(path) && textContainsGtin(path, gtin14);
-  if (!product && (keys.some((k) => SEARCH_KEYS.test(k)) || queryCarries(u, gtin14) || SEARCH_ADDRESS.test(path) || onlyBarcode)) return { score: -1, share: 0 };
+  if (!product && (searchKey || queryCarries(u, gtin14) || SEARCH_ADDRESS.test(path) || onlyBarcode)) return { score: -1, share: 0 };
   const pathWords = new Set(rankTokens(path));
   // The share of the name's words the address carries (all of them: four of five is another variant's page more often).
   const ratio = words.name.length ? words.name.filter((w) => pathWords.has(w)).length / words.name.length : 0;
@@ -867,7 +878,7 @@ function leftOutNotes(o: { documents: string[]; insecure: string[]; unlikely?: s
   return [
     ...(o.documents.length ? [`result documents not checked (Purrbi checks web pages only): ${list(o.documents, 3, address)}`] : []),
     ...(o.insecure.length ? [`result pages not checked (no secure address): ${list(o.insecure, 3, address)}`] : []),
-    ...(o.unlikely?.length ? [`result pages not checked (home pages and help, tool, forum, encyclopedia, blog, news or listing pages): ${list(sites(o.unlikely), 6)}`] : []),
+    ...(o.unlikely?.length ? [`result pages not checked (home pages and help, about, tool, forum, encyclopedia, blog, news or listing pages): ${list(sites(o.unlikely), 6)}`] : []),
     ...(o.pastLimit?.length ? [`result pages not checked (at most ${RUN_PAGE_CHECKS} a run): ${list(sites(o.pastLimit), 6)}`] : []),
     ...(o.perSite?.length ? [`result pages not checked (at most two per site in a search): ${list(sites(o.perSite), 6)}`] : []),
     ...(o.spent?.length ? [`result pages not checked (the run’s ${RUN_PAGE_CHECKS} checks or two reads were used): ${list(sites(o.spent), 6)}`] : []),

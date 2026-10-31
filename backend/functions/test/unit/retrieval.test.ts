@@ -1011,7 +1011,7 @@ describe('research 2.9.0: result pages ranked by their address', () => {
     expect(fetched).not.toContain('en.wikipedia.org');
     expect(fetched).toContain('www.scribd.com');
     expect(fetched).toContain('shop.example');
-    expect(r.discarded).toContain('barcode search: result pages not checked (home pages and help, tool, forum, encyclopedia, blog, news or listing pages): pi.bigparadox.com, gs1us.org, resources.gs1ie.org, en.wikipedia.org');
+    expect(r.discarded).toContain('barcode search: result pages not checked (home pages and help, about, tool, forum, encyclopedia, blog, news or listing pages): pi.bigparadox.com, gs1us.org, resources.gs1ie.org, en.wikipedia.org');
   });
   it('a shop’s page for this flavour, filed under its brand pages, comes before the maker’s other flavours; a lookup page for the barcode comes last', async () => {
     const fetched: string[] = [];
@@ -1153,5 +1153,39 @@ describe('research 2.9.0 re-review fixes', () => {
     const fetched = await order('099482481087', ['https://pi.bigparadox.com/?srsltid=AfmBOoqXyz123', 'https://www.royalcanin.com/us/cats/products/', 'https://www.ebay.com/itm/317732737868']);
     expect(fetched.map((u) => new URL(u).hostname)).not.toContain('pi.bigparadox.com');
     expect(new URL(fetched[0]).hostname).toBe('www.ebay.com');
+  });
+});
+
+// The first 2.9.0 review's last verdicts (workflow wf_62f0af14-94b), checked against 2.9.1.
+describe('research 2.9.2: root addresses, lookups and who the product is for', () => {
+  const plain = '<html><head><title>Page</title></head><body><h1>Something else</h1></body></html>';
+  const order = async (results: string[], over: Record<string, unknown> = {}) => {
+    const fetched: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url === 'https://api.openai.com/v1/responses')
+        return new Response(JSON.stringify({ output: [{ type: 'web_search_call', action: { type: 'search', queries: ['"099482481087"', '"0099482481087"'], sources: results.map((u) => ({ type: 'url', url: u })) } }, { type: 'message', content: [{ type: 'output_text', text: JSON.stringify({ ...modelAnswer({}), found: false }), annotations: [] }] }] }), { status: 200 });
+      if (!url.endsWith('.js')) fetched.push(url);
+      return new Response(plain, { status: 200 });
+    }));
+    const r = await researchProduct({ apiKey: 'k', model: 'gpt-5-mini', gtin14: '00099482481087', barcode: '099482481087', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-10-31T23:30:00Z'), ...over });
+    return { fetched, r };
+  };
+  it('a root address with a key that is not for tracking is checked (OpenCart, osCommerce); with only tracking keys it is a home page', async () => {
+    const { fetched, r } = await order(['https://shop-a.example/index.php?route=product/product&product_id=50', 'https://shop-b.example/?products_id=123', 'https://shop-c.example/?main_page=index&cPath=12', 'https://home.example/?srsltid=AfmBOoq&ref=abc']);
+    const hosts = fetched.map((u) => new URL(u).hostname);
+    expect(hosts.slice(0, 2).sort()).toEqual(['shop-a.example', 'shop-b.example']);
+    expect(hosts).toContain('shop-c.example');
+    expect(hosts).not.toContain('home.example');
+    expect(r.discarded.some((d) => /home pages.*home\.example/.test(d))).toBe(true);
+  });
+  it('a /code/ or /jan/ page for the barcode is a lookup, checked after the shop’s product page', async () => {
+    const { fetched } = await order(['https://barcode.monster/code/0099482481087', 'https://www.janken.example/jan/0099482481087', 'https://www.chewy.com/whole-paws-salmon-pate/dp/1']);
+    expect(new URL(fetched[0]).hostname).toBe('www.chewy.com');
+  });
+  it('who the product is for tells its page from another variant’s (kitten, cat)', async () => {
+    const kitten = await order(['https://www.chewy.com/purina-pro-plan-adult-chicken-rice/dp/1', 'https://www.chewy.com/purina-pro-plan-kitten-chicken-rice/dp/2'], { knownBrand: 'Purina Pro Plan', knownName: 'Purina Pro Plan Kitten Chicken & Rice' });
+    expect(kitten.fetched[0]).toBe('https://www.chewy.com/purina-pro-plan-kitten-chicken-rice/dp/2');
+    const cat = await order(['https://www.wellnesspetfood.com/product-catalog/core-salmon-dog-food', 'https://www.wellnesspetfood.com/product-catalog/core-salmon-cat-food'], { knownBrand: 'Wellness', knownName: 'Wellness CORE Salmon Cat Food' });
+    expect(cat.fetched[0]).toBe('https://www.wellnesspetfood.com/product-catalog/core-salmon-cat-food');
   });
 });
