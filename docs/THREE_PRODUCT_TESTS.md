@@ -419,3 +419,17 @@ could be checked on it." A is limited by access, not by which pages are checked.
 **Android APK build 9** (run 41243341776, from `399d7e0`; app code unchanged since build 8, `638eb45`; the backend changes are
 server-side): artifact `purrbi-android-apk-9`, SHA-256 `dc62eaf692525647b5a3600e0e85e271c7097ea9cadb0d01fabaae2a9bb8feba`.
 Installation on a device: NOT RUN here (no device).
+
+**Research 2.9.2** (commits `24cac0a`, `0ddb37e`, `bf31edb`; deploy 41253297379, live 2026-10-31 23:40 UTC, confirmed by a scan
+reporting revision `bf31edb`). It closes the remaining verdicts of the first ranking review (`wf_62f0af14-94b`). Its own review
+(`wf_35ad41b0-64b`) confirmed four issues, all fixed:
+- **Root addresses:** a root address is a home page only when no key but tracking ones (`?srsltid=`, `?ref=`, `?lang=`) is
+  left. A root or script address with any other key is checked. Exact product routes or keys address a product (osCommerce
+  `/product_info.php?products_id=`, OpenCart `/index.php?route=product/product`, Zen Cart `?main_page=product_info`);
+  catalogue routes do not.
+- **Lookups:** `/code/` and `/jan/` pages are lookups, checked after product pages.
+- **Who it is for:** cat, dog, kitten and puppy are kept apart from the name's words. They break ties among addresses that
+  carry the name's words (a kitten recipe's page before the adult one's), and an address for the other species counts lower.
+
+Unit tests 491/491, emulator tests 95/95, CI green. The results of A, B and C above stand; their saved searches are 2.9.0 or
+2.9.1 and stay in use.
