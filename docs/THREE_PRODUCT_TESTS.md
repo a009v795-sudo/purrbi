@@ -314,3 +314,40 @@ readers. The barcode-database message takes precedence over the refusal message.
 
 **B** is rescanned after the barcode database's reset (13:20 UTC scheduled), now on research 2.8.0 with gpt-5-mini. Its saved
 run is 2.7.0's, so it is searched again at once. A and C's retries fall due after about 17:30 UTC.
+
+## Research 2.8.1 and the rescans after the barcode database's reset (2026-10-31, 13:14 UTC)
+
+**Fixes** (the owner asked for both after cycle 7):
+- **Card wording.** A's front card said the search "found nothing" while pages the search named turn automated readers away.
+  The cards and the closing note now say what stopped the search, in this order:
+  - a page Purrbi found showing the barcode that gave nothing;
+  - the pages found for the barcode that refuse readers (HTTP 401/403);
+  - else that no page the search could check shows the barcode.
+  A page that is gone (404) is no longer counted as refusing. Notes that only say what was searched, fetched or checked
+  (gpt-5-mini's query for A contained "ingredients") are no longer read as rejected values.
+- **Trace.** Result pages left out of the checks are named: documents and pages without a secure address by address, the
+  others by site with the reason. The scan keeps up to 20 research notes (was 12) among 28 notes of 600 characters.
+
+Commits `a58a211` and `f634a1b`, the second after a review of the first. Review workflow `wf_4e18ac6b-e26`: two lenses, then
+skeptics. It found 8 issues, all fixed with tests that fail on `a58a211`. At deploy time 7 verdicts were in: 6 confirmed, and 1
+refuted as older than the commit (the other lens confirmed the same defect). The main one: the new fallback sentence "no page
+it could check shows this barcode" was false when Purrbi's own check had found a page showing it. Unit tests 473/473, emulator
+tests 95/95, CI green. Deploy 41203843075 (`f634a1b`, research 2.8.1, gpt-5-mini).
+
+**Results** (app `638eb45` web build, typed entry, account `accept`). The barcode database answered again for every scan:
+
+| Test | Scan / trace | What happened | Outcome |
+|---|---|---|---|
+| A `099482481087` | `e4eq5MVShnXDXbO35HCZ` / `16590db9-020` | The barcode database has no record for A. gpt-5-mini (2 calls, 16 s and 10 s) searched the printed forms and the likely name, and opened Whole Foods, wholefoodsdelivery.com and Health First Market. Health First Market's product page was readable this time but does not show the barcode or a name Purrbi can trust. wholefoodsdelivery.com has no such page (404). Ubuy refuses readers (403), and eBay's result page too. Documents left out: a Chinese insurance PDF, Merrick and Fromm salmon-pâté sheets, a USPTO filing and two state feed-registration lists. The run's 8 checks went to the first search's results (scribd.com, pi.bigparadox.com, wholisticpet.com, …). The name search's pages, including desertcart.in, jamaica.desertcart.com and pricehistory.app (marketplace and price-history pages that often print barcodes), were named but not checked. | Unscored, "Not yet confirmed for cats or dogs". Card: "The pages found for this barcode (ubuy.com.lb) turn automated readers away, so it couldn’t be checked there." Saved as finished. |
+| B `076344886570` | `Hl05MJpjGR6QZbWxkr3c` / `5b916bb8-735` | The barcode database gave its title, "Wellness Healthy Indulgence Gravies with Chicken & Turkey in Gravy". gpt-5-mini (2 calls, 12 s and 18 s) cited a Japanese shop page that **shows the barcode** (shop.petemo.jp). Purrbi verified the **guaranteed analysis** there: protein 4 %, fat 2 %, fiber 1 %, moisture 85 %, ash 2.5 % (the Gravies' values). Magnesium and taurine are not on the page. Rejected: the ingredient list (not on the page in full and in order) and "for cats" (not in the page's heading or feeding statement). The manufacturer search reached a Wellness variety-pack page, which does not show this barcode, so it was not used. | Unscored, "Not yet confirmed for cats or dogs", now **with a verified analysis**. Card: "What the search found didn’t match what the page prints, so the details weren’t used." |
+| C `099482517243` | `8tJWWi98ehVxMrSudbiH` / `eaaecc23-7a9` | The barcode database has no record for C. gpt-5-mini (1 call, 9 s) ran 3 searches, including one on upcitemdb.com (0 results), and opened barcode.codes. Results: GS1 help pages and barcode-lookup tools' home pages, none showing the barcode, and a Game of Life forum (403; the digits by coincidence). **The open question is settled: beda.cz is `beda.cz/~jirkaj/log/log4e6.pdf`, a personal log file where the digits appear by coincidence.** admc.us was not returned this time. | Unscored, "Not yet confirmed for cats or dogs". Card: "No manufacturer or retailer page could be matched to this barcode (checked 2026-10-31)." Saved as finished. |
+
+**What the new trace shows:**
+- A is limited by access: the pages that show its barcode refuse automated readers. It is also limited by the check budget: 8
+  checks a run went to low-value results before the marketplace pages the name search found. Ranking result pages by how
+  likely they are to be a product page (a shop or marketplace page naming the product, before help or home pages) would spend
+  the checks better. It is not done yet.
+- B gets as far as the barcode alone allows: a page tying the barcode with the right analysis. No page Purrbi can verify says
+  who it is for in its heading or feeding statement.
+- C is limited by coverage: no product page with its barcode is in the search provider's results, and the barcode database
+  has no record.
