@@ -12,7 +12,7 @@ import { ASSESSMENT_VERSION, DEFAULT_LIMITS, type RuntimeConfig } from '../../sr
 import { handleScanUpdate, processPhoto, processScan, type Deps, type Sources } from '../../src/pipeline/scanJob';
 import { writeExplanations } from '../../src/pipeline/store';
 import type { OpenFactsDb, OpenFactsLookup } from '../../src/sources/openFacts';
-import { RESEARCH_VERSION } from '../../src/sources/research';
+import { RESEARCH_VERSION, ResearchNotStarted } from '../../src/sources/research';
 import { SCOPE_VERSION } from '../../src/domain/scope';
 import { SourceError } from '../../src/util/http';
 
@@ -48,6 +48,7 @@ let hintDown = false; // the barcode database (search words for research) is rat
 let hintResetAt: Date | undefined; // when the rate-limited barcode database says its daily allowance resets
 let identityPage = false; // research finds a retailer page showing BC.unknown's barcode (name and brand only)
 let partialPage = false; // research finds a page showing BC.unknown's barcode with its name and brand, not who it is for
+let researchCut: 'none' | 'not_started' | 'cut' = 'none'; // the scan's time limit stops research before its first search, or cuts it short
 let researchOpts: { knownName?: string; knownBrand?: string; model?: string }[] = [];
 let verdictInputs: string[] = [];
 
@@ -150,6 +151,8 @@ const sources: Sources = {
       return { facts: { productName: { value: 'TEST FIXTURE Dog Trt Frz Dr Wld Salmn', source: page }, brand: { value: 'TESTBRAND', source: page }, classificationSignals: [{ text: 'treat', source: page.sourceId, kind: 'research' as const }, { text: 'intended for cats', source: page.sourceId, kind: 'research' as const }] }, sources: [page], discarded: [], model: 'mock' };
     }
     if (researchThrows) throw new SourceError('OpenAI', 'timeout', 'no response within 60000 ms (mocked)');
+    if (researchCut === 'not_started') throw new ResearchNotStarted();
+    if (researchCut === 'cut') return { facts: null, sources: [], discarded: ['barcode search: model reported no matching product (1 search, 0 citations)', 'barcode search: result pages not checked (the scan’s time limit): shop.example'], model: 'mock', calls: 1, timeLimited: true };
     if (pagesDown) return { facts: null, sources: [], discarded: ['barcode search: could not fetch https://testbrand.example/lamb to verify it (HTTP 429)'], model: 'mock', fetchFailed: true };
     if (o.barcode === BC.misfiled) {
       const page = { sourceId: `web:teststore.example:${o.gtin14}`, sourceType: 'retailer_or_web' as const, sourceName: 'teststore.example', url: 'https://teststore.example/grain-free-chicken-pea-dog-food', retrievedAt: NOW.toISOString(), matchConfidence: 'brand_and_product' as const, readerVersion: RESEARCH_VERSION };
@@ -288,6 +291,7 @@ beforeEach(async () => {
   hintResetAt = undefined;
   identityPage = false;
   partialPage = false;
+  researchCut = 'none';
   researchOpts = [];
   await fetch(`http://${process.env.FIRESTORE_EMULATOR_HOST}/emulator/v1/projects/demo-purrbi/databases/(default)/documents`, { method: 'DELETE' });
   await db.doc('users/u1/pets/cat1').set({ name: 'Miso', species: 'cat', birthDate: Timestamp.fromDate(new Date('2022-01-01')), allergiesStatus: 'reported', allergies: ['chicken'], profileVersion: 2 });
@@ -1215,6 +1219,62 @@ describe('fallbacks before asking the owner for photos', () => {
     await db.doc(`productMeta/${(await read(unknown)).gtin}`).update({ 'enrichment.research.model': FieldValue.delete() });
     await scan(other, BC.unknown);
     expect(calls.research).toBe(4);
+  });
+  it('research the time limit stopped before its first search is not saved as searched, says so, and runs on the next scan (review of research 2.8.0)', async () => {
+    researchCut = 'not_started';
+    const first = await newScan('u1', BC.unknown);
+    await processScan(deps({ researchEnabled: true }), 'u1', first.id);
+    const s = await read(first);
+    expect(calls.research).toBe(1);
+    expect((await db.doc(`productMeta/${s.gtin}`).get()).data()?.enrichment?.research ?? null).toBeNull();
+    expect(s.fieldStatus.every((x: { status: string }) => x.status === 'not_searched')).toBe(true);
+    expect(s.photoRequests[0].reason).toMatch(/^The manufacturer’s page hasn’t been searched yet: this scan ran out of time before the search, and the next scan searches for it\. /);
+    expect(s.evidenceNotes.join(' ')).not.toMatch(/Searched the manufacturer’s and retailers’ pages/);
+    researchCut = 'none';
+    await processScan(deps({ researchEnabled: true }), 'u1', (await newScan('u1', BC.unknown)).id);
+    expect(calls.research).toBe(2);
+  });
+  it('with too little of the scan’s time left for a search, research is not started: no allowance or barcode-database request is spent (review of research 2.8.0)', async () => {
+    const short = deps({ researchEnabled: true, researchTimeLimitMs: 30000 });
+    const first = await newScan('u1', BC.unknown);
+    await processScan(short, 'u1', first.id);
+    const s = await read(first);
+    expect(calls.research ?? 0).toBe(0);
+    expect(calls.hint ?? 0).toBe(0);
+    expect((await db.doc(`usage/u1_${NOW.toISOString().slice(0, 10).replace(/-/g, '')}`).get()).data()?.research ?? 0).toBe(0);
+    expect(s.diagnosticNotes.join(' ')).toMatch(/Research not run: too little of the scan’s time was left for a search/);
+    expect(s.fieldStatus.every((x: { status: string }) => x.status === 'not_searched')).toBe(true);
+    await processScan(deps({ researchEnabled: true }), 'u1', (await newScan('u1', BC.unknown)).id);
+    expect(calls.research).toBe(1);
+    expect(calls.hint).toBe(1);
+  });
+  it('a search the time limit cut short that found nothing did not finish: it is said so and tried again after 12 hours, not saved as not found (review of research 2.8.0)', async () => {
+    researchCut = 'cut';
+    const at = (h: number) => ({ ...deps({ researchEnabled: true }), now: () => new Date(NOW.getTime() + h * 3600 * 1000) });
+    const first = await newScan('u1', BC.unknown);
+    await processScan(at(0), 'u1', first.id);
+    const s = await read(first);
+    expect((await db.doc(`productMeta/${s.gtin}`).get()).data()!.enrichment.research).toMatchObject({ outcome: 'time_limited', attempts: 1 });
+    expect(s.fieldStatus.every((x: { status: string }) => x.status === 'source_unavailable')).toBe(true);
+    expect(s.photoRequests[0].reason).toMatch(/^The search ran out of the scan’s time before it was done, and found nothing so far; Purrbi searches again later\. /);
+    expect(s.evidenceNotes.join(' ')).toMatch(/ran out of the scan’s time/);
+    await processScan(at(6), 'u1', (await newScan('u1', BC.unknown)).id);
+    expect(calls.research).toBe(1);
+    researchCut = 'none';
+    const later = await newScan('u1', BC.unknown);
+    await processScan(at(13), 'u1', later.id);
+    expect(calls.research).toBe(2);
+    expect((await read(later)).fieldStatus.every((x: { status: string }) => x.status === 'not_found')).toBe(true);
+  });
+  it('after a research model switch, a search under the new model that fails says so, not the old model’s “not found” (review of research 2.8.0)', async () => {
+    await processScan(deps({ researchEnabled: true }), 'u1', (await newScan('u1', BC.unknown)).id);
+    researchThrows = true;
+    const failed = await newScan('u1', BC.unknown);
+    await processScan(deps({ researchEnabled: true, researchModel: 'mock-2' }), 'u1', failed.id);
+    const f = await read(failed);
+    expect(calls.research).toBe(2);
+    expect(f.fieldStatus.every((x: { status: string }) => x.status === 'source_unavailable')).toBe(true);
+    expect(f.photoRequests[0].reason).toMatch(/^Purrbi’s search for the manufacturer’s page didn’t work just now; it tries again later\. /);
   });
   it('a used-up daily allowance of the barcode database is not asked again before it resets (2026-10-30: HTTP 429 on every scan)', async () => {
     hintDown = true;

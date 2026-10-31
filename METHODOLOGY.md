@@ -288,8 +288,16 @@ any photo is asked for:
 - The research model is a setting (`OPENAI_RESEARCH_MODEL`; development uses `gpt-5-mini` since 2026-10-31, `gpt-4.1-mini` before).
   Each run records the model it used, and another model is a new method: a product still missing information is searched again with
   it, a complete one is not. A reasoning model (gpt-5-mini) also opens pages and looks for words on them: the pages it opened are
-  recorded in the trace ("opened …") and checked by Purrbi for the barcode like its search results. Its calls get 90 s instead of
-  60 s (as explanations and label reading do), so fewer searches fit in the research step's 200 s.
+  recorded in the trace ("opened …") and checked by Purrbi for the barcode like its search results. A site's own search page whose
+  address carries the barcode (`?q=076344886570`) prints it only because it repeats the query, so its text ties nothing. A search
+  may carry several queries, all recorded; only searches count as searches. Its calls get 90 s instead of 60 s (as explanations
+  and label reading do), so fewer searches fit in the research step's 200 s:
+  - result pages are checked before another paid search, while a page found could still be read;
+  - with less time left than one search needs, research is not started: nothing is paid for or saved as searched, and the
+    result says the next scan searches;
+  - a run the time limit cut short that found nothing (or left who the product is for unknown) did not finish: it is retried
+    after 12 hours, 2 days and 7 days like unreachable pages, and the result says the search ran out of time, never "no page
+    could be matched".
 - When no product database record or owner label names the product and no name in Latin script is known (also when the only name came
   from a web page in another script), a public barcode database (UPCitemdb's free lookup, `BARCODE_LOOKUP_ENABLED`) is asked for the
   product's title, only to tell research what to search for; nothing from it is shown or used as a fact. Its failure is recorded as such.

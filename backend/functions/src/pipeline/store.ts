@@ -66,7 +66,7 @@ export interface Enrichment {
   hintAt?: Date | null;
   databaseImages?: { read: string[]; skipped: string[]; failed?: string[]; version?: string };
   researchAt?: Date | null;
-  /** outcome "fetch_failed": no candidate page could be reached for a reason that may pass (timeout, rate limit, server error); "hint_failed": nothing, or nothing saying who the product is for, found while the barcode database (the search words) was unavailable. Both are retried a bounded number of times, never a 30-day negative */
+  /** outcome "fetch_failed": no candidate page could be reached for a reason that may pass (timeout, rate limit, server error); "hint_failed": nothing, or nothing saying who the product is for, found while the barcode database (the search words) was unavailable; "time_limited": the same, when the scan's time limit cut the search short. All three are retried a bounded number of times, never a 30-day negative */
   research?: {
     filled: string[];
     discarded: string[];
@@ -74,9 +74,9 @@ export interface Enrichment {
     version?: string;
     /** The research model the run used (OPENAI_RESEARCH_MODEL): another model is a new method. */
     model?: string;
-    outcome?: 'done' | 'fetch_failed' | 'hint_failed';
+    outcome?: 'done' | 'fetch_failed' | 'hint_failed' | 'time_limited';
     species?: string;
-    /** Consecutive unfinished runs (fetch_failed, hint_failed): retried after 12 h, 2 days, 7 days, then not until a new method or 30 days. */
+    /** Consecutive unfinished runs (fetch_failed, hint_failed, time_limited): retried after 12 h, 2 days, 7 days, then not until a new method or 30 days. */
     attempts?: number;
   };
 }

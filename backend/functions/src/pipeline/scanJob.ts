@@ -28,7 +28,7 @@ import { lookupBarcodeHint as barcodeHintImpl, type BarcodeHint } from '../sourc
 import { readDatabaseLabelImages as databaseImagesImpl } from '../sources/labelImages';
 import { checkRecalls as checkRecallsImpl } from '../sources/openfda';
 import { databaseGuarantees, DB_FOR_TYPE, implausibleAnalysis, lookupOpenFacts as lookupOpenFactsImpl, openFactsToFacts, type OpenFactsDb, type OpenFactsLookup } from '../sources/openFacts';
-import { otherScript, RESEARCH_RESULTS_IN_USE, RESEARCH_VERSION, researchProduct as researchImpl, type ResearchOutcome } from '../sources/research';
+import { otherScript, RESEARCH_RESULTS_IN_USE, RESEARCH_VERSION, ResearchNotStarted, researchProduct as researchImpl, researchStartMs, type ResearchOutcome } from '../sources/research';
 import { currentCalls, errorDetail, runWithCallLog } from '../util/diagnostics';
 import { SourceError } from '../util/http';
 import { rematchAnalysis } from '../domain/nutrition';
@@ -534,7 +534,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   // A search made while the barcode database was paused is repeated only once it answers again: the same
   // search without its words would find the same nothing.
   const lastOutcome = meta.enrichment.research?.outcome;
-  const unfinished = lastOutcome === 'hint_failed' || lastOutcome === 'fetch_failed';
+  const unfinished = lastOutcome === 'hint_failed' || lastOutcome === 'fetch_failed' || lastOutcome === 'time_limited';
   const hintStillPaused = lastOutcome === 'hint_failed' && config.barcodeLookupEnabled !== false ? await providerPausedUntil(db, 'upcitemdb', now) : null;
   // A new method: a new research version, or another research model (a run saved without its model counts as
   // another model's).
@@ -556,7 +556,15 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   const researchWanted = (stillMissing || scope.status === 'out_of_scope') && (!hasWeb || methodChanged || retryDue) && researchDue;
   // Why research wanted here did not run (said per missing panel, never as "product unknown").
   let researchNotRun: RetrievalContext['researchNotRun'] = researchWanted && !(aiOk && config.researchEnabled) ? (o.allowFetch ? 'switched_off' : 'saved_evidence') : undefined;
-  if (aiOk && config.researchEnabled && researchWanted) {
+  // With too little of the research step's time left for one search (slow label-image reads before it), research
+  // is not started: no search is paid for, no allowance or barcode-database request is spent, nothing is saved as
+  // searched, and the next scan searches.
+  const researchDeadline = (job.clockStart ?? Date.now()) + (config.researchTimeLimitMs ?? RESEARCH_TIME_LIMIT_MS);
+  if (aiOk && config.researchEnabled && researchWanted && researchDeadline - Date.now() < researchStartMs(config.researchModel)) {
+    researchNotRun = 'time_limit';
+    job.diagnosticNotes.push('Research not run: too little of the scan’s time was left for a search; the next scan searches');
+  }
+  if (aiOk && config.researchEnabled && researchWanted && researchNotRun !== 'time_limit') {
     await setStatus(deps, o.uid, o.scanId, SCAN_STATUS.researching, 'Looking for the manufacturer’s label information', 40);
     try {
       await consumeQuota(db, o.uid, 'research', config.limits, now);
@@ -598,9 +606,9 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
           }
         }
       }
-      const r = await deps.sources.research({ apiKey: config.openaiApiKey(), model: config.researchModel, gtin14: gtin, barcode: o.barcode.expanded ?? o.barcode.digits, knownName: facts.productName?.value ?? keptIdentity.productName?.value, knownBrand: facts.brand?.value ?? keptIdentity.brand?.value, knownIngredients: facts.ingredients?.value, knownSpecies: scope.species, hint, userAgent: config.userAgent, now, beforeAiCall: () => consumeAiBudget(db, config.limits, now), deadline: (job.clockStart ?? Date.now()) + RESEARCH_TIME_LIMIT_MS });
-      // Pages that could not be reached are a technical failure, not an answer.
-      researchReturned = !!r.facts || r.fetchFailed !== true;
+      const r = await deps.sources.research({ apiKey: config.openaiApiKey(), model: config.researchModel, gtin14: gtin, barcode: o.barcode.expanded ?? o.barcode.digits, knownName: facts.productName?.value ?? keptIdentity.productName?.value, knownBrand: facts.brand?.value ?? keptIdentity.brand?.value, knownIngredients: facts.ingredients?.value, knownSpecies: scope.species, hint, userAgent: config.userAgent, now, beforeAiCall: () => consumeAiBudget(db, config.limits, now), deadline: researchDeadline });
+      // Pages that could not be reached, or a search cut short by the time limit, are no answer.
+      researchReturned = !!r.facts || (r.fetchFailed !== true && r.timeLimited !== true);
       let filled: string[] = [];
       if (r.facts) {
         // "Active ingredients" are a supplement's; a food page's additive list is not used as such.
@@ -618,7 +626,10 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       // Also when the barcode database was unavailable and who the product is for is still unknown: a page found
       // without its words (trace cdee0a88-3ff: a Japanese listing) is not the end of the search.
       const hintOutage = hintFailed && (!r.facts || scopeOf(facts, origin).status === 'unknown');
-      const outcome = unreachable ? 'fetch_failed' : hintOutage ? 'hint_failed' : 'done';
+      // A search the time limit cut short (a search, a check of result pages or a read left out) that found nothing,
+      // or left who the product is for unknown, did not finish either: it is tried again on the same bounded schedule.
+      const timeCut = r.timeLimited === true && (!r.facts || scopeOf(facts, origin).status === 'unknown');
+      const outcome = unreachable ? 'fetch_failed' : hintOutage ? 'hint_failed' : timeCut ? 'time_limited' : 'done';
       const attempts = outcome === 'done' ? undefined : unfinished && !methodChanged ? attemptsSoFar + 1 : 1;
       meta.enrichment.research = { filled, discarded: r.discarded, source: src ? `${src.sourceName} (${src.sourceType})` : '', version: RESEARCH_VERSION, model: config.researchModel, outcome, species: scope.species, ...(attempts ? { attempts } : {}) };
       metaChanged = true;
@@ -648,6 +659,10 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
                 ? 'The barcode database wasn’t available, so the search had only the barcode to go on and found nothing; Purrbi tries again later.'
                 : hintOutage
                   ? 'A page showing this barcode was found, but it doesn’t say who the product is for; the barcode database wasn’t available for more search words, so Purrbi searches again once it is.'
+                : timeCut && !r.facts
+                  ? 'The search ran out of the scan’s time before every step was done, and found nothing so far; Purrbi searches again later.'
+                : timeCut
+                  ? 'A page showing this barcode was found, but it doesn’t say who the product is for; the search ran out of the scan’s time, so Purrbi searches again later.'
                 : r.facts && src
                   ? // A page tied to the product was checked, but holds nothing the record lacks (trace 99877a3e-234).
                     `${src.sourceName} matches this product (checked on the page) but shows nothing its record lacks, so nothing was added.`
@@ -659,7 +674,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
     } catch (err) {
       // Research is optional: keep going with what we have.
       const reason = err instanceof QuotaError ? err.kind : errorDetail((err as Error).message);
-      researchNotRun = err instanceof QuotaError ? (err.kind === 'research' ? 'quota' : 'ai_budget') : 'error';
+      researchNotRun = err instanceof ResearchNotStarted ? 'time_limit' : err instanceof QuotaError ? (err.kind === 'research' ? 'quota' : 'ai_budget') : 'error';
       job.diagnosticNotes.push(`Research not run: ${reason}`);
       log('research skipped', { reason });
     }
@@ -761,7 +776,8 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   const requests: PhotoRequest[] = missingInfo(facts, scope, general.category);
   // Each request says why its information is still missing: not searched, unreachable, not on the sources,
   // unreadable, or rejected by a check.
-  const savedResearch = meta.enrichment.research?.version === RESEARCH_VERSION ? meta.enrichment.research : undefined;
+  // (The current method is the research version and model: a run by another model is not this one's, even when saved.)
+  const savedResearch = meta.enrichment.research?.version === RESEARCH_VERSION && meta.enrichment.research?.model === config.researchModel ? meta.enrichment.research : undefined;
   const retrieval: RetrievalContext = {
     ...(savedResearch ? { research: { outcome: savedResearch.outcome, discarded: savedResearch.discarded ?? [], source: savedResearch.source ?? '', at: meta.enrichment.researchAt } } : {}),
     researchNotRun,

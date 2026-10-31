@@ -36,6 +36,8 @@ export interface RuntimeConfig {
   retryTestBarcodes?: string[];
   /** The deployed commit (set by the deploy workflow), recorded on every job with the provider configuration. */
   backendRevision?: string;
+  /** The research step's time limit from the job's start (default RESEARCH_TIME_LIMIT_MS). */
+  researchTimeLimitMs?: number;
 }
 
 export const DEFAULT_LIMITS: Limits = {

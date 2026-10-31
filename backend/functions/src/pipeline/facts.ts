@@ -171,10 +171,10 @@ export interface FieldStatus {
   detail: string;
 }
 export interface RetrievalContext {
-  /** Research under the current method, as saved (this run's or an earlier one's). */
-  research?: { outcome?: 'done' | 'fetch_failed' | 'hint_failed'; discarded: string[]; source: string; at?: Date | null };
-  /** Why research did not run when it was wanted and none under the current method is saved. */
-  researchNotRun?: 'quota' | 'ai_budget' | 'switched_off' | 'saved_evidence' | 'error';
+  /** Research under the current method (research version and model), as saved (this run's or an earlier one's). */
+  research?: { outcome?: 'done' | 'fetch_failed' | 'hint_failed' | 'time_limited'; discarded: string[]; source: string; at?: Date | null };
+  /** Why research did not run when it was wanted and none under the current method is saved ("time_limit": too little of the scan's time was left for a search). */
+  researchNotRun?: 'quota' | 'ai_budget' | 'switched_off' | 'saved_evidence' | 'error' | 'time_limit';
   /** Database label images that could not be read: definitive (`skipped`) or technical (`failed`), by panel. */
   images?: { skipped: string[]; failed?: string[] };
 }
@@ -200,6 +200,11 @@ export function retrievalStatus(purpose: PhotoPurpose, ctx: RetrievalContext): F
     const page = r.source.replace(/\s*\((?:manufacturer|retailer_or_web)\)$/, '');
     return out('source_unavailable', page ? `A page showing this barcode was found (${page}), but not this; the barcode database wasn’t available for more search words, so Purrbi searches again once it is.` : 'The barcode database wasn’t available, so the search had only the barcode to go on and found nothing; Purrbi tries again later.');
   }
+  if (r?.outcome === 'time_limited') {
+    // The scan's time limit cut the search short (a search, a check of its result pages or a read was left out).
+    const page = r.source.replace(/\s*\((?:manufacturer|retailer_or_web)\)$/, '');
+    return out('source_unavailable', page ? `A page showing this barcode was found (${page}), but not this; the search ran out of the scan’s time before it was done, so Purrbi searches again later.` : 'The search ran out of the scan’s time before it was done, and found nothing so far; Purrbi searches again later.');
+  }
   if (!r && ctx.researchNotRun === 'error') return out('source_unavailable', 'Purrbi’s search for the manufacturer’s page didn’t work just now; it tries again later.');
   if (ctx.images?.failed?.some((x) => panel(x) === purpose)) return out('not_read', 'The database’s label image of this panel couldn’t be read just now; Purrbi tries again later.');
   if (r) {
@@ -222,7 +227,14 @@ export function retrievalStatus(purpose: PhotoPurpose, ctx: RetrievalContext): F
     const page = r.source.replace(/\s*\((?:manufacturer|retailer_or_web)\)$/, '');
     return page ? out('not_found', `Not printed on the page matched to this barcode (${page}${when.replace(' (', ', ').replace(')', '')}).`) : out('not_found', `No manufacturer or retailer page could be matched to this barcode${when}.`);
   }
-  const why = { quota: 'today’s searches for this account are used up', ai_budget: 'today’s AI checks are used up', switched_off: 'the manufacturer search is switched off', saved_evidence: 'this check reused the saved evidence, and the next full check searches for it', error: 'the search failed' }[ctx.researchNotRun ?? 'saved_evidence'];
+  const why = {
+    quota: 'today’s searches for this account are used up',
+    ai_budget: 'today’s AI checks are used up',
+    switched_off: 'the manufacturer search is switched off',
+    saved_evidence: 'this check reused the saved evidence, and the next full check searches for it',
+    error: 'the search failed',
+    time_limit: 'this scan ran out of time before the search, and the next scan searches for it',
+  }[ctx.researchNotRun ?? 'saved_evidence'];
   return out('not_searched', `The manufacturer’s page hasn’t been searched yet: ${why}.`);
 }
 

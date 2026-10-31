@@ -7,7 +7,7 @@ import { parseAdequacyStatement } from '../../src/domain/adequacy';
 import { caloriesForPackage, describeCalories, parseCalorieText, parsePackageSize } from '../../src/domain/nutrition';
 import { classifyScope, speciesEvidence } from '../../src/domain/scope';
 import { altTextIngredientLists, documentFacts, markupGtins, nameOnPage, nameTokens, nutritionDocLinks, pageText, parseShopifyProduct, shopifyProductUrl } from '../../src/sources/pageEvidence';
-import { researchProduct } from '../../src/sources/research';
+import { ResearchNotStarted, researchProduct } from '../../src/sources/research';
 
 const WELLNESS_INGREDIENTS =
   'Tuna, Tuna Broth, Water Sufficient for Processing, Mackerel, Salmon, Tapioca Starch, Sunflower Oil, Natural Flavor, Guar Gum, Tricalcium Phosphate, Taurine, Magnesium Sulfate, Vitamins [Vitamin E Supplement, Thiamine Hydrochloride, Niacin, Vitamin A Supplement, Pyridoxine Hydrochloride, d-Calcium Pantothenate, Riboflavin Supplement, Folic Acid, Vitamin D3 Supplement, Biotin, Vitamin B12 Supplement, Potassium Chloride, Choline Chloride, Minerals [Zinc Amino Acid Chelate, Iron Amino Acid Chelate, Manganese Amino Acid Chelate, Copper Amino Acid Chelate, Potassium Iodide, Sodium Selenite], Menadione Sodium Bisulfite Complex (Vitamin K).';
@@ -714,16 +714,16 @@ describe('a reasoning research model (gpt-5-mini, 2026-10-31)', () => {
     expect(r.discarded.slice(0, 4)).toEqual([
       'barcode search: searched “"076344886570" | "0076344886570"” (1 result: chewy.com)',
       'barcode search: opened petsupermarket.com',
-      'barcode search: model reported no matching product (4 searches, 0 citations)',
+      'barcode search: model reported no matching product (1 search, 0 citations)',
       'barcode search: result pages without this barcode: chewy.com',
     ]);
-    expect(r.discarded).toContain('barcode search: petsupermarket.com (a search result) shows this barcode, so Purrbi read it');
+    expect(r.discarded).toContain('barcode search: petsupermarket.com (a page the model opened) shows this barcode, so Purrbi read it');
     // Both forms were searched in the first call, so the 13-digit form is not searched again.
     expect(r.discarded.some((d) => d.startsWith('barcode search (13-digit form)'))).toBe(false);
     expect(r.sources[0]).toMatchObject({ sourceName: 'petsupermarket.com', matchConfidence: 'exact_barcode' });
     expect(r.facts?.ingredients?.value.slice(0, 2)).toEqual(['Chicken Broth', 'Water Sufficient For Processing']);
   });
-  it('starts a search only with 90 s and a margin left, where another model needs 60 s', async () => {
+  it('starts a search only with 90 s and a margin left, where another model needs 60 s; with less it makes none and says research did not start', async () => {
     const calls: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (url: string, init?: { body?: string }) => {
       if (url === 'https://api.openai.com/v1/responses') {
@@ -733,10 +733,111 @@ describe('a reasoning research model (gpt-5-mini, 2026-10-31)', () => {
       return new Response('', { status: 404 });
     }));
     const base = { apiKey: 'k', gtin14: GRAVIES, barcode: '076344886570', knownSpecies: 'unknown' as const, userAgent: 'test', now: new Date('2026-10-31T00:00:00Z') };
-    const slow = await researchProduct({ ...base, model: 'gpt-5-mini', deadline: Date.now() + 100000 });
-    expect(slow.discarded).toEqual(['barcode search: not run (the scan’s time limit)']);
+    await expect(researchProduct({ ...base, model: 'gpt-5-mini', deadline: Date.now() + 100000 })).rejects.toBeInstanceOf(ResearchNotStarted);
     expect(calls).toEqual([]);
     await researchProduct({ ...base, model: 'gpt-4.1-mini', deadline: Date.now() + 100000 });
     expect(calls[0]).toBe('gpt-4.1-mini');
+  });
+});
+
+describe('research 2.8.0 review fixes', () => {
+  const GRAVIES = '00076344886570';
+  const base = { apiKey: 'k', gtin14: GRAVIES, barcode: '076344886570', knownSpecies: 'unknown' as const, userAgent: 'test', now: new Date('2026-10-31T00:00:00Z') };
+  const respond = (actions: unknown[], answer: unknown = { ...modelAnswer({}), found: false }) =>
+    new Response(JSON.stringify({ output: [...actions.map((action) => ({ type: 'web_search_call', ...(action ? { action } : {}) })), { type: 'message', content: [{ type: 'output_text', text: JSON.stringify(answer), annotations: [] }] }] }), { status: 200 });
+  afterEach(() => vi.useRealTimers());
+  it('reads a search’s queries with the older single query beside them: both forms searched, so no second barcode search', async () => {
+    const bodies: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: { body?: string }) => {
+      if (url === 'https://api.openai.com/v1/responses') {
+        bodies.push(String(init?.body ?? ''));
+        return respond([{ type: 'search', query: '"076344886570"', queries: ['"076344886570"', '"0076344886570"'], sources: [] }]);
+      }
+      return new Response('', { status: 404 });
+    }));
+    const r = await researchProduct({ ...base, model: 'gpt-5-mini' });
+    expect(bodies).toHaveLength(1);
+    expect(r.discarded[0]).toBe('barcode search: searched “"076344886570" | "0076344886570"” (0 results)');
+  });
+  it('reads the queries when the single query is empty, and records find_in_page pages; a page action without an address is left out', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url === 'https://api.openai.com/v1/responses') {
+        return respond([
+          { type: 'search', query: '', queries: ['"076344886570"'], sources: [] },
+          { type: 'find_in_page', url: 'https://shop.example/p/gravies', pattern: '076344886570' },
+          { type: 'open_page', url: null },
+          null,
+        ]);
+      }
+      return new Response('<html><head><title>Gravies</title></head><body><h1>Wellness Gravies</h1></body></html>', { status: 200 });
+    }));
+    const r = await researchProduct({ ...base, model: 'gpt-5-mini' });
+    expect(r.discarded.slice(0, 3)).toEqual([
+      'barcode search: searched “"076344886570"” (0 results)',
+      'barcode search: opened shop.example',
+      // The search action and the action-less call are searches; the page actions are not.
+      'barcode search: model reported no matching product (2 searches, 0 citations)',
+    ]);
+    expect(r.discarded).toContain('barcode search: result pages without this barcode: shop.example');
+  });
+  it('a site’s search page that repeats the barcode from its address is not taken as showing it (and is not read)', async () => {
+    let chats = 0;
+    const searchPage = `<html><head><title>Search results for "076344886570"</title></head><body><h1>Search results for “076344886570”</h1>
+      <div class="product"><a href="/p/turkey-pate">Wellness CORE Turkey Pate Cat Food 5.5 oz</a></div></body></html>`;
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url === 'https://api.openai.com/v1/responses') return respond([{ type: 'search', queries: ['"076344886570"'], sources: [] }, { type: 'open_page', url: 'https://shop.example/search?q=076344886570' }]);
+      if (url.includes('chat/completions')) {
+        chats++;
+        return new Response(JSON.stringify({ model: 'gpt-5-mini', choices: [{ message: { content: JSON.stringify(modelAnswer({ product_name: 'Wellness CORE Turkey Pate Cat Food 5.5 oz', brand: 'Wellness' })) }, finish_reason: 'stop' }] }), { status: 200 });
+      }
+      return new Response(url.includes('search?q=') ? searchPage : '', { status: url.includes('search?q=') ? 200 : 404 });
+    }));
+    const r = await researchProduct({ ...base, model: 'gpt-5-mini' });
+    expect(chats).toBe(0);
+    expect(r.facts).toBeNull();
+    expect(r.discarded).toContain('barcode search: result pages without this barcode: shop.example (a search page: it repeats the barcode from its address)');
+  });
+  it('result pages left unchecked for the time limit are said so, and the run is marked as cut short', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-31T00:00:00Z'));
+    const deadline = Date.now() + 190000;
+    const fetched: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url === 'https://api.openai.com/v1/responses') {
+        // The search takes 86 s: 104 s are left, less than a check and a read need.
+        vi.setSystemTime(Date.now() + 86000);
+        return respond([{ type: 'search', queries: ['"076344886570"', '"0076344886570"'], sources: [{ type: 'url', url: 'https://www.chewy.com/wellness-pouches' }] }, { type: 'open_page', url: 'https://www.petsupermarket.com/wellness-gravies' }]);
+      }
+      fetched.push(url);
+      return new Response('', { status: 404 });
+    }));
+    const r = await researchProduct({ ...base, model: 'gpt-5-mini', deadline });
+    expect(fetched).toEqual([]);
+    expect(r.facts).toBeNull();
+    expect(r.timeLimited).toBe(true);
+    expect(r.discarded).toContain('barcode search: result pages not checked (the scan’s time limit): chewy.com, petsupermarket.com');
+  });
+  it('checks the result pages before another paid search when only one of them fits (review: the name search ran, the free checks did not)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-31T00:00:00Z'));
+    const deadline = Date.now() + 200000;
+    const order: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url === 'https://api.openai.com/v1/responses') {
+        order.push('search');
+        vi.setSystemTime(Date.now() + 86000);
+        return respond([{ type: 'search', queries: ['"076344886570"', '"0076344886570"'], sources: [{ type: 'url', url: 'https://www.chewy.com/wellness-pouches' }] }]);
+      }
+      order.push(`check ${new URL(url).hostname}`);
+      // A slow page: 10 s.
+      vi.setSystemTime(Date.now() + 10000);
+      return new Response('<html><head><title>Wellness</title></head><body><h1>Wellness pouches</h1></body></html>', { status: 200 });
+    }));
+    const r = await researchProduct({ ...base, model: 'gpt-5-mini', knownName: 'Healthy Indulgence Gravies Chicken & Turkey', knownBrand: 'Wellness', deadline });
+    // 114 s left after the first search: the free check first (before, the gate for checks was higher than for a
+    // search, so the paid name search ran and the page was never checked); then the name search no longer fits.
+    expect(order).toEqual(['search', 'check www.chewy.com']);
+    expect(r.timeLimited).toBe(true);
+    expect(r.discarded).toContain('name search: not run (the scan’s time limit)');
   });
 });

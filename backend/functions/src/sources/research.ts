@@ -168,6 +168,8 @@ export interface ResearchOutcome {
   fetchFailed?: boolean;
   /** Model calls made (each counts against the AI budget). */
   calls?: number;
+  /** A step was left out for the scan's time limit (a search, a check of result pages, a read): the search did not finish. */
+  timeLimited?: boolean;
   /**
    * How the page the facts come from was shown to be this product: it shows this barcode (barcode), it lists
    * the same recipe as the product's record (recipe), it lists this barcode among its sizes' or variants'
@@ -178,8 +180,10 @@ export interface ResearchOutcome {
   pageTitle?: string;
   /** The brand and name an answer gave, unverified: only words for another search, never a fact. */
   lead?: { name: string | null; brand: string | null };
-  /** The pages the web search returned (in its order), the queries it ran, and the pages fetched to verify the answer. */
+  /** The pages the web search returned (in its order, with the pages the model opened), the queries it ran, and the pages fetched to verify the answer. */
   results?: string[];
+  /** Of `results`, the pages the model opened itself (a reasoning model's open_page and find actions). */
+  opened?: string[];
   queries?: string[];
   fetched?: string[];
 }
@@ -212,7 +216,17 @@ type Mode = 'barcode' | 'name' | 'manufacturer';
 
 const left = (o: ResearchOptions) => (o.deadline ?? Number.POSITIVE_INFINITY) - Date.now();
 // A reasoning model (gpt-5-mini) thinks before it searches and answers: its calls get 90 s, as explanations and label reading do.
-const modelCallMs = (o: ResearchOptions) => (isReasoningModel(o.model) ? 90000 : 60000);
+const callMs = (model: string) => (isReasoningModel(model) ? 90000 : 60000);
+const modelCallMs = (o: ResearchOptions) => callMs(o.model);
+/** The time research needs left to start its first search (one call and a margin); with less, it makes no search. */
+export const researchStartMs = (model: string) => callMs(model) + 15000;
+
+/** Research made no search: too little of the scan's time was left for one. Nothing was searched, so nothing is saved as searched. */
+export class ResearchNotStarted extends Error {
+  constructor() {
+    super('research not started: too little of the scan’s time was left for a search');
+  }
+}
 
 /** The fields whose absence sends research on to the manufacturer's own page. */
 const missingFields = (f: Partial<ProductFacts>) =>
@@ -346,6 +360,7 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
   const discarded: string[] = [];
   let model = opts.model;
   let fetchFailed = false;
+  let timeLimited = false;
   let calls = 0;
   let found: ResearchOutcome | null = null;
   // Result pages Purrbi checks itself, over all searches of this run, and the pages it has fetched.
@@ -356,7 +371,9 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
   for (let i = 0; i < attempts.length; i++) {
     const attempt = attempts[i];
     if (left(opts) < modelCallMs(opts) + 15000) {
+      if (calls === 0) throw new ResearchNotStarted();
       discarded.push(`${attempt.label}: not run (the scan’s time limit)`);
+      timeLimited = true;
       break;
     }
     await opts.beforeAiCall?.();
@@ -375,8 +392,9 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
     // (2026-10-30: "no matching product" for barcodes that many shops list). The first page that shows it is read.
     for (const u of [...(r.fetched ?? []), ...r.sources.map((x) => canonical(x.url ?? ''))]) seenPages.add(u);
     if (r.results?.length && pageChecks < PAGE_CHECKS + 2 && pageReads < 2) {
-      const checked = await pageShowingBarcode(opts, r.results, seenPages, PAGE_CHECKS + 2 - pageChecks);
+      const checked = await pageShowingBarcode(opts, r.results, seenPages, PAGE_CHECKS + 2 - pageChecks, new Set((r.opened ?? []).map(canonical)));
       pageChecks += checked.checked;
+      timeLimited = timeLimited || checked.timeLimited;
       discarded.push(...checked.notes.map((n) => `${attempt.label}: ${n}`));
       if (checked.page && left(opts) >= modelCallMs(opts) + 15000) {
         await opts.beforeAiCall?.();
@@ -389,7 +407,10 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
           found = read;
           break;
         }
-      } else if (checked.page) discarded.push(`reading ${checked.host}: not run (the scan’s time limit)`);
+      } else if (checked.page) {
+        discarded.push(`reading ${checked.host}: not run (the scan’s time limit)`);
+        timeLimited = true;
+      }
     }
     // The barcode's other printed form, searched on its own: one search per call, and a UPC-A's 13-digit form
     // is indexed apart from its 12 digits (trace 1ba6a7a3-4ca: "099482517243" gave no result; pages list it
@@ -425,7 +446,7 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
       });
     }
   }
-  if (!found?.facts) return { facts: null, sources: [], discarded, model, fetchFailed, calls };
+  if (!found?.facts) return { facts: null, sources: [], discarded, model, fetchFailed, calls, timeLimited };
 
   // The manufacturer's own page for what the first page did not show (or when only a retailer's listing says who it is for).
   const retailerOnly = found.sources.every((x) => x.sourceType !== 'manufacturer');
@@ -442,7 +463,10 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
   const mNameTrusted = !!trustedName && mName === trustedName;
   // Only after a retailer's page: a manufacturer's page that lacks a field is not searched for again.
   if (retailerOnly && mBrand && mName) {
-    if (left(opts) < modelCallMs(opts) + 15000) discarded.push('manufacturer page: not searched (the scan’s time limit)');
+    if (left(opts) < modelCallMs(opts) + 15000) {
+      discarded.push('manufacturer page: not searched (the scan’s time limit)');
+      timeLimited = true;
+    }
     else {
       try {
         await opts.beforeAiCall?.();
@@ -484,7 +508,7 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
       }
     }
   }
-  return { ...found, discarded, model, fetchFailed, calls };
+  return { ...found, discarded, model, fetchFailed, calls, timeLimited };
 }
 
 /** The product's name as the page's own main heading prints it (its first h1). */
@@ -514,6 +538,8 @@ interface FetchedPage {
   family: number;
   /** The package size of the Shopify variant the barcode belongs to. */
   variantSize: PackageSize | null;
+  /** The page's own address carries the barcode in its query (a site's search page, ?q=…): its text repeats it, so the text ties nothing. */
+  searchPage?: boolean;
 }
 
 /** A page fetched once per research run: a page refused or failed earlier in the run is not fetched again. */
@@ -532,6 +558,15 @@ async function fetchOnce(url: string, opts: ResearchOptions): Promise<FetchedPag
   }
 }
 
+/** The address's query (?q=…, &upc=…) carries this barcode: the page may print it only because it repeats the query. */
+function queryCarries(url: string, gtin14: string): boolean {
+  try {
+    return [...new URL(url).searchParams.values()].some((v) => textContainsGtin(v, gtin14));
+  } catch {
+    return false;
+  }
+}
+
 async function fetchPage(url: string, opts: ResearchOptions): Promise<FetchedPage> {
   const res = await httpRequest(url, { source: 'web page', headers: { 'User-Agent': opts.userAgent, Accept: 'text/html' }, timeoutMs: 8000, retries: 0, maxBytes: 3000000 });
   const html = res.text;
@@ -539,9 +574,12 @@ async function fetchPage(url: string, opts: ResearchOptions): Promise<FetchedPag
   const title = (/<title[^>]*>([^<]*)<\/title>/i.exec(html)?.[1] ?? '').replace(/\s+/g, ' ').trim();
   let heading = productHeading(html);
   const gtins = markupGtins(html);
+  // A site's own search page prints the barcode because it repeats the query from its address
+  // ("Search results for 076344886570"): its text is no tie (its markup or product record still is).
+  const searchPage = queryCarries(res.url || url, opts.gtin14);
   // A page that prints other barcodes beside this one lists several products (a set, a range, variants):
   // the barcode is one of them, not the page's own, unless its markup names this one alone.
-  const inText = textContainsGtin(plain, opts.gtin14);
+  const inText = !searchPage && textContainsGtin(plain, opts.gtin14);
   const others = inText ? textGtins(plain).filter((g) => g !== opts.gtin14) : [];
   let barcode: FetchedPage['barcode'] = inText && !others.length ? 'text' : gtins.length === 1 && gtins[0] === opts.gtin14 ? 'markup' : null;
   let family = !barcode && (gtins.includes(opts.gtin14) || inText) ? Math.max(gtins.length, others.length + 1) : 0;
@@ -578,7 +616,7 @@ async function fetchPage(url: string, opts: ResearchOptions): Promise<FetchedPag
       // no product record: the page itself is still read
     }
   }
-  return { url: res.url || url, text: ` ${wordsKey(plain)} `, raw: plain.toLowerCase(), plain, html, title, heading: ` ${wordsKey(heading)} `, barcode, family, variantSize };
+  return { url: res.url || url, text: ` ${wordsKey(plain)} `, raw: plain.toLowerCase(), plain, html, title, heading: ` ${wordsKey(heading)} `, barcode, family, variantSize, searchPage };
 }
 
 const PDF_PAGES = 4;
@@ -699,9 +737,17 @@ const hostOf = (u: string) => {
  * markup, Shopify record). Sites take turns (each site's first result, then each site's second), so one site's
  * pages for other products do not use up the checks (2026-10-30, trace 56bd298f-a6a: four checks went to the
  * manufacturer's other products while shops in the results were never opened). At most `limit` pages,
- * documents left out; a page already fetched is not fetched again (`seen` is updated).
+ * documents left out; a page already fetched is not fetched again (`seen` is updated). The checks go on while
+ * a page found could still be read (the read's own time); a paid search is never started before them. Pages
+ * left unchecked for the time limit are said as such.
  */
-async function pageShowingBarcode(opts: ResearchOptions, results: string[], seen: Set<string>, limit: number): Promise<{ page: FetchedPage | null; host: string; notes: string[]; checked: number }> {
+async function pageShowingBarcode(
+  opts: ResearchOptions,
+  results: string[],
+  seen: Set<string>,
+  limit: number,
+  opened: Set<string> = new Set(),
+): Promise<{ page: FetchedPage | null; host: string; notes: string[]; checked: number; timeLimited: boolean }> {
   const hostOf = (u: string) => {
     try {
       return new URL(u).hostname.replace(/^www\./, '');
@@ -724,14 +770,19 @@ async function pageShowingBarcode(opts: ResearchOptions, results: string[], seen
   const without: string[] = [];
   const unread: string[] = [];
   let checked = 0;
-  for (const url of candidates) {
-    if (left(opts) < modelCallMs(opts) + 25000) break;
+  let unchecked: string[] = [];
+  for (const [i, url] of candidates.entries()) {
+    if (left(opts) < modelCallMs(opts) + 15000) {
+      unchecked = candidates.slice(i);
+      break;
+    }
     seen.add(url);
     checked++;
     try {
       const page = await fetchOnce(url, opts);
-      if (page.barcode) return { page, host: hostOf(url), checked, notes: [...(without.length ? [`result pages without this barcode: ${without.join(', ')}`] : []), `${hostOf(url)} (a search result) shows this barcode${page.barcode === 'text' ? '' : page.barcode === 'markup' ? ' in its page data' : ' in its product record'}, so Purrbi read it`] };
-      without.push(page.family ? `${hostOf(url)} (lists it among ${page.family} barcodes)` : hostOf(url));
+      const kind = opened.has(url) ? 'a page the model opened' : 'a search result';
+      if (page.barcode) return { page, host: hostOf(url), checked, timeLimited: false, notes: [...(without.length ? [`result pages without this barcode: ${without.join(', ')}`] : []), `${hostOf(url)} (${kind}) shows this barcode${page.barcode === 'text' ? '' : page.barcode === 'markup' ? ' in its page data' : ' in its product record'}, so Purrbi read it`] };
+      without.push(page.searchPage ? `${hostOf(url)} (a search page: it repeats the barcode from its address)` : page.family ? `${hostOf(url)} (lists it among ${page.family} barcodes)` : hostOf(url));
     } catch (err) {
       unread.push(`${hostOf(url)}${err instanceof SourceError ? ` (${err.status ? `HTTP ${err.status}` : err.kind})` : ''}`);
     }
@@ -739,8 +790,9 @@ async function pageShowingBarcode(opts: ResearchOptions, results: string[], seen
   const notes = [
     ...(without.length ? [`result pages without this barcode: ${without.join(', ')}`] : []),
     ...(unread.length ? [`result pages that could not be read: ${unread.join(', ')}`] : []),
+    ...(unchecked.length ? [`result pages not checked (the scan’s time limit): ${[...new Set(unchecked.map(hostOf))].join(', ')}`] : []),
   ];
-  return { page: null, host: '', checked, notes: candidates.length ? notes : ['no result page to check'] };
+  return { page: null, host: '', checked, timeLimited: unchecked.length > 0, notes: candidates.length ? notes : ['no result page to check'] };
 }
 
 const READ_SYSTEM = [
@@ -760,8 +812,8 @@ async function readPageAttempt(opts: ResearchOptions, page: FetchedPage, ask: st
     system: READ_SYSTEM,
     userContent: [{ type: 'text', text: `Barcode (GTIN/UPC/EAN): ${opts.barcode}. ${ask}\nThe page ${page.url} (it shows this barcode). Its text:\n"""\n${page.plain.slice(0, 60000)}\n"""` }],
     format: { name: 'pet_product_page', schema: SCHEMA },
-    // (Retried once on a timeout: two tries fit in the time a search call is given.)
-    timeoutMs: Math.max(5000, Math.min(45000, left(opts) - 10000)),
+    // Retried once on a timeout: each try gets half the time left (at most 45 s), so both end 10 s before the deadline.
+    timeoutMs: Math.max(5000, Math.min(45000, (left(opts) - 10000) / 2)),
     maxTokens: 3000,
   });
   if (!data.found) return { facts: null, sources: [], discarded: ['the model found no product details on the page'], model };
@@ -781,8 +833,9 @@ async function researchAttempt(opts: ResearchOptions, user: string, mode: Mode):
   const discarded: string[] = describeSearches(searchLog);
   const searched = `${searches} search${searches === 1 ? '' : 'es'}, ${citations.length} citation${citations.length === 1 ? '' : 's'}`;
   const results = searchLog.flatMap((x) => x.urls);
+  const opened = searchLog.filter((x) => x.kind === 'open').flatMap((x) => x.urls);
   const queries = searchLog.filter((x) => x.kind !== 'open').map((x) => x.query).filter(Boolean);
-  if (!data.found) return { facts: null, sources: [], discarded: [...discarded, `model reported no matching product (${searched})`], model, results, queries };
+  if (!data.found) return { facts: null, sources: [], discarded: [...discarded, `model reported no matching product (${searched})`], model, results, opened, queries };
   const lead = { name: data.product_name ?? null, brand: data.brand ?? null };
 
   // Pages the search cited come first. A page the model names without a citation (models often attach
@@ -790,7 +843,7 @@ async function researchAttempt(opts: ResearchOptions, user: string, mode: Mode):
   const cited = new Set(citations.map((c) => canonical(c.url)));
   const named = [...new Set((data.source_urls ?? []).map(canonical).filter((u) => /^https:\/\//.test(u)))];
   const urls = [...named.filter((u) => cited.has(u)), ...named.filter((u) => !cited.has(u))].slice(0, 2);
-  if (!urls.length) return { facts: null, sources: [], discarded: [...discarded, `no source page was named (${searched})`], model, lead, results, queries };
+  if (!urls.length) return { facts: null, sources: [], discarded: [...discarded, `no source page was named (${searched})`], model, lead, results, opened, queries };
 
   const pages: FetchedPage[] = [];
   // A refusal (401, 403, 404, 410: a site that turns automated readers away, a page gone) does not change when
@@ -810,8 +863,8 @@ async function researchAttempt(opts: ResearchOptions, user: string, mode: Mode):
       discarded.push(refused ? `${hostOf(url)} refuses automated readers or has no such page (HTTP ${(err as SourceError).status}), so ${url.slice(0, 120)} could not be checked` : `could not fetch ${url.slice(0, 120)} to verify it${err instanceof SourceError ? ` (${err.status ? `HTTP ${err.status}` : err.kind})` : ''}`);
     }
   }
-  if (!pages.length) return { facts: null, sources: [], discarded, model, fetchFailed: transient, lead, results, queries, fetched: urls };
-  return { ...(await verifyAnswer(opts, data, pages, mode, model, discarded)), lead, results, queries, fetched: urls };
+  if (!pages.length) return { facts: null, sources: [], discarded, model, fetchFailed: transient, lead, results, opened, queries, fetched: urls };
+  return { ...(await verifyAnswer(opts, data, pages, mode, model, discarded)), lead, results, opened, queries, fetched: urls };
 }
 
 /**

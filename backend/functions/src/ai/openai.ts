@@ -121,7 +121,7 @@ export async function researchJson<T>(opts: {
     incomplete_details?: { reason?: string } | null;
     output?: {
       type?: string;
-      action?: { type?: string; query?: string; queries?: string[]; url?: string; sources?: { type?: string; url?: string }[] };
+      action?: { type?: string; query?: string | null; queries?: string[] | null; url?: string | null; sources?: { type?: string; url?: string }[] | null };
       content?: { type?: string; text?: string; annotations?: { type?: string; url?: string; title?: string }[] }[];
     }[];
   };
@@ -156,14 +156,17 @@ export async function researchJson<T>(opts: {
   }
   if (json?.status === 'incomplete') throw new SourceError('OpenAI', 'parse', `output incomplete (${json.incomplete_details?.reason ?? 'no reason given'})`);
   const calls = (json?.output ?? []).filter((o) => o.type === 'web_search_call');
-  const searches = calls.length;
-  // Reasoning models also open pages and look for words on them (actions "open_page", "find"): those pages
-  // count as result pages too.
-  const web = (u: string | undefined) => !!u && /^https?:\/\//.test(u);
+  // Only searches count as searches (an action-less call is one, as before); opened pages are listed apart.
+  const searches = calls.filter((o) => !o.action?.type || o.action.type === 'search').length;
+  // Reasoning models also open pages and look for words on them (actions "open_page", "find", "find_in_page"):
+  // those pages count as result pages too.
+  const web = (u: string | null | undefined): u is string => !!u && /^https?:\/\//.test(u);
   const searchLog: WebSearchLog[] = calls.flatMap((o): WebSearchLog[] => {
     const a = o.action;
-    if (a?.type && a.type !== 'search') return OPENED.has(a.type) && web(a.url) ? [{ query: '', urls: [a.url as string], kind: 'open' }] : [];
-    return [{ query: a?.query ?? (a?.queries ?? []).join(' | '), urls: (a?.sources ?? []).map((x) => x.url ?? '').filter(web), kind: 'search' }];
+    if (a?.type && a.type !== 'search') return OPENED.has(a.type) && web(a.url) ? [{ query: '', urls: [a.url], kind: 'open' }] : [];
+    // A search may carry several queries ("queries"; the older "query" holds one of them).
+    const queries = [...new Set([...(a?.queries ?? []), ...(a?.query ? [a.query] : [])].map((q) => q.trim()).filter(Boolean))];
+    return [{ query: queries.join(' | '), urls: (a?.sources ?? []).map((x) => x.url ?? '').filter(web), kind: 'search' }];
   });
   const message = json?.output?.find((o) => o.type === 'message');
   const part = message?.content?.find((c) => c.type === 'output_text');
