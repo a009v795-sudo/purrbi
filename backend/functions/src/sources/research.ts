@@ -369,6 +369,30 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
   let pageReads = 0;
   let lead: { name: string | null; brand: string | null } | null = null;
   const seenPages = new Set<string>();
+  // Result pages a search could not check within its share (offered again later), and the pages the model opened.
+  let later: string[] = [];
+  const openedPages = new Set<string>();
+  // Checks result pages (a search's, with those left from earlier) and reads the first that shows the barcode.
+  const checkAndRead = async (label: string, results: string[], words: RankWords, limit: number): Promise<ResearchOutcome | null> => {
+    const checked = await pageShowingBarcode(opts, results, seenPages, limit, openedPages, words, later);
+    later = checked.later;
+    pageChecks += checked.checked;
+    timeLimited = timeLimited || checked.timeLimited;
+    discarded.push(...checked.notes.map((n) => `${label}: ${n}`));
+    if (checked.page && left(opts) >= modelCallMs(opts) + 15000) {
+      await opts.beforeAiCall?.();
+      calls++;
+      pageReads++;
+      const read = await readPageAttempt(opts, checked.page, ask);
+      model = read.model;
+      discarded.push(...read.discarded.map((d) => `reading ${checked.host}: ${d}`));
+      if (read.facts && aboutProduct(read.facts)) return read;
+    } else if (checked.page) {
+      discarded.push(`reading ${checked.host}: not run (the scan’s time limit)`);
+      timeLimited = true;
+    }
+    return null;
+  };
   for (let i = 0; i < attempts.length; i++) {
     const attempt = attempts[i];
     if (left(opts) < modelCallMs(opts) + 15000) {
@@ -396,32 +420,19 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
     // The search's own result pages, checked by Purrbi: the model may not recognise a page that shows the barcode
     // (2026-10-30: "no matching product" for barcodes that many shops list). The first page that shows it is read.
     for (const u of [...(r.fetched ?? []), ...r.sources.map((x) => canonical(x.url ?? ''))]) seenPages.add(u);
+    for (const u of r.opened ?? []) openedPages.add(canonical(u));
     if (r.results?.length && !(pageChecks < RUN_PAGE_CHECKS && pageReads < 2)) {
       // The run's checks or reads are used: this search's pages are named, not checked.
       const { documents, insecure, pages } = sortResults(r.results, seenPages);
       discarded.push(...leftOutNotes({ documents, insecure, spent: pages }).map((n) => `${attempt.label}: ${n}`));
     }
-    if (r.results?.length && pageChecks < RUN_PAGE_CHECKS && pageReads < 2) {
-      // Ranked by the product's brand and name as known, or as this or an earlier answer gave them (search words only).
-      const words = rankWords([opts.knownBrand, opts.hint?.brand, r.lead?.brand, lead?.brand], [opts.knownName, opts.hint?.title, r.lead?.name, r.pageTitle, lead?.name]);
-      const checked = await pageShowingBarcode(opts, r.results, seenPages, RUN_PAGE_CHECKS - pageChecks, new Set((r.opened ?? []).map(canonical)), words);
-      pageChecks += checked.checked;
-      timeLimited = timeLimited || checked.timeLimited;
-      discarded.push(...checked.notes.map((n) => `${attempt.label}: ${n}`));
-      if (checked.page && left(opts) >= modelCallMs(opts) + 15000) {
-        await opts.beforeAiCall?.();
-        calls++;
-        pageReads++;
-        const read = await readPageAttempt(opts, checked.page, ask);
-        model = read.model;
-        discarded.push(...read.discarded.map((d) => `reading ${checked.host}: ${d}`));
-        if (read.facts && aboutProduct(read.facts)) {
-          found = read;
-          break;
-        }
-      } else if (checked.page) {
-        discarded.push(`reading ${checked.host}: not run (the scan’s time limit)`);
-        timeLimited = true;
+    if ((r.results?.length || later.length) && pageChecks < RUN_PAGE_CHECKS && pageReads < 2) {
+      // Ranked by the product's brand and name, from the most trusted source (search words only).
+      const words = rankWords([opts.knownBrand, opts.hint?.brand, r.lead?.brand, lead?.brand], [opts.knownName, r.pageTitle, opts.hint?.title, r.lead?.name, lead?.name]);
+      const read = await checkAndRead(attempt.label, r.results ?? [], words, Math.min(SEARCH_PAGE_CHECKS, RUN_PAGE_CHECKS - pageChecks));
+      if (read) {
+        found = read;
+        break;
       }
     }
     // The barcode's other printed form, searched on its own: one search per call, and a UPC-A's 13-digit form
@@ -458,6 +469,12 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
       });
     }
   }
+  // The pages earlier searches left are checked once no search is left, with the run's remaining checks.
+  if (!found?.facts && later.length && pageChecks < RUN_PAGE_CHECKS && pageReads < 2) {
+    const read = await checkAndRead('remaining result pages', [], rankWords([opts.knownBrand, opts.hint?.brand, lead?.brand], [opts.knownName, opts.hint?.title, lead?.name]), RUN_PAGE_CHECKS - pageChecks);
+    if (read) found = read;
+  }
+  if (later.length && !found?.facts) discarded.push(...leftOutNotes({ documents: [], insecure: [], spent: later }).map((n) => `remaining result pages: ${n}`));
   if (!found?.facts) return { facts: null, sources: [], discarded, model, fetchFailed, calls, timeLimited };
 
   // The manufacturer's own page for what the first page did not show (or when only a retailer's listing says who it is for).
@@ -734,45 +751,65 @@ export function describeSearches(log: WebSearchLog[]): string[] {
   ];
 }
 
-/** Result pages Purrbi checks for the barcode in one research run (each a fetch, no model call; the time limit still applies). */
+/**
+ * Result pages Purrbi checks for the barcode in one research run (each a fetch, no model call; the time limit still
+ * applies), and in one search: a search leaves part of the run's checks to the run's later searches (the barcode's
+ * other form, the search by name), and the pages it could not check are offered again with theirs (test A, 2.8.1).
+ */
 const RUN_PAGE_CHECKS = 12;
+const SEARCH_PAGE_CHECKS = 8;
 
-/** Words a result page's address is ranked by: the product's brand and name as known or as an answer gave them (search words only). */
+/** Words a result page's address is ranked by: the product's brand and name, from the most trusted source that has them. */
 interface RankWords {
   brand: string[];
   name: string[];
 }
-const GENERIC_WORDS = new Set(['cat', 'dog', 'food', 'foods', 'wet', 'dry', 'grain', 'free', 'recipe', 'formula', 'adult', 'kitten', 'puppy', 'senior', 'natural', 'pet', 'pets', 'premium', 'classic', 'original', 'flavor', 'flavour', 'entree', 'dinner', 'complete', 'health', 'healthy', 'real', 'can', 'cans', 'pouch', 'pouches', 'pack', 'case', 'count', 'with', 'and', 'the', 'for']);
+// Words that say nothing of which product it is (nameTokens already drops cat, dog, food, pack and the like; variant
+// words such as grain free, adult or original are kept).
+const GENERIC_WORDS = new Set(['foods', 'pouches', 'cans', 'flavor', 'flavour', 'ounce', 'ounces']);
+/** An address's or a name's words, the same way on both sides: accents and apostrophes dropped, catalogue abbreviations written out. */
+const rankTokens = (s: string) => nameTokens(s.replace(/[’`´]/g, '')).filter((w) => w.length > 2 && !GENERIC_WORDS.has(w));
+/**
+ * The brand from the first source that has one; the name from the most trusted source that gives words: a database
+ * record's or a page's that showed the barcode, then the barcode database's title, then an answer's (unverified: it
+ * only orders checks, and only when nothing better is known).
+ */
 function rankWords(brands: (string | null | undefined)[], names: (string | null | undefined)[]): RankWords {
-  const words = (x: string) => nameTokens(x).filter((w) => w.length > 2 && !GENERIC_WORDS.has(w));
-  const brand = brands.map((b) => (b ? words(b) : [])).find((w) => w.length) ?? [];
-  const name = [...new Set(names.flatMap((n) => (n ? words(n) : [])))].filter((w) => !brand.includes(w)).slice(0, 8);
-  return { brand, name };
+  const brand = brands.map((b) => (b ? rankTokens(b) : [])).find((w) => w.length) ?? [];
+  const named = names.map((n) => (n ? [...new Set(rankTokens(n))].filter((w) => !brand.includes(w)) : []));
+  const name = named.find((w) => w.length >= 2) ?? named.find((w) => w.length) ?? [];
+  return { brand, name: name.slice(0, 8) };
 }
 
-// A product page's address (a shop's or marketplace's item page), and a site's home page or a top-level section that
-// is rarely a product's page (tools, help, forums, an encyclopedia, categories). Test C, 2026-10-31: the checks went to
-// GS1 help pages and lookup tools' home pages; test A: to a document site and a home page, before marketplace pages.
-const PRODUCT_ADDRESS = /\/(?:products?|p|dp|itm|items?|ip|goods|pd|prod|sku|upc|gtin|ean|barcode|product-catalog)\/|\/(?:gp|catalog)\/product\/|-p-\d+/;
-// Sections that hold no product pages, at any depth; and listings (brands, collections, categories, tags) that are
-// the listing itself only near the top (a shop may file product pages under /brands/w/wellness/…, trace 56bd298f-a6a).
-const SECTION_ADDRESS = /^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?(?:tools?|help|helpdesk|support|faq|about|blog|news|wiki|forums?|services?|verify)(?:[/._-]|$)|viewtopic/;
+// A product page's address (a shop's or marketplace's item page; a trailing "/p" too).
+const PRODUCT_ADDRESS = /\/(?:products?|p|dp|itm|items?|ip|goods|pd|prod|sku|product-catalog)\/|\/(?:gp|catalog)\/product\/|-p-\d+/;
+// A product page addressed by its query at the site's root (/?pid=…, /?product=…).
+const PRODUCT_KEYS = /^(?:pid|product|product_id|productid|item|item_id|sku)$/i;
+// Not checked: sections that hold no product pages (on their own host too), and listings near the top. Test C,
+// 2026-10-31: the checks went to GS1 help pages and lookup tools' home pages; test A: to a home page.
+const SECTION_HOSTS = /^(?:help|support|forums?|community|wiki|docs|blog|news)\./;
+const SECTION_ADDRESS = /^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?(?:tools?|help|helpdesk|hc|support|faq|about|blog|news|wiki|forums?|community|services?|verify)(?:[/._-]|$)|viewtopic|^\/r\/[^/]+\/comments\//;
+// A shop may file product pages under /brands/w/wellness/… (trace 56bd298f-a6a): a listing is skipped only near the top.
 const LISTING_ADDRESS = /^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?(?:categor(?:y|ies)|collections|brands?|tags?)(?:\/[^/]+)?\/?$/;
+// Checked after the product pages: a site's search or listing page and a lookup page for the barcode (a site's search
+// for one barcode may lead to the product's page; a lookup page gives a name, not the label).
+const SEARCH_ADDRESS = /^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?(?:s|search|b|c|browse|brand)(?:\/|$)|\/w\/wholesale-|\/(?:upc|gtin|ean|barcode|lookup)\//;
+const SEARCH_KEYS = /^(?:q|s|k|query|search|searchterm|term|keywords?|text|w|_nkw|kw|wd|st)$/i;
 
 /**
- * How likely a result page is to be this product's page, from its address alone (no fetch). The product's own marks
- * weigh most: the barcode in its path (4), its brand (2), the share of its name words (up to 3: a shop's page for this
- * flavour before the maker's page for another); then a product page's address form (1) and being opened by the model
- * (1); a site's search page a little less; a home page or a tools, help, forum, encyclopedia or category section much
- * less (-3 or lower: not checked). It only orders and skips checks: a page is used only when Purrbi finds the barcode
- * on it.
+ * How likely a result page is to be this product's page, from its address alone (no fetch). Not checked (-3 or
+ * lower): a home page, a help, tool, forum, encyclopedia, blog or news section, a listing near the top. A site's search
+ * or listing page and a lookup page for the barcode: -1, after the product pages. Otherwise a product page's address
+ * form (2), the barcode in a shop's own address (1), the product's brand (2; a worded product address without it, -2:
+ * another brand's product), the share of its name words (up to 3, also the tie-breaker), opened by the model (1), a
+ * review (-1). It only orders and skips checks: a page is used only when Purrbi finds the barcode on it.
  */
-function addressPromise(u: string, gtin14: string, words: RankWords, opened: boolean): number {
+function addressPromise(u: string, gtin14: string, words: RankWords, opened: boolean): { score: number; share: number } {
   let url: URL;
   try {
     url = new URL(u);
   } catch {
-    return -9;
+    return { score: -9, share: 0 };
   }
   let path = url.pathname;
   try {
@@ -781,18 +818,27 @@ function addressPromise(u: string, gtin14: string, words: RankWords, opened: boo
     // keep the encoded path
   }
   path = path.toLowerCase();
-  const pathWords = ` ${path.replace(/[^a-z0-9]+/g, ' ')} `;
-  const product = PRODUCT_ADDRESS.test(path);
-  let score = 0;
-  if (textContainsGtin(path, gtin14)) score += 4;
-  if (words.brand.length && words.brand.every((w) => pathWords.includes(` ${w} `))) score += 2;
-  if (words.name.length) score += Math.min(3, Math.floor((3 * words.name.filter((w) => pathWords.includes(` ${w} `)).length) / Math.min(words.name.length, 4)));
-  if (product) score += 1;
+  const host = url.hostname.toLowerCase().replace(/^www\./, '');
+  const keys = [...url.searchParams.keys()];
+  const root = path === '/' || path === '';
+  const product = PRODUCT_ADDRESS.test(`${path}/`) || (root && keys.some((k) => PRODUCT_KEYS.test(k)));
+  if (!keys.length && (root || /^\/[a-z]{2}(?:-[a-z]{2})?\/?$/.test(path))) return { score: -4, share: 0 };
+  if (!product && (SECTION_HOSTS.test(host) || SECTION_ADDRESS.test(path) || LISTING_ADDRESS.test(path))) return { score: -3, share: 0 };
+  const onlyBarcode = /^\/[\d -]+\/?$/.test(path) && textContainsGtin(path, gtin14);
+  if (!product && (keys.some((k) => SEARCH_KEYS.test(k)) || queryCarries(u, gtin14) || SEARCH_ADDRESS.test(path) || onlyBarcode)) return { score: -1, share: 0 };
+  const pathWords = new Set(rankTokens(path));
+  // The share of the name's words the address carries (all of them: four of five is another variant's page more often).
+  const ratio = words.name.length ? words.name.filter((w) => pathWords.has(w)).length / words.name.length : 0;
+  const share = Math.floor(3 * ratio);
+  const branded = words.brand.length > 0 && words.brand.every((w) => pathWords.has(w));
+  let score = share;
+  if (product) score += 2;
+  if (product && textContainsGtin(path, gtin14)) score += 1;
+  if (branded) score += 2;
+  else if (words.brand.length && product && pathWords.size >= 3) score -= 2;
   if (opened) score += 1;
-  if (path === '/' || path === '') score -= 4;
-  else if (!product && (SECTION_ADDRESS.test(path) || LISTING_ADDRESS.test(path))) score -= 3;
-  if (queryCarries(u, gtin14)) score -= 1;
-  return score;
+  if (/review/.test(path)) score -= 1;
+  return { score, share: ratio };
 }
 
 const hostOf = (u: string) => {
@@ -828,7 +874,7 @@ function leftOutNotes(o: { documents: string[]; insecure: string[]; unlikely?: s
   return [
     ...(o.documents.length ? [`result documents not checked (Purrbi checks web pages only): ${list(o.documents, 3, address)}`] : []),
     ...(o.insecure.length ? [`result pages not checked (no secure address): ${list(o.insecure, 3, address)}`] : []),
-    ...(o.unlikely?.length ? [`result pages not checked (home pages and tools, help, forum or category pages): ${list(sites(o.unlikely), 6)}`] : []),
+    ...(o.unlikely?.length ? [`result pages not checked (home pages and help, tool, forum, encyclopedia, blog, news or listing pages): ${list(sites(o.unlikely), 6)}`] : []),
     ...(o.pastLimit?.length ? [`result pages not checked (at most ${RUN_PAGE_CHECKS} a run): ${list(sites(o.pastLimit), 6)}`] : []),
     ...(o.perSite?.length ? [`result pages not checked (at most two per site in a search): ${list(sites(o.perSite), 6)}`] : []),
     ...(o.spent?.length ? [`result pages not checked (the run’s ${RUN_PAGE_CHECKS} checks or two reads were used): ${list(sites(o.spent), 6)}`] : []),
@@ -851,22 +897,26 @@ async function pageShowingBarcode(
   limit: number,
   opened: Set<string> = new Set(),
   words: RankWords = { brand: [], name: [] },
-): Promise<{ page: FetchedPage | null; host: string; notes: string[]; checked: number; timeLimited: boolean }> {
+  earlier: string[] = [],
+): Promise<{ page: FetchedPage | null; host: string; notes: string[]; checked: number; timeLimited: boolean; later: string[] }> {
   const { documents, insecure, pages } = sortResults(results, seen);
-  // The most promising addresses first; a site's best two pages at most, its second counted 3 lower (sites take turns).
-  const scored = pages.map((u, rank) => ({ u, rank, score: addressPromise(u, opts.gtin14, words, opened.has(u)) }));
+  // This search's pages and those earlier searches left, ranked together: the most promising addresses first; a site's
+  // best two pages at most, its second counted 3 lower (sites take turns).
+  const pool = [...new Set([...pages, ...earlier.filter((u) => !seen.has(u))])];
+  const scored = pool.map((u, rank) => ({ u, rank, ...addressPromise(u, opts.gtin14, words, opened.has(u)) }));
   const unlikely = scored.filter((x) => x.score <= -3).map((x) => x.u);
   const turn = new Map<string, number>();
   const ranked = scored
     .filter((x) => x.score > -3)
-    .sort((a, b) => b.score - a.score || a.rank - b.rank)
+    .sort((a, b) => b.score - a.score || b.share - a.share || a.rank - b.rank)
     .map((x) => {
       const h = hostOf(x.u);
       turn.set(h, (turn.get(h) ?? 0) + 1);
       return { ...x, turn: turn.get(h)! };
     });
-  const eligible = ranked.filter((x) => x.turn <= 2).sort((a, b) => b.score - 3 * (b.turn - 1) - (a.score - 3 * (a.turn - 1)) || a.rank - b.rank);
+  const eligible = ranked.filter((x) => x.turn <= 2).sort((a, b) => b.score - 3 * (b.turn - 1) - (a.score - 3 * (a.turn - 1)) || b.share - a.share || a.rank - b.rank);
   const candidates = eligible.slice(0, Math.max(0, limit)).map((x) => x.u);
+  // Left for later: offered again with the next search's pages, or once no search is left.
   const pastLimit = eligible.slice(Math.max(0, limit)).map((x) => x.u);
   const perSite = ranked.filter((x) => x.turn > 2).map((x) => x.u);
   const without: string[] = [];
@@ -883,7 +933,16 @@ async function pageShowingBarcode(
     try {
       const page = await fetchOnce(url, opts);
       const kind = opened.has(url) ? 'a page the model opened' : 'a search result';
-      if (page.barcode) return { page, host: hostOf(url), checked, timeLimited: false, notes: [...(without.length ? [`result pages without this barcode: ${without.join(', ')}`] : []), `${hostOf(url)} (${kind}) shows this barcode${page.barcode === 'text' ? '' : page.barcode === 'markup' ? ' in its page data' : ' in its product record'}, so Purrbi read it`, ...leftOutNotes({ documents, insecure, unlikely })] };
+      if (page.barcode) {
+        return {
+          page,
+          host: hostOf(url),
+          checked,
+          timeLimited: false,
+          later: [...candidates.slice(i + 1), ...pastLimit],
+          notes: [...(without.length ? [`result pages without this barcode: ${without.join(', ')}`] : []), `${hostOf(url)} (${kind}) shows this barcode${page.barcode === 'text' ? '' : page.barcode === 'markup' ? ' in its page data' : ' in its product record'}, so Purrbi read it`, ...leftOutNotes({ documents, insecure, unlikely, perSite })],
+        };
+      }
       without.push(page.searchPage ? `${hostOf(url)} (a search page: it repeats the barcode from its address)` : page.family ? `${hostOf(url)} (lists it among ${page.family} barcodes)` : hostOf(url));
     } catch (err) {
       unread.push(`${hostOf(url)}${err instanceof SourceError ? ` (${err.status ? `HTTP ${err.status}` : err.kind})` : ''}`);
@@ -894,8 +953,8 @@ async function pageShowingBarcode(
     ...(unread.length ? [`result pages that could not be read: ${unread.join(', ')}`] : []),
     ...(unchecked.length ? [`result pages not checked (the scan’s time limit): ${[...new Set(unchecked.map(hostOf))].join(', ')}`] : []),
   ];
-  const leftOut = leftOutNotes({ documents, insecure, unlikely, pastLimit, perSite });
-  return { page: null, host: '', checked, timeLimited: unchecked.length > 0, notes: candidates.length ? [...notes, ...leftOut] : ['no result page to check', ...leftOut] };
+  const leftOut = leftOutNotes({ documents, insecure, unlikely, perSite });
+  return { page: null, host: '', checked, timeLimited: unchecked.length > 0, later: pastLimit, notes: candidates.length ? [...notes, ...leftOut] : ['no result page to check', ...leftOut] };
 }
 
 const READ_SYSTEM = [

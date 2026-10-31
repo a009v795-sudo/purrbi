@@ -308,14 +308,21 @@ any photo is asked for:
   query may contain "ingredients") is never read as a rejected value, and a page that shows only the barcode is said to
   show it only when it does.
 - Result pages are checked in order of how likely their address is to be the product's page (2.9.0, after tests A and C on
-  2.8.1, where the checks went to a document site, a home page, GS1 help pages and lookup tools' home pages before the
-  marketplace pages the search by name found). The product's own marks weigh most: the barcode in the address's path, its
-  brand, the share of its name words (as known, or as an answer gave them: search words only); then a product page's
-  address form and being opened by the model. A site's search page counts a little less, and is still checked (its search
-  for one barcode often leads to the product's page). Home pages and tools, help, forum, encyclopedia or category pages
-  are not checked, and are named in the trace. Sites still take turns (a site's second page counts lower, a third is not
-  checked), and a run checks at most twelve pages (was eight), within the same time limit. The ranking only chooses which
-  pages Purrbi fetches: a page is used only when Purrbi finds the barcode on it.
+  2.8.1: the checks went to a document site, a home page, GS1 help pages and lookup tools' home pages, and desertcart.in,
+  in A's own results, was left past the limit). From the address alone:
+  - not checked, and named in the trace: home pages (also a locale's), help, tool, forum, encyclopedia, blog or news
+    sections (also on their own host, such as help.…), and listings near the top;
+  - checked after the product pages: a site's search or listing page and a lookup page for the barcode (a site's search
+    for one barcode may lead to the product's page; a lookup page gives a name, not the label);
+  - otherwise, most promising first: a product page's address form (also a page addressed by its query at the site's
+    root), the barcode in a shop's own product address, the brand (a worded product address without it counts lower:
+    another brand's product), the share of the name's words (from the most trusted source only: a record's or a page's
+    that showed the barcode, then the barcode database's title, then an answer's), opened by the model; a review counts
+    lower. Address and name are read the same way (accents, apostrophes, catalogue abbreviations).
+  Sites take turns (a site's second page counts lower, a third is not checked). One search checks at most eight pages,
+  so the run's later searches get theirs; the pages it could not check are ranked again with theirs, and once no search
+  is left the run's remaining checks go to them (at most twelve a run, was eight; the time limit unchanged). The ranking
+  only chooses which pages Purrbi fetches: a page is used only when Purrbi finds the barcode on it.
 - The trace names the result pages left out of the checks: documents and pages without a secure address with their
   addresses (once a run), the others by site with the reason (eight a run, two per site in a search, or the run's checks
   or reads already used).
