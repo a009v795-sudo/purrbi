@@ -55,7 +55,8 @@ export function jobFields(job: JobInfo, calls: SourceCall[], finishedAt: Date, c
       ...counts,
     },
     evidenceNotes: job.evidenceNotes,
-    diagnosticNotes: job.diagnosticNotes.slice(0, 16).map((n) => n.slice(0, 240)),
+    // Up to twenty research notes come with the others; a note naming result documents keeps their addresses (2026-10-31).
+    diagnosticNotes: job.diagnosticNotes.slice(0, 28).map((n) => n.slice(0, 600)),
     sourceChecks: calls.map((c) => ({ source: c.source, host: c.host, path: c.path, httpStatus: c.status ?? 0, outcome: c.outcome, ms: c.ms, attempt: c.attempt, detail: c.detail ?? '' })),
   };
 }

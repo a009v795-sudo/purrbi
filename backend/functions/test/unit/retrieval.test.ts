@@ -606,10 +606,10 @@ describe('research 2.7.0 review fixes', () => {
     const r = await researchProduct({ apiKey: 'k', model: 'm', gtin14: '00099482481087', barcode: '099482481087', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-10-31T00:00:00Z') });
     expect(r.facts).toBeNull();
     expect(r.fetchFailed).toBe(false);
-    expect(r.discarded).toContain('barcode search: ebay.com refuses automated readers or has no such page (HTTP 403), so https://www.ebay.com/itm/147318116815 could not be checked');
+    expect(r.discarded).toContain('barcode search: ebay.com refuses automated readers (HTTP 403), so https://www.ebay.com/itm/147318116815 could not be checked');
     const { retrievalStatus } = await import('../../src/pipeline/facts');
     expect(retrievalStatus('front', { research: { outcome: 'done', discarded: r.discarded, source: '', at: new Date('2026-10-31T00:00:00Z') } })).toEqual({
-      purpose: 'front', status: 'source_unavailable', detail: 'The pages that show this barcode (ebay.com, ubuy.com.lb) turn automated readers away, so it couldn’t be checked there.',
+      purpose: 'front', status: 'source_unavailable', detail: 'The pages found for this barcode (ebay.com, ubuy.com.lb) turn automated readers away, so it couldn’t be checked there.',
     });
   });
   it('an EAN-8 has no 13-digit search', async () => {
@@ -839,5 +839,77 @@ describe('research 2.8.0 review fixes', () => {
     expect(order).toEqual(['search', 'check www.chewy.com']);
     expect(r.timeLimited).toBe(true);
     expect(r.discarded).toContain('name search: not run (the scan’s time limit)');
+  });
+});
+
+// Test A on gpt-5-mini (2026-10-31, trace 345c0a6b-6b8): the front card said the search "found nothing" while the pages
+// the search named for the barcode (eBay, Ubuy) turn automated readers away; a page that is gone (404) was counted with
+// them; and a query naming "ingredients" would have read as a rejected ingredient list. Test C (trace 49ae946d-859): two
+// results were left out of the checks and only their sites were known.
+describe('research 2.8.1: what the cards and the trace say', () => {
+  // Research notes as test A's trace printed them (shortened addresses).
+  const A_NOTES = [
+    'barcode search: searched “"099482481087" | "0099482481087" | "0 99482 48108 7"” (4 results: ubuy.com.lb, scribd.com, e-chinalife.com, pi.bigparadox.com)',
+    'barcode search: wholefoodsdelivery.com has no such page (HTTP 404), so https://www.wholefoodsdelivery.com/Whole_Paws could not be checked',
+    'barcode search: the cited page does not show this product’s barcode or its brand and name (brand "Whole Paws" found, no product name known to compare)',
+    'barcode search: result pages that could not be read: ubuy.com.lb (HTTP 403), ebay.com (HTTP 403), healthfirstmarket.com (HTTP 403)',
+    'search by the answer’s name: searched “"099482481087" "ingredients" | "00099482481087" "Whole Paws" ingredients "UPC"” (2 results: ebay.com, ubuy.com.lb)',
+    'search by the answer’s name: ebay.com refuses automated readers (HTTP 403), so https://www.ebay.com/itm/317732737868 could not be checked',
+    'search by the answer’s name: ubuy.com.lb refuses automated readers (HTTP 403), so https://www.ubuy.com.lb/en/product/243GOJJA could not be checked',
+  ];
+  const at = new Date('2026-10-31T05:30:00Z');
+  it('names the pages that turn automated readers away instead of “found nothing”, and never counts a page that is gone', async () => {
+    const { refusingHosts, retrievalStatus } = await import('../../src/pipeline/facts');
+    expect(refusingHosts(A_NOTES)).toEqual(['ebay.com', 'ubuy.com.lb']);
+    // The older note form (research 2.8.0 and before) is read the same way: only HTTP 401 and 403 count.
+    expect(refusingHosts(['barcode search: a.example refuses automated readers or has no such page (HTTP 404), so x', 'barcode search: b.example refuses automated readers or has no such page (HTTP 403), so y'])).toEqual(['b.example']);
+    expect(retrievalStatus('front', { research: { outcome: 'hint_failed', discarded: A_NOTES, source: '', at } }).detail).toBe(
+      'The pages found for this barcode (ebay.com, ubuy.com.lb) turn automated readers away, and the barcode database wasn’t available for more search words; Purrbi searches again once it is.',
+    );
+    expect(retrievalStatus('front', { research: { outcome: 'time_limited', discarded: A_NOTES, source: '', at } }).detail).toBe(
+      'The pages found for this barcode (ebay.com, ubuy.com.lb) turn automated readers away, and the search ran out of the scan’s time before it was done; Purrbi searches again later.',
+    );
+    expect(retrievalStatus('front', { research: { outcome: 'done', discarded: A_NOTES, source: '', at } }).detail).toBe('The pages found for this barcode (ebay.com, ubuy.com.lb) turn automated readers away, so it couldn’t be checked there.');
+    // Without such pages (test C): the search found pages, but none it could check shows the barcode.
+    const C_NOTES = ['barcode search: searched “"099482517243" | "0099482517243" | "0 99482 51724 3"” (2 results: beda.cz, scribd.com)', 'barcode search: result pages that could not be read: fda.gov (HTTP 401)'];
+    expect(retrievalStatus('front', { research: { outcome: 'hint_failed', discarded: C_NOTES, source: '', at } }).detail).toBe(
+      'The barcode database wasn’t available, so the search had only the barcode to go on, and none of the pages it could check shows this barcode; Purrbi tries again later.',
+    );
+    expect(retrievalStatus('front', { research: { outcome: 'time_limited', discarded: C_NOTES, source: '', at } }).detail).toBe(
+      'The search ran out of the scan’s time before it was done, and no page it checked so far shows this barcode; Purrbi searches again later.',
+    );
+  });
+  it('a note that only says what was searched or checked is never read as a rejected value (a query naming “ingredients”)', async () => {
+    const { retrievalStatus } = await import('../../src/pipeline/facts');
+    const notes = [
+      'search by the answer’s name: searched “"099482481087" "ingredients" | "Whole Paws" guaranteed analysis calories”',
+      'search by the answer’s name: opened ingredients-db.example',
+      'barcode search: result documents not checked (Purrbi checks web pages only): https://beda.cz/ingredients-price-list.pdf',
+      'barcode search: result pages not checked (at most 8 a run, sites taking turns): calorie-counter.example',
+      'barcode search: model reported no matching product (2 searches, 0 citations)',
+    ];
+    for (const purpose of ['front', 'ingredients', 'nutrition'] as const) {
+      expect(retrievalStatus(purpose, { research: { outcome: 'done', discarded: notes, source: '', at } }).status, purpose).toBe('not_found');
+    }
+    // A real rejection note still counts.
+    expect(retrievalStatus('nutrition', { research: { outcome: 'done', discarded: [...notes, 'guaranteed analysis: crude protein 9% is not printed after its name on the page'], source: 'shop.example (retailer_or_web)', at } }).status).toBe('rejected');
+  });
+  it('the trace names the result pages left out of the checks: documents and insecure pages by address, those past the limit by site', async () => {
+    const results = [
+      'https://beda.cz/files/cenik-2026.pdf',
+      'http://e-chinalife.com/goods/099482517243',
+      ...Array.from({ length: 11 }, (_, i) => `https://shop${i}.example/p/${i}`),
+    ];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url === 'https://api.openai.com/v1/responses') return new Response(JSON.stringify({ output: [{ type: 'web_search_call', action: { type: 'search', queries: ['"099482517243"', '"0099482517243"'], sources: results.map((u) => ({ type: 'url', url: u })) } }, { type: 'message', content: [{ type: 'output_text', text: JSON.stringify({ ...modelAnswer({}), found: false }), annotations: [] }] }] }), { status: 200 });
+      return new Response('<html><head><title>Shop</title></head><body><h1>Pet food</h1></body></html>', { status: 200 });
+    }));
+    const r = await researchProduct({ apiKey: 'k', model: 'gpt-5-mini', gtin14: '00099482517243', barcode: '099482517243', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-10-31T06:00:00Z') });
+    expect(r.discarded).toContain('barcode search: result documents not checked (Purrbi checks web pages only): https://beda.cz/files/cenik-2026.pdf');
+    expect(r.discarded).toContain('barcode search: result pages not checked (no secure address): http://e-chinalife.com/goods/099482517243');
+    expect(r.discarded).toContain('barcode search: result pages not checked (at most 8 a run, sites taking turns): shop8.example, shop9.example, shop10.example');
+    // The scan keeps these in its trace (up to twenty research notes).
+    const { retrievalStatus } = await import('../../src/pipeline/facts');
+    expect(retrievalStatus('ingredients', { research: { outcome: 'done', discarded: r.discarded, source: '', at } }).status).toBe('not_found');
   });
 });

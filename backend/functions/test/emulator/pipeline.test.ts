@@ -49,6 +49,7 @@ let hintResetAt: Date | undefined; // when the rate-limited barcode database say
 let identityPage = false; // research finds a retailer page showing BC.unknown's barcode (name and brand only)
 let partialPage = false; // research finds a page showing BC.unknown's barcode with its name and brand, not who it is for
 let researchCut: 'none' | 'not_started' | 'cut' = 'none'; // the scan's time limit stops research before its first search, or cuts it short
+let refusingPages = false; // the pages research names for BC.unknown turn automated readers away (and one is gone), with a long trace
 let researchOpts: { knownName?: string; knownBrand?: string; model?: string }[] = [];
 let verdictInputs: string[] = [];
 
@@ -152,6 +153,16 @@ const sources: Sources = {
     }
     if (researchThrows) throw new SourceError('OpenAI', 'timeout', 'no response within 60000 ms (mocked)');
     if (researchCut === 'not_started') throw new ResearchNotStarted();
+    if (refusingPages && o.barcode === BC.unknown) {
+      return {
+        facts: null, sources: [], model: 'mock', calls: 2,
+        discarded: [
+          'barcode search: ebay.com refuses automated readers (HTTP 403), so https://www.ebay.com/itm/1 could not be checked',
+          'barcode search: shop.example has no such page (HTTP 404), so https://shop.example/gone could not be checked',
+          ...Array.from({ length: 23 }, (_, i) => `search by the answer’s name: step ${i + 1}`),
+        ],
+      };
+    }
     if (researchCut === 'cut') return { facts: null, sources: [], discarded: ['barcode search: model reported no matching product (1 search, 0 citations)', 'barcode search: result pages not checked (the scan’s time limit): shop.example'], model: 'mock', calls: 1, timeLimited: true };
     if (pagesDown) return { facts: null, sources: [], discarded: ['barcode search: could not fetch https://testbrand.example/lamb to verify it (HTTP 429)'], model: 'mock', fetchFailed: true };
     if (o.barcode === BC.misfiled) {
@@ -292,6 +303,7 @@ beforeEach(async () => {
   identityPage = false;
   partialPage = false;
   researchCut = 'none';
+  refusingPages = false;
   researchOpts = [];
   await fetch(`http://${process.env.FIRESTORE_EMULATOR_HOST}/emulator/v1/projects/demo-purrbi/databases/(default)/documents`, { method: 'DELETE' });
   await db.doc('users/u1/pets/cat1').set({ name: 'Miso', species: 'cat', birthDate: Timestamp.fromDate(new Date('2022-01-01')), allergiesStatus: 'reported', allergies: ['chicken'], profileVersion: 2 });
@@ -1125,7 +1137,7 @@ describe('fallbacks before asking the owner for photos', () => {
     const s = await read(ref);
     expect(calls.hint).toBe(1);
     expect(s.fieldStatus.map((x: { status: string }) => x.status)).toEqual(s.photoRequests.map(() => 'source_unavailable'));
-    expect(s.photoRequests[0].reason).toMatch(/^The barcode database wasn’t available, so the search had only the barcode to go on and found nothing; Purrbi tries again later\. /);
+    expect(s.photoRequests[0].reason).toMatch(/^The barcode database wasn’t available, so the search had only the barcode to go on, and none of the pages it could check shows this barcode; Purrbi tries again later\. /);
     // Said once: the other cards say only what their photo adds (test A, 2026-10-30: the sentence was repeated on each card).
     expect(s.photoRequests.length).toBeGreaterThan(1);
     expect(s.photoRequests.slice(1).every((p: { reason: string }) => !p.reason.includes('barcode database'))).toBe(true);
@@ -1256,7 +1268,7 @@ describe('fallbacks before asking the owner for photos', () => {
     const s = await read(first);
     expect((await db.doc(`productMeta/${s.gtin}`).get()).data()!.enrichment.research).toMatchObject({ outcome: 'time_limited', attempts: 1 });
     expect(s.fieldStatus.every((x: { status: string }) => x.status === 'source_unavailable')).toBe(true);
-    expect(s.photoRequests[0].reason).toMatch(/^The search ran out of the scan’s time before it was done, and found nothing so far; Purrbi searches again later\. /);
+    expect(s.photoRequests[0].reason).toMatch(/^The search ran out of the scan’s time before it was done, and no page it checked so far shows this barcode; Purrbi searches again later\. /);
     expect(s.evidenceNotes.join(' ')).toMatch(/ran out of the scan’s time/);
     await processScan(at(6), 'u1', (await newScan('u1', BC.unknown)).id);
     expect(calls.research).toBe(1);
@@ -1265,6 +1277,23 @@ describe('fallbacks before asking the owner for photos', () => {
     await processScan(at(13), 'u1', later.id);
     expect(calls.research).toBe(2);
     expect((await read(later)).fieldStatus.every((x: { status: string }) => x.status === 'not_found')).toBe(true);
+  });
+  it('pages the search named that turn automated readers away are said as such, not as “found nothing”; a page that is gone is not one of them; the trace keeps twenty research notes (test A on gpt-5-mini, 2026-10-31)', async () => {
+    hintDown = true;
+    refusingPages = true;
+    const ref = await newScan('u1', BC.unknown);
+    await processScan(deps({ researchEnabled: true }), 'u1', ref.id);
+    const s = await read(ref);
+    const said = 'The pages found for this barcode (ebay.com) turn automated readers away, and the barcode database wasn’t available for more search words; Purrbi searches again once it is.';
+    expect(s.fieldStatus[0]).toMatchObject({ status: 'source_unavailable', detail: said });
+    expect(s.evidenceNotes).toContain(said);
+    expect(s.diagnosticNotes.filter((n: string) => n.startsWith('Research (mock): '))).toHaveLength(20);
+    hintDown = false;
+    const done = await newScan('u1', BC.unknown);
+    await processScan({ ...deps({ researchEnabled: true }), now: () => new Date(NOW.getTime() + 13 * 3600 * 1000) }, 'u1', done.id);
+    const d = await read(done);
+    expect(d.fieldStatus[0].detail).toBe('The pages found for this barcode (ebay.com) turn automated readers away, so it couldn’t be checked there.');
+    expect(d.evidenceNotes).toContain('The pages found for this barcode (ebay.com) turn automated readers away, so nothing could be checked there or added.');
   });
   it('after a research model switch, a search under the new model that fails says so, not the old model’s “not found” (review of research 2.8.0)', async () => {
     await processScan(deps({ researchEnabled: true }), 'u1', (await newScan('u1', BC.unknown)).id);

@@ -186,10 +186,25 @@ const PANEL_WORDS: Record<PhotoPurpose, RegExp> = {
 };
 const WHAT: Record<PhotoPurpose, string> = { front: 'details weren’t', ingredients: 'ingredient list wasn’t', nutrition: 'nutrition details weren’t' };
 
+/**
+ * Pages the search named for this barcode that turn automated readers away (HTTP 401, 403), from research's notes.
+ * Asking again won't change it (trace 6402eaaf-3d7: eBay, Ubuy). A page that is gone (404, 410) is not one.
+ */
+export function refusingHosts(discarded: string[]): string[] {
+  const hosts = discarded.map((d) => /^(?:[^:]+: )?(\S+) refuses automated readers(?: or has no such page)? \(HTTP (\d+)\)/.exec(d)).filter((m): m is RegExpExecArray => !!m && (m[2] === '401' || m[2] === '403'));
+  return [...new Set(hosts.map((m) => m[1]))];
+}
+
+/** Notes that say what was searched, opened or checked, never that a value was rejected: a query may name "ingredients" (gpt-5-mini, test A). */
+const TRACE_ONLY =
+  /^(?:[^:]+: )?(?:searched |opened |result (?:pages|documents) |model reported no matching product|no source page was named|\S+ (?:refuses automated readers|has no such page)|\S+ \((?:a search result|a page the model opened)\) shows this barcode|not (?:run|searched) \(the scan’s time limit\))/;
+
 export function retrievalStatus(purpose: PhotoPurpose, ctx: RetrievalContext): FieldStatus {
   const out = (status: RetrievalStatus, detail: string): FieldStatus => ({ purpose, status, detail });
   const r = ctx.research;
   const panel = (x: string) => x.split(/[,:]/)[0].trim();
+  const refusing = r ? refusingHosts(r.discarded) : [];
+  const refused = refusing.length ? `The pages found for this barcode (${refusing.slice(0, 3).join(', ')}) turn automated readers away` : '';
   if (r?.outcome === 'fetch_failed') {
     // Some pages could not be read while others were read and were not this product.
     const reached = r.discarded.some((d) => /match(?:es|ed) only|does not show this product’s barcode|another (?:recipe|variant)/.test(d));
@@ -198,23 +213,35 @@ export function retrievalStatus(purpose: PhotoPurpose, ctx: RetrievalContext): F
   if (r?.outcome === 'hint_failed') {
     // A page tied to the barcode was found and used, but it says nothing of who the product is for (trace cdee0a88-3ff).
     const page = r.source.replace(/\s*\((?:manufacturer|retailer_or_web)\)$/, '');
-    return out('source_unavailable', page ? `A page showing this barcode was found (${page}), but not this; the barcode database wasn’t available for more search words, so Purrbi searches again once it is.` : 'The barcode database wasn’t available, so the search had only the barcode to go on and found nothing; Purrbi tries again later.');
+    return out(
+      'source_unavailable',
+      page
+        ? `A page showing this barcode was found (${page}), but not this; the barcode database wasn’t available for more search words, so Purrbi searches again once it is.`
+        : refused
+          ? `${refused}, and the barcode database wasn’t available for more search words; Purrbi searches again once it is.`
+          : 'The barcode database wasn’t available, so the search had only the barcode to go on, and none of the pages it could check shows this barcode; Purrbi tries again later.',
+    );
   }
   if (r?.outcome === 'time_limited') {
     // The scan's time limit cut the search short (a search, a check of its result pages or a read was left out).
     const page = r.source.replace(/\s*\((?:manufacturer|retailer_or_web)\)$/, '');
-    return out('source_unavailable', page ? `A page showing this barcode was found (${page}), but not this; the search ran out of the scan’s time before it was done, so Purrbi searches again later.` : 'The search ran out of the scan’s time before it was done, and found nothing so far; Purrbi searches again later.');
+    return out(
+      'source_unavailable',
+      page
+        ? `A page showing this barcode was found (${page}), but not this; the search ran out of the scan’s time before it was done, so Purrbi searches again later.`
+        : refused
+          ? `${refused}, and the search ran out of the scan’s time before it was done; Purrbi searches again later.`
+          : 'The search ran out of the scan’s time before it was done, and no page it checked so far shows this barcode; Purrbi searches again later.',
+    );
   }
   if (!r && ctx.researchNotRun === 'error') return out('source_unavailable', 'Purrbi’s search for the manufacturer’s page didn’t work just now; it tries again later.');
   if (ctx.images?.failed?.some((x) => panel(x) === purpose)) return out('not_read', 'The database’s label image of this panel couldn’t be read just now; Purrbi tries again later.');
   if (r) {
-    // The pages that show this barcode turn automated readers away (trace 6402eaaf-3d7: eBay, Ubuy): asking again won't change it.
-    const refusing = [...new Set(r.discarded.map((d) => /^(?:[^:]+: )?(\S+) refuses automated readers/.exec(d)?.[1]).filter((h): h is string => !!h))];
-    if (refusing.length && !r.source) return out('source_unavailable', `The pages that show this barcode (${refusing.slice(0, 3).join(', ')}) turn automated readers away, so it couldn’t be checked there.`);
+    if (refused && !r.source) return out('source_unavailable', `${refused}, so it couldn’t be checked there.`);
     // The only page found was not this product: said as such, for every panel.
     if (r.discarded.some((d) => /does not show this product’s barcode or its brand and name/.test(d)) && !r.source)
       return out('rejected', 'The page the search found doesn’t show this barcode or this product’s name, so nothing from it was used.');
-    const notes = r.discarded.filter((d) => PANEL_WORDS[purpose].test(d) || /nothing from it was used/.test(d));
+    const notes = r.discarded.filter((d) => !TRACE_ONLY.test(d) && (PANEL_WORDS[purpose].test(d) || /nothing from it was used/.test(d)));
     const weak = notes.find((d) => /match(?:es|ed) only/.test(d));
     const variant = notes.find((d) => /another variant/.test(d));
     if (variant) return out('rejected', 'The page found is for another variant of this product, so nothing from it was used.');

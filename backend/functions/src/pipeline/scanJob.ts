@@ -34,7 +34,7 @@ import { SourceError } from '../util/http';
 import { rematchAnalysis } from '../domain/nutrition';
 import { ASSESSMENT_VERSION, MAX_CACHE_LOOKUPS, MAX_NEW_TERMS, olderAssessment, RESEARCH_TIME_LIMIT_MS, SCAN_STATUS, STEP8_LATEST_START_MS, STUCK_AFTER_MS, WORKING_STATUSES, type ErrorCode, type RuntimeConfig } from './config';
 import { corroborateLabel } from './corroborate';
-import { dropStaleImageReads, enrichmentFacts, fillMissing, labelToFacts, missingInfo, retrievalStatus, supersededIdentity, type PhotoRequest, type RetrievalContext } from './facts';
+import { dropStaleImageReads, enrichmentFacts, fillMissing, labelToFacts, missingInfo, refusingHosts, retrievalStatus, supersededIdentity, type PhotoRequest, type RetrievalContext } from './facts';
 import { explanationFields, highlightFields, ingredientRowFields, jobFields, resultFields, type JobInfo } from './serialize';
 import {
   aiBudgetLeft,
@@ -648,6 +648,9 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
         const where = s ? `${s.sourceName}${/\(PDF\)$/.test(s.sourceName) ? '' : s.sourceType === 'manufacturer' ? ' (manufacturer page)' : ' (web page)'}` : 'the page';
         bySource.set(where, [...(bySource.get(where) ?? []), fieldLabel(k)]);
       }
+      // Pages the search named that turn automated readers away are said as such, not as "found nothing" (test A, 2026-10-31).
+      const refusing = refusingHosts(r.discarded);
+      const refused = refusing.length ? `The pages found for this barcode (${refusing.slice(0, 3).join(', ')}) turn automated readers away` : '';
       job.evidenceNotes.push(
         filled.length && src
           ? `Filled ${[...bySource].map(([where, ks]) => `${ks.join(', ')} from ${where}`).join('; ')}, each checked against its page.`
@@ -656,20 +659,27 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
             : unreachable
               ? 'The manufacturer’s or retailers’ pages couldn’t be reached to check them, so nothing was added; Purrbi tries again later.'
               : hintOutage && !r.facts
-                ? 'The barcode database wasn’t available, so the search had only the barcode to go on and found nothing; Purrbi tries again later.'
+                ? refused
+                  ? `${refused}, and the barcode database wasn’t available for more search words; Purrbi searches again once it is.`
+                  : 'The barcode database wasn’t available, so the search had only the barcode to go on, and none of the pages it could check shows this barcode; Purrbi tries again later.'
                 : hintOutage
                   ? 'A page showing this barcode was found, but it doesn’t say who the product is for; the barcode database wasn’t available for more search words, so Purrbi searches again once it is.'
                 : timeCut && !r.facts
-                  ? 'The search ran out of the scan’s time before every step was done, and found nothing so far; Purrbi searches again later.'
+                  ? refused
+                    ? `${refused}, and the search ran out of the scan’s time before every step was done; Purrbi searches again later.`
+                    : 'The search ran out of the scan’s time before every step was done, and no page it checked so far shows this barcode; Purrbi searches again later.'
                 : timeCut
                   ? 'A page showing this barcode was found, but it doesn’t say who the product is for; the search ran out of the scan’s time, so Purrbi searches again later.'
                 : r.facts && src
                   ? // A page tied to the product was checked, but holds nothing the record lacks (trace 99877a3e-234).
                     `${src.sourceName} matches this product (checked on the page) but shows nothing its record lacks, so nothing was added.`
-                  : 'Searched the manufacturer’s and retailers’ pages; nothing could be verified against a page, so nothing was added.',
+                  : refused
+                    ? `${refused}, so nothing could be checked there or added.`
+                    : 'Searched the manufacturer’s and retailers’ pages; nothing could be verified against a page, so nothing was added.',
       );
-      // Every step's outcome up to twelve (the trace of trace 11f7cc1e-842 stopped before the page that mattered).
-      job.diagnosticNotes.push(...r.discarded.slice(0, 12).map((d) => `Research (${r.model}): ${d}`));
+      // Every step's outcome up to twenty (the trace of trace 11f7cc1e-842 stopped before the page that mattered; test A on
+      // gpt-5-mini, trace 345c0a6b-6b8, before its last searches' checks).
+      job.diagnosticNotes.push(...r.discarded.slice(0, 20).map((d) => `Research (${r.model}): ${d}`));
       log('research', { filled, discarded: r.discarded });
     } catch (err) {
       // Research is optional: keep going with what we have.

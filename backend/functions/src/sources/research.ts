@@ -17,9 +17,9 @@ import { httpBytes, httpJson, httpRequest, SourceError } from '../util/http';
 import type { BarcodeHint } from './barcodeLookup';
 import { altTextIngredientLists, documentFacts, markupGtins, nameOnPage, nameTokens, nutritionDocLinks, pageText, parseShopifyProduct, pdfSafety, productHeading, shopifyProductUrl, textGtins } from './pageEvidence';
 
-export const RESEARCH_VERSION = 'research-2.8.0'; // 2.8.0: pages a reasoning model opened (or searched for words) are checked for the barcode like its search results; its calls get 90 s; each run records its model, and another research model is a new method. 2.7.0: the barcode's 13-digit form is searched too; search words prefer a Latin-script name (an import listing's title in another script finds that language's pages). 2.6.0: the barcode's digits are searched alone first. 2.5.0: the search's result pages are checked site by site (each site's first result, then its second), after every search of the run, at most eight. 2.4.0: a page printing other barcodes besides this one is a listing, not the product's page; each analysis value must be printed after its nutrient's name; the manufacturer's page is sought by the answer's name when no other is known. Results of 2.3.0 are not used (one took another variant's analysis). 2.3.0: the search's own result pages are recorded and checked by Purrbi for the barcode; the first that shows it is read from Purrbi's copy. 2.2.0: the barcode is searched in the forms pages print it; a page tied to the barcode that shows nothing about the product (a price list) ends no search, and what such an answer named is searched for next; a barcode with other numbers beside it is still found. 2.1.0: a page tied to the product names it by its own heading; a web page's sentence that names no species, life stage or standard is not a feeding statement. 2.0.0: alt text, markup and Shopify barcodes, linked nutrition documents, a manufacturer follow-up, catalogue abbreviations, package sizes
+export const RESEARCH_VERSION = 'research-2.8.1'; // 2.8.1: the trace names the result pages left out of the checks (documents and pages without a secure address, by address; those past the eight checked, by site), and says a page that refuses automated readers apart from one that is gone; notes that only say what was searched or checked are never read as a rejected value. 2.8.0: pages a reasoning model opened (or searched for words) are checked for the barcode like its search results; its calls get 90 s; each run records its model, and another research model is a new method. 2.7.0: the barcode's 13-digit form is searched too; search words prefer a Latin-script name (an import listing's title in another script finds that language's pages). 2.6.0: the barcode's digits are searched alone first. 2.5.0: the search's result pages are checked site by site (each site's first result, then its second), after every search of the run, at most eight. 2.4.0: a page printing other barcodes besides this one is a listing, not the product's page; each analysis value must be printed after its nutrient's name; the manufacturer's page is sought by the answer's name when no other is known. Results of 2.3.0 are not used (one took another variant's analysis). 2.3.0: the search's own result pages are recorded and checked by Purrbi for the barcode; the first that shows it is read from Purrbi's copy. 2.2.0: the barcode is searched in the forms pages print it; a page tied to the barcode that shows nothing about the product (a price list) ends no search, and what such an answer named is searched for next; a barcode with other numbers beside it is still found. 2.1.0: a page tied to the product names it by its own heading; a web page's sentence that names no species, life stage or standard is not a feeding statement. 2.0.0: alt text, markup and Shopify barcodes, linked nutrition documents, a manufacturer follow-up, catalogue abbreviations, package sizes
 /** Research results still used as they were saved (older ones are read again: they could take who a product is for from a retailer's title). */
-export const RESEARCH_RESULTS_IN_USE: ReadonlySet<string> = new Set([RESEARCH_VERSION, 'research-2.7.0', 'research-2.6.0', 'research-2.5.0', 'research-2.4.0', 'research-2.2.0', 'research-2.1.0', 'research-2.0.0']); // not 2.3.0
+export const RESEARCH_RESULTS_IN_USE: ReadonlySet<string> = new Set([RESEARCH_VERSION, 'research-2.8.0', 'research-2.7.0', 'research-2.6.0', 'research-2.5.0', 'research-2.4.0', 'research-2.2.0', 'research-2.1.0', 'research-2.0.0']); // not 2.3.0
 
 const nullableString = { type: ['string', 'null'] };
 const SCHEMA = {
@@ -755,7 +755,12 @@ async function pageShowingBarcode(
       return u.slice(0, 60);
     }
   };
-  const fresh = [...new Set(results.map(canonical))].filter((u) => /^https:\/\//.test(u) && !seen.has(u) && !/\.pdf$/i.test(u));
+  const unseen = [...new Set(results.map(canonical))].filter((u) => !seen.has(u));
+  // Documents and pages without a secure address are not checked; the trace keeps their addresses (2026-10-31, test C:
+  // two results were left out and only their sites were known).
+  const documents = unseen.filter((u) => /\.pdf$/i.test(u));
+  const insecure = unseen.filter((u) => !/^https:\/\//.test(u) && !/\.pdf$/i.test(u));
+  const fresh = unseen.filter((u) => /^https:\/\//.test(u) && !/\.pdf$/i.test(u));
   const turn = new Map<string, number>();
   const ranked = fresh.map((u, rank) => {
     const h = hostOf(u);
@@ -767,6 +772,13 @@ async function pageShowingBarcode(
     .sort((a, b) => a.turn - b.turn || a.rank - b.rank)
     .slice(0, Math.max(0, limit))
     .map((x) => x.u);
+  const address = (u: string) => (u.length > 150 ? `${u.slice(0, 150)}…` : u);
+  const past = fresh.filter((u) => !candidates.includes(u));
+  const leftOut = [
+    ...(documents.length ? [`result documents not checked (Purrbi checks web pages only): ${documents.slice(0, 3).map(address).join(', ')}${documents.length > 3 ? ` (+${documents.length - 3})` : ''}`] : []),
+    ...(insecure.length ? [`result pages not checked (no secure address): ${insecure.slice(0, 3).map(address).join(', ')}${insecure.length > 3 ? ` (+${insecure.length - 3})` : ''}`] : []),
+    ...(past.length ? [`result pages not checked (at most ${PAGE_CHECKS + 2} a run, sites taking turns): ${[...new Set(past.map(hostOf))].slice(0, 6).join(', ')}${past.length > 6 ? ` (${past.length} pages)` : ''}`] : []),
+  ];
   const without: string[] = [];
   const unread: string[] = [];
   let checked = 0;
@@ -781,7 +793,7 @@ async function pageShowingBarcode(
     try {
       const page = await fetchOnce(url, opts);
       const kind = opened.has(url) ? 'a page the model opened' : 'a search result';
-      if (page.barcode) return { page, host: hostOf(url), checked, timeLimited: false, notes: [...(without.length ? [`result pages without this barcode: ${without.join(', ')}`] : []), `${hostOf(url)} (${kind}) shows this barcode${page.barcode === 'text' ? '' : page.barcode === 'markup' ? ' in its page data' : ' in its product record'}, so Purrbi read it`] };
+      if (page.barcode) return { page, host: hostOf(url), checked, timeLimited: false, notes: [...(without.length ? [`result pages without this barcode: ${without.join(', ')}`] : []), `${hostOf(url)} (${kind}) shows this barcode${page.barcode === 'text' ? '' : page.barcode === 'markup' ? ' in its page data' : ' in its product record'}, so Purrbi read it`, ...leftOut.filter((n) => !n.includes('at most'))] };
       without.push(page.searchPage ? `${hostOf(url)} (a search page: it repeats the barcode from its address)` : page.family ? `${hostOf(url)} (lists it among ${page.family} barcodes)` : hostOf(url));
     } catch (err) {
       unread.push(`${hostOf(url)}${err instanceof SourceError ? ` (${err.status ? `HTTP ${err.status}` : err.kind})` : ''}`);
@@ -791,8 +803,9 @@ async function pageShowingBarcode(
     ...(without.length ? [`result pages without this barcode: ${without.join(', ')}`] : []),
     ...(unread.length ? [`result pages that could not be read: ${unread.join(', ')}`] : []),
     ...(unchecked.length ? [`result pages not checked (the scan’s time limit): ${[...new Set(unchecked.map(hostOf))].join(', ')}`] : []),
+    ...leftOut,
   ];
-  return { page: null, host: '', checked, timeLimited: unchecked.length > 0, notes: candidates.length ? notes : ['no result page to check'] };
+  return { page: null, host: '', checked, timeLimited: unchecked.length > 0, notes: candidates.length ? notes : ['no result page to check', ...leftOut] };
 }
 
 const READ_SYSTEM = [
@@ -860,7 +873,12 @@ async function researchAttempt(opts: ResearchOptions, user: string, mode: Mode):
     } catch (err) {
       const refused = err instanceof SourceError && [401, 403, 404, 410].includes(err.status ?? 0);
       transient = transient || !refused;
-      discarded.push(refused ? `${hostOf(url)} refuses automated readers or has no such page (HTTP ${(err as SourceError).status}), so ${url.slice(0, 120)} could not be checked` : `could not fetch ${url.slice(0, 120)} to verify it${err instanceof SourceError ? ` (${err.status ? `HTTP ${err.status}` : err.kind})` : ''}`);
+      const status = (err as SourceError).status;
+      discarded.push(
+        refused
+          ? `${hostOf(url)} ${status === 404 || status === 410 ? 'has no such page' : 'refuses automated readers'} (HTTP ${status}), so ${url.slice(0, 120)} could not be checked`
+          : `could not fetch ${url.slice(0, 120)} to verify it${err instanceof SourceError ? ` (${err.status ? `HTTP ${err.status}` : err.kind})` : ''}`,
+      );
     }
   }
   if (!pages.length) return { facts: null, sources: [], discarded, model, fetchFailed: transient, lead, results, opened, queries, fetched: urls };
