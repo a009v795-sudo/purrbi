@@ -196,3 +196,63 @@ only read.
 | Backend environment | development project `purrbi-49c21`, backend `1021e47` (deploy 41096553777) |
 | Signing | The development key that builds 6 and 7 used, restored from the workflow's cache (`purrbi-dev-debug-keystore-v1`), so it updates build 7 in place. This session can't read the cache or job logs, so the cache hit itself is not shown here. |
 | Installation test | **NOT RUN.** There is no Android device or emulator in this environment. |
+
+## Cycle 6 (2026-10-31): barcode-only, research 2.7.0
+
+The owner withheld the photographs on purpose: the goal is to see how far the barcode alone goes, and what stops it.
+
+**Causes in the cycle-5 traces, and the repairs** (commit `4dd9bea`, deploy 41160259073):
+- **One search per call, 12 digits only.** A found only eBay and Ubuy; C found nothing. When the 12 digits find nothing usable, a
+  UPC-A's 13-digit form is now searched on its own. It is skipped when the first search already ran it, and never used for EAN-8.
+- **B saved as "done" after a search made while the barcode database was paused.** Its only name (a Japanese listing's) then kept the
+  database from ever being asked again. Now:
+  - the database is asked when no record or label names the product and no Latin-script name is known;
+  - its answer is kept 30 days;
+  - it is not asked while the AI budget is used up;
+  - a run during its outage that leaves who the product is for unknown is stored as `hint_failed`, and repeated once the database
+    answers again.
+- **The manufacturer search used the Japanese heading** and reached Wellness Japan. Search words now prefer a Latin-script name.
+
+**Adversarial review before deploying** (workflow `wf_a90dae4d-2e0`: three lenses, policy, correctness and cost, plus skeptics). Every
+finding was fixed and has a test:
+- **A loosening of matching.** A search on the English title, with the Japanese trusted name reduced to "wellness", could have let
+  another flavour's page in by name. Now a search on words other than the trusted name uses only a page tied by barcode, recipe or
+  variants, and a name in another script is never matched by name.
+- **Unbounded retries.** Unfinished runs are now retried after 12 hours, 2 days and 7 days, then not until a new method or 30 days.
+  A refusal (HTTP 401, 403, 404 or 410) is a final answer, said as "the pages that show this barcode turn automated readers away".
+- **Smaller fixes:**
+  - a page refused once is not fetched again in the same run;
+  - the result-page option is asked for only by research, and a refusal is remembered per model;
+  - a page found during the outage is described as found;
+  - the search by name uses the barcode search that names the product;
+  - short Latin names such as "Go!" stay Latin.
+
+Unit tests 459/459, emulator tests 89/89. The new tests fail on `1021e47`.
+
+**Incident: the OpenAI key expired.** The first rescans on `4dd9bea` (02:35Z; A `bTBe1jviVUuO4pCUfc2G`, C `YU16Gx0EeUs8MTOw8evK`) got HTTP
+401 "Your API key has expired". The app said honestly that the search "didn't work just now; it tries again later" and invented
+nothing. The owner saved a new key version, and deploy 41161558917 picked it up. OpenAI answered 200 again from 02:5xZ.
+
+**Results** (app `638eb45` web build, backend `4dd9bea`, typed entry):
+
+| Test | Scan / trace | What the backend's search returned | Outcome |
+|---|---|---|---|
+| A `099482481087` | `rKCp0dFtT6nUBstCiDhi` / `3fccab49-4e3` | `"099482481087"`: eBay and Ubuy, both HTTP 403 (now recorded as refusals). `"0099482481087"`: 0 results. Search by the answer's name: 12 results (Whole Foods, PawDiet, Shein, cats.com, Petco 403, …); none ties the barcode alone, and cats.com lists three Whole Paws barcodes. | Unscored, "Not yet confirmed for cats or dogs". Stored as `hint_failed`, to repeat after the barcode database's reset. |
+| C `099482517243` | `DZc8RD72DjDWH6yr6INN` / `d86e2aa8-99b` | `"099482517243"`: 0 results. `"0099482517243"`: 0 results. | Same. |
+
+The 13-digit search works as designed, but OpenAI's web search, the provider the backend uses, barely indexes these two barcodes.
+Other engines find A on Amazon and Spoonful and C on Amazon, and those are not in its results. This is a coverage limit of the search
+provider, not a code defect still open.
+
+**Regressions on `4dd9bea` (demo account):**
+
+| Product | Scan / trace | Result |
+|---|---|---|
+| Wellness can `076344060048` | `UknFp0EoXESaVPjwzJbq` / `7f6dd378-01e` | 97 "Strong", cache hit, no external calls |
+| Salmon treat `850063633017` | `9WRyLXeLP4OoeWgRG4XL` / `bb78c30e-4b2` | Cats and dogs, a treat, "Information incomplete" (only the nutrition panel requested) |
+| Whole Paws `099482480882` | `d2eLTkM9cbqLZaXJgKtc` / `99877a3e-234` | Still unresolved, not "human food". The 13-digit search found **a page that shows the barcode with the same recipe** (plainfoodsafe.com, 10 of 10 ingredients in order); it does not say who the food is for. The Whole Foods cat-food page matches only by brand and name, so nothing was taken from it, per the rule on similarly named variants. |
+
+One wording issue to fix: when a page was verified but added nothing new, the closing note says "nothing could be verified against a
+page".
+
+**B:** rescanned after the barcode database's reset (2026-10-31 13:13 UTC), when its English title is available (below).
