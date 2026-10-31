@@ -351,3 +351,10 @@ tests 95/95, CI green. Deploy 41203843075 (`f634a1b`, research 2.8.1, gpt-5-mini
   who it is for in its heading or feeding statement.
 - C is limited by coverage: no product page with its barcode is in the search provider's results, and the barcode database
   has no record.
+
+**After the review finished** (all 8 verdicts in: 7 confirmed, 1 refuted as older than the commit, its twin confirmed): one
+residue in the refusal wording. A site can refuse one address and serve another, and a page read there may be rejected by a
+note that does not name its site. The sentence is now said of the page, not the site. Commit `db5fb06`, deploy 41205787657.
+Checked live by rescanning A (scan `p4-c8b`, trace `ef9050e5-49a`). It reused the saved search, with no OpenAI or
+barcode-database call, and its cards now read: "A page found for this barcode (on ubuy.com.lb) turns automated readers away,
+so nothing could be checked on it."
