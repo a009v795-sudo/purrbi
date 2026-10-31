@@ -397,3 +397,25 @@ rework. Unit tests 482/482, emulator tests 95/95, CI green. Deploy 41247102158 (
 
 The first account's B scan (`p4-c9`, trace `182324dc-2d8`) did not search: "today’s searches for this account are used up".
 That is the per-account daily allowance working as designed.
+
+**Research 2.9.1 (re-review fixes)** (commit `7b9ad95`, deploy 41249609921). The re-review of `c5288f2` (`wf_1e71acea-222`) found 13
+issues. The verdicts in when this was written confirmed them. All are addressed:
+- The share of eight checks per search was removed. It could drop carried pages, start a paid search before free checks,
+  and give a wrong end note. Each search's own pages again get the run's remaining checks; the ranking alone reaches
+  desertcart.in in A's real trace.
+- The brand counts in the address's host (B's own Wellness page had been taken for another brand's) and in split
+  possessives (Hill-s). A parent company's brand no longer sinks the product's page.
+- The barcode in a shop's own address counts again (Rakuten, Yahoo).
+- Home pages with tracking keys are skipped again.
+- A listing ending in /products is not a product page.
+
+Unit tests 486/486, emulator tests 95/95, CI green.
+
+A on 2.9.1 (account `demo`, trace `ea620f2a-524`): the 12 checks went to product pages first (Shein, Whole Foods, Instagrid,
+pawdiet, cats.com, …). The pages most likely to show A's barcode (eBay, Ubuy, Shopabunda, two desertcart country sites)
+refuse automated readers (403). Card: "A page found for this barcode (on ebay.com) turns automated readers away, so nothing
+could be checked on it." A is limited by access, not by which pages are checked.
+
+**Android APK build 9** (run 41243341776, from `399d7e0`; app code unchanged since build 8, `638eb45`; the backend changes are
+server-side): artifact `purrbi-android-apk-9`, SHA-256 `dc62eaf692525647b5a3600e0e85e271c7097ea9cadb0d01fabaae2a9bb8feba`.
+Installation on a device: NOT RUN here (no device).
