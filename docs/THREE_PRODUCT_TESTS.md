@@ -433,3 +433,22 @@ reporting revision `bf31edb`). It closes the remaining verdicts of the first ran
 
 Unit tests 491/491, emulator tests 95/95, CI green. The results of A, B and C above stand; their saved searches are 2.9.0 or
 2.9.1 and stay in use.
+
+## Reruns on research 2.9.2 (2026-10-31, 23:45 UTC, backend `bf31edb`, account `demo`)
+
+| Test | Scan / trace | What happened | Outcome |
+|---|---|---|---|
+| A `099482481087` | `p4-c11` / `6426c942-1aa` | Two calls, 5 searches (23 + 41 results). The barcode search's own pages took all 12 checks: Whole Foods, Wholistic Pet, Instagrid, directionsforme.org, pawdiet (×2), two scribd documents and a digits-of-pi search page, all without the barcode; eBay, Health First Market and Ubuy refuse readers (403). So the search by name's pages (desertcart.in, Instacart, cats.com and 16 more) were named but not checked. | Unscored, "Not yet confirmed for cats or dogs". Card: "Pages found for this barcode (on ubuy.com.lb, ebay.com) turn automated readers away, so nothing could be checked on them." |
+| B `076344886570` | `p4-c11` / `ffb9aa4a-0ba` | gpt-5-mini cited petfood.express, a US shop page that **shows the barcode**. Purrbi verified there that it is **for cats** and its **ingredient list** (Chicken Broth, Water Sufficient For Processing, Chicken, Potato Starch, Turkey, Eggs, Chicken Liver, …). The page's feeding sentence names no species, life stage or standard, so it is not taken as the adequacy statement. The Wellness page the model cited is gone (404). | **Unscored, "Information incomplete"** (no longer "Not yet confirmed for cats or dogs"). A cat complete food with verified ingredients, analysis (4 / 2 / 1 / 85 / 2.5 %) and calories (67 kcal per 100 g). Only the "complete and balanced" statement is missing; only the nutrition photo is asked for. Good to know: main ingredients named by source; made for cats. |
+| C `099482517243` | `p4-c11` / `b8938c34-f51` | Two searches. GS1, help and forum pages were skipped. scribd, checkthepanel.com, jqs.app, barcode.codes, azrscorp.com and gs1.dk do not show the barcode. | Unscored. Card: "No manufacturer or retailer page could be matched to this barcode." |
+
+**Issues seen:**
+- **A, check budget.** When the barcode search returns 12 or more checkable pages, its low-promise pages (document sites, a search
+  page) use checks the search by name's product pages would have had. A fix that keeps the review's lessons: while another search
+  follows and can still start in time, keep the last few checks of the run from pages scoring 0 or less (name them instead). No
+  carrying of pages, so none of 2.9.0's carry defects.
+- **B, verdict wording.**
+  - The AI verdict says "made specifically for cats", and the highlight says "Made for cats", while the header says "Listed for
+    cats by a retailer’s listing (not confirmed)".
+  - The verdict says the food "lacks a nutritional adequacy statement" when Purrbi only did not find one.
+  - The product keeps the Japanese listing's name, though an English shop page now ties the barcode.
