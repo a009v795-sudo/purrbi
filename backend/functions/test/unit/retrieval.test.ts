@@ -1171,16 +1171,24 @@ describe('research 2.9.2: root addresses, lookups and who the product is for', (
     return { fetched, r };
   };
   it('a root address with a key that is not for tracking is checked (OpenCart, osCommerce); with only tracking keys it is a home page', async () => {
-    const { fetched, r } = await order(['https://shop-a.example/index.php?route=product/product&product_id=50', 'https://shop-b.example/?products_id=123', 'https://shop-c.example/?main_page=index&cPath=12', 'https://home.example/?srsltid=AfmBOoq&ref=abc']);
+    // (The category page is listed first: the product addresses must win on their own, not by search order.)
+    const { fetched, r } = await order(['https://shop-c.example/index.php?main_page=index&cPath=12', 'https://shop-x.example/index.php?route=product/category&path=20', 'https://shop-a.example/index.php?route=product/product&product_id=50', 'https://shop-b.example/product_info.php?products_id=123', 'https://shop-d.example/?products_id=7', 'https://home.example/?srsltid=AfmBOoq&ref=abc']);
     const hosts = fetched.map((u) => new URL(u).hostname);
-    expect(hosts.slice(0, 2).sort()).toEqual(['shop-a.example', 'shop-b.example']);
-    expect(hosts).toContain('shop-c.example');
+    expect(hosts.slice(0, 3).sort()).toEqual(['shop-a.example', 'shop-b.example', 'shop-d.example']);
+    expect(hosts.slice(3).sort()).toEqual(['shop-c.example', 'shop-x.example']);
     expect(hosts).not.toContain('home.example');
     expect(r.discarded.some((d) => /home pages.*home\.example/.test(d))).toBe(true);
   });
   it('a /code/ or /jan/ page for the barcode is a lookup, checked after the shop’s product page', async () => {
     const { fetched } = await order(['https://barcode.monster/code/0099482481087', 'https://www.janken.example/jan/0099482481087', 'https://www.chewy.com/whole-paws-salmon-pate/dp/1']);
-    expect(new URL(fetched[0]).hostname).toBe('www.chewy.com');
+    expect(fetched.map((u) => new URL(u).hostname)).toEqual(['www.chewy.com', 'barcode.monster', 'www.janken.example']);
+  });
+  it('who the product is for does not lift another brand’s page for the same species above an item page, nor a short name above a richer one (review of 2.9.2)', async () => {
+    const results = ['https://www.chewy.com/open-farm-wild-salmon-pate-cat-food/dp/9', 'https://www.walmart.com/ip/Fancy-Feast-Classic-Salmon-Pate-Cat-Food/123', 'https://www.ebay.com/itm/317732737868'];
+    const a = await order(results, { knownBrand: 'Whole Paws', knownName: 'Whole Paws Grain-Free Salmon Pate Loaf Cat Food' });
+    expect(new URL(a.fetched[0]).hostname).toBe('www.ebay.com');
+    const b = await order(['https://www.chewy.com/open-farm-wild-salmon-pate-cat-food/dp/9', 'https://www.wholefoodsmarket.com/product/whole-paws-grain-free-salmon-pate-loaf-b03'], { knownName: 'Salmon Cat Food', hint: { title: 'Whole Paws Grain-Free Salmon Pate Loaf Wet Cat Food, 5.5 oz', brand: 'Whole Paws', category: '', source: 'UPCitemdb (barcode database)' } });
+    expect(new URL(b.fetched[0]).hostname).toBe('www.wholefoodsmarket.com');
   });
   it('who the product is for tells its page from another variant’s (kitten, cat)', async () => {
     const kitten = await order(['https://www.chewy.com/purina-pro-plan-adult-chicken-rice/dp/1', 'https://www.chewy.com/purina-pro-plan-kitten-chicken-rice/dp/2'], { knownBrand: 'Purina Pro Plan', knownName: 'Purina Pro Plan Kitten Chicken & Rice' });

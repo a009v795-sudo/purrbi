@@ -311,7 +311,8 @@ any photo is asked for:
   2.8.1: the checks went to a document site, a home page, GS1 help pages and lookup tools' home pages, and desertcart.in,
   in A's own results, was left past the limit). From the address alone:
   - not checked, and named in the trace: home pages (also a locale's, also with only tracking or language keys such as
-    ?srsltid= or ?lang=; a root address with any other key is a page its query addresses, and is checked), help, about,
+    ?srsltid= or ?lang=; a root or script address with any other key, such as /index.php?route=…, is a page its query
+    addresses, and is checked), help, about,
     tool, forum, encyclopedia, blog or news sections (also on their own host, such as help.…), and listings near the top;
   - checked after the product pages: a site's search or listing page and a lookup page for the barcode (a site's search
     for one barcode may lead to the product's page; a lookup page gives a name, not the label);
@@ -321,7 +322,9 @@ any photo is asked for:
     brand's product), the share of the name's words (from the most trusted source only: a record's or a page's that
     showed the barcode, then the barcode database's title, then an answer's), opened by the model; a review counts
     lower. Address and name are read the same way (accents, apostrophes and split possessives such as Hill-s, catalogue
-    abbreviations), and who the product is for (cat, dog, kitten, puppy) counts among the name's words.
+    abbreviations). Who the product is for (cat, dog, kitten, puppy) is kept apart from the name's words, as every page for
+    the species has them: it breaks ties (a kitten recipe's page before the adult one's) and lowers an address for the
+    other species (a dog food's page for a cat food).
   Sites take turns (a site's second page counts lower, a third is not checked). A run checks at most twelve pages (was
   eight), a search's pages with the checks the run has left, within the same time limit. The ranking only chooses which
   pages Purrbi fetches: a page is used only when Purrbi finds the barcode on it. (2.9.0 briefly gave each search a share
