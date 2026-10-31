@@ -855,7 +855,8 @@ function addressPromise(u: string, gtin14: string, words: RankWords, opened: boo
   const whoShared = who.filter((w) => pathWho.includes(w)).length;
   if (opened) score += 1;
   if (/review/.test(path)) score -= 1;
-  return { score, share: ratio + whoShared / 100 };
+  // (The species breaks ties only among addresses that carry the name's words: a maker's /cat-food/ listing does not.)
+  return { score, share: ratio + (ratio > 0 ? whoShared / 100 : 0) };
 }
 
 const hostOf = (u: string) => {

@@ -1190,6 +1190,14 @@ describe('research 2.9.2: root addresses, lookups and who the product is for', (
     const b = await order(['https://www.chewy.com/open-farm-wild-salmon-pate-cat-food/dp/9', 'https://www.wholefoodsmarket.com/product/whole-paws-grain-free-salmon-pate-loaf-b03'], { knownName: 'Salmon Cat Food', hint: { title: 'Whole Paws Grain-Free Salmon Pate Loaf Wet Cat Food, 5.5 oz', brand: 'Whole Paws', category: '', source: 'UPCitemdb (barcode database)' } });
     expect(new URL(b.fetched[0]).hostname).toBe('www.wholefoodsmarket.com');
   });
+  it('the product’s page without a species word still comes before other brands’ pages for its species and flavour; a species listing does not win a tie (review of 2.9.2)', async () => {
+    const pages = [...['chewy.com', 'walmart.com', 'target.com', 'petco.com'].map((h, i) => `https://www.${h}/p/open-farm-wild-salmon-cat-food-${i}`), 'https://www.desertcart.in/products/12345-whole-paws-grain-free-salmon-pate-5-5-oz'];
+    const a = await order(pages, { knownBrand: 'Whole Paws', knownName: 'Whole Paws Salmon Cat Food' });
+    expect(new URL(a.fetched[0]).hostname).toBe('www.desertcart.in');
+    // The maker's species listing carries no name word: its "cat" does not break the tie with the item page listed first.
+    const b = await order(['https://www.ebay.com/itm/317732737868', 'https://www.wellnesspetfood.com/cat-food'], { knownBrand: 'Wellness', knownName: 'Wellness CORE Salmon Cat Food' });
+    expect(new URL(b.fetched[0]).hostname).toBe('www.ebay.com');
+  });
   it('who the product is for tells its page from another variant’s (kitten, cat)', async () => {
     const kitten = await order(['https://www.chewy.com/purina-pro-plan-adult-chicken-rice/dp/1', 'https://www.chewy.com/purina-pro-plan-kitten-chicken-rice/dp/2'], { knownBrand: 'Purina Pro Plan', knownName: 'Purina Pro Plan Kitten Chicken & Rice' });
     expect(kitten.fetched[0]).toBe('https://www.chewy.com/purina-pro-plan-kitten-chicken-rice/dp/2');
