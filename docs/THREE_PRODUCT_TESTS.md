@@ -256,3 +256,61 @@ One wording issue to fix: when a page was verified but added nothing new, the cl
 page".
 
 **B:** rescanned after the barcode database's reset (2026-10-31 13:13 UTC), when its English title is available (below).
+
+## Cycle 7 (2026-10-31): gpt-5-mini as the research model, research 2.8.0
+
+The owner asked to try gpt-5-mini for research and rerun A and C, barcode only (no photos).
+
+**Change** (commit `024eac7`):
+- `OPENAI_RESEARCH_MODEL` is `gpt-5-mini` in the development deploy (was `gpt-4.1-mini`).
+- Each run records its model. Another model is a new method, so a product still missing information is searched again with it.
+  A and C were in their retry wait; this made them due at once. A complete product is not searched again.
+- gpt-5-mini also opens pages. Pages it opened are listed in the trace ("opened …") and checked by Purrbi for the barcode, like
+  search results.
+- Its calls get 90 s, as explanations and label reading already do.
+
+**Adversarial review before deploying** (workflow `wf_9dac78f5-7d6`: three lenses, each finding checked by a skeptic). 8 findings
+confirmed, 3 refuted. All 8 fixed in `8e8e63c`, each with a test that fails on `024eac7`:
+- A run the time limit stopped before any search was saved as finished ("no page could be matched", no search for 30 days).
+  Research is now not started with less time left than a search needs, and nothing is saved as searched.
+- A run the time limit cut short that found nothing was saved as an ordinary negative, and result pages it skipped were not
+  mentioned. It is now stored as `time_limited` and retried on the bounded schedule; the skipped pages are named in the trace.
+- Result pages are now checked before another paid search.
+- The status shown after a model switch could be the old model's "not found". It now uses only the same version and model.
+- A shop's own search page (`?q=<barcode>`) that only repeats the barcode from its address counted as showing it. It no longer does.
+- gpt-5-mini's `queries` list lost to the older single `query` field, which would have caused an extra paid search.
+- Page opens were counted as searches.
+- The API contract had dropped research 2.6.0 from the results in use.
+
+Unit tests 466/466, emulator tests 94/94, CI green. Deploy 41172579999 (`8e8e63c`).
+
+**Results** (app `638eb45` web build, backend `8e8e63c`, research model `gpt-5-mini-2025-08-07`, typed entry, account `accept`). The
+barcode database (UPCitemdb) was still paused until 13:13 UTC, so neither search had its product title:
+
+| Test | Scan / trace | What gpt-5-mini searched and found | Outcome |
+|---|---|---|---|
+| A `099482481087` | `G2sYGmecI9tA2bdeL14o` / `345c0a6b-6b8` | Call 1 (17 s): the three printed forms in one search (4 results: ubuy.com.lb, scribd.com, e-chinalife.com, pi.bigparadox.com), then "Whole Paws Salmon Pate UPC 099482481087 …" (18 results: eBay, Whole Foods Market, Health First Market, instagrid.me, …); opened wholefoodsmarket.com. The 13-digit search was not repeated (call 1 ran it). Purrbi checked 8 result pages: none readable shows the barcode; ubuy.com.lb, ebay.com and healthfirstmarket.com refuse automated readers (HTTP 403). Whole Foods' page shows no barcode, and the name is unverified, so it is not matched by name. Call 2 (16 s), search by the answer's name "Whole Paws Salmon Paté Loaf": 19 + 2 results; opened healthfirstmarket.com; eBay and Ubuy refuse readers. | Unscored, "Not yet confirmed for cats or dogs". Stored as `hint_failed`: searched again after 12 hours, once the barcode database answers. |
+| C `099482517243` | `vwvE7E2Y1xrF3osiFfRG` / `49ae946d-859` | One call (5 s): the three printed forms (2 results: beda.cz, scribd.com), then "UPC", "pet food" and "dog cat food" variants (16 results: pet-food lookup sites' home pages, admc.us, fda.gov, …). The model reported no matching product. Purrbi checked 8 result pages: none shows the barcode; fda.gov answered 401. beda.cz and admc.us were not among the 8 checked. Page checks leave documents out, and the trace records hosts only, so whether they show the barcode is unknown. | Same. |
+
+**Compared with gpt-4.1-mini (cycle 6):**
+
+| | gpt-4.1-mini | gpt-5-mini |
+|---|---|---|
+| A, searches | one search per call; 12 digits: eBay and Ubuy; 13 digits: 0 results; by name: 12 results | several searches per call, all three printed forms at once; 22 results in call 1; opens pages itself |
+| A, pages tying the barcode | eBay, Ubuy (both refuse readers) | eBay, Ubuy, Health First Market (all refuse readers) |
+| C, results | 0 for either form | 18, none a product page showing the barcode |
+| Model calls, time | 3–4 calls | A: 2 calls (17 s, 16 s); C: 1 call (5 s) |
+| Outcome | unscored | unscored |
+
+gpt-5-mini searches more widely and was not slower here. It found no page that Purrbi can read and that ties either barcode,
+so neither outcome changed. What stops A and C now:
+- A: every page found that shows its barcode turns automated readers away. Purrbi does not get around that.
+- C: no product page with its barcode is in the search provider's results. Two results, possibly documents (beda.cz, admc.us),
+  were left out of the checks. The trace does not record their addresses, so this can't be settled from the trace.
+- Both: no product title from the barcode database while it is paused.
+
+**Issue seen (wording, not new):** for A the front card says the search "found nothing", but it found pages that refuse automated
+readers. The barcode-database message takes precedence over the refusal message. To fix next.
+
+**B** is rescanned after the barcode database's reset (13:20 UTC scheduled), now on research 2.8.0 with gpt-5-mini. Its saved
+run is 2.7.0's, so it is searched again at once. A and C's retries fall due after about 17:30 UTC.
