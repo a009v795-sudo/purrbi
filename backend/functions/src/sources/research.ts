@@ -6,7 +6,7 @@
 // Switched by the RESEARCH_ENABLED parameter; attempted at most once per product per freshness window.
 import { getDocumentProxy } from 'unpdf';
 import { analysisRows } from '../ai/labelExtract';
-import { chatJson, researchJson, type WebSearchLog } from '../ai/openai';
+import { chatJson, isReasoningModel, researchJson, type WebSearchLog } from '../ai/openai';
 import { detectSpecies, parseAdequacyStatement } from '../domain/adequacy';
 import { printedForms, textContainsGtin } from '../domain/barcode';
 import { normalizeIngredientName, parseIngredientList, type ParsedIngredient } from '../domain/ingredients';
@@ -17,9 +17,9 @@ import { httpBytes, httpJson, httpRequest, SourceError } from '../util/http';
 import type { BarcodeHint } from './barcodeLookup';
 import { altTextIngredientLists, documentFacts, markupGtins, nameOnPage, nameTokens, nutritionDocLinks, pageText, parseShopifyProduct, pdfSafety, productHeading, shopifyProductUrl, textGtins } from './pageEvidence';
 
-export const RESEARCH_VERSION = 'research-2.7.0'; // 2.7.0: the barcode's 13-digit form is searched too; search words prefer a Latin-script name (an import listing's title in another script finds that language's pages). 2.6.0: the barcode's digits are searched alone first. 2.5.0: the search's result pages are checked site by site (each site's first result, then its second), after every search of the run, at most eight. 2.4.0: a page printing other barcodes besides this one is a listing, not the product's page; each analysis value must be printed after its nutrient's name; the manufacturer's page is sought by the answer's name when no other is known. Results of 2.3.0 are not used (one took another variant's analysis). 2.3.0: the search's own result pages are recorded and checked by Purrbi for the barcode; the first that shows it is read from Purrbi's copy. 2.2.0: the barcode is searched in the forms pages print it; a page tied to the barcode that shows nothing about the product (a price list) ends no search, and what such an answer named is searched for next; a barcode with other numbers beside it is still found. 2.1.0: a page tied to the product names it by its own heading; a web page's sentence that names no species, life stage or standard is not a feeding statement. 2.0.0: alt text, markup and Shopify barcodes, linked nutrition documents, a manufacturer follow-up, catalogue abbreviations, package sizes
+export const RESEARCH_VERSION = 'research-2.8.0'; // 2.8.0: pages a reasoning model opened (or searched for words) are checked for the barcode like its search results; its calls get 90 s; each run records its model, and another research model is a new method. 2.7.0: the barcode's 13-digit form is searched too; search words prefer a Latin-script name (an import listing's title in another script finds that language's pages). 2.6.0: the barcode's digits are searched alone first. 2.5.0: the search's result pages are checked site by site (each site's first result, then its second), after every search of the run, at most eight. 2.4.0: a page printing other barcodes besides this one is a listing, not the product's page; each analysis value must be printed after its nutrient's name; the manufacturer's page is sought by the answer's name when no other is known. Results of 2.3.0 are not used (one took another variant's analysis). 2.3.0: the search's own result pages are recorded and checked by Purrbi for the barcode; the first that shows it is read from Purrbi's copy. 2.2.0: the barcode is searched in the forms pages print it; a page tied to the barcode that shows nothing about the product (a price list) ends no search, and what such an answer named is searched for next; a barcode with other numbers beside it is still found. 2.1.0: a page tied to the product names it by its own heading; a web page's sentence that names no species, life stage or standard is not a feeding statement. 2.0.0: alt text, markup and Shopify barcodes, linked nutrition documents, a manufacturer follow-up, catalogue abbreviations, package sizes
 /** Research results still used as they were saved (older ones are read again: they could take who a product is for from a retailer's title). */
-export const RESEARCH_RESULTS_IN_USE: ReadonlySet<string> = new Set([RESEARCH_VERSION, 'research-2.6.0', 'research-2.5.0', 'research-2.4.0', 'research-2.2.0', 'research-2.1.0', 'research-2.0.0']); // not 2.3.0
+export const RESEARCH_RESULTS_IN_USE: ReadonlySet<string> = new Set([RESEARCH_VERSION, 'research-2.7.0', 'research-2.6.0', 'research-2.5.0', 'research-2.4.0', 'research-2.2.0', 'research-2.1.0', 'research-2.0.0']); // not 2.3.0
 
 const nullableString = { type: ['string', 'null'] };
 const SCHEMA = {
@@ -211,7 +211,8 @@ interface ResearchOptions {
 type Mode = 'barcode' | 'name' | 'manufacturer';
 
 const left = (o: ResearchOptions) => (o.deadline ?? Number.POSITIVE_INFINITY) - Date.now();
-const MODEL_CALL_MS = 60000;
+// A reasoning model (gpt-5-mini) thinks before it searches and answers: its calls get 90 s, as explanations and label reading do.
+const modelCallMs = (o: ResearchOptions) => (isReasoningModel(o.model) ? 90000 : 60000);
 
 /** The fields whose absence sends research on to the manufacturer's own page. */
 const missingFields = (f: Partial<ProductFacts>) =>
@@ -354,7 +355,7 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
   const seenPages = new Set<string>();
   for (let i = 0; i < attempts.length; i++) {
     const attempt = attempts[i];
-    if (left(opts) < MODEL_CALL_MS + 15000) {
+    if (left(opts) < modelCallMs(opts) + 15000) {
       discarded.push(`${attempt.label}: not run (the scan’s time limit)`);
       break;
     }
@@ -377,7 +378,7 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
       const checked = await pageShowingBarcode(opts, r.results, seenPages, PAGE_CHECKS + 2 - pageChecks);
       pageChecks += checked.checked;
       discarded.push(...checked.notes.map((n) => `${attempt.label}: ${n}`));
-      if (checked.page && left(opts) >= MODEL_CALL_MS + 15000) {
+      if (checked.page && left(opts) >= modelCallMs(opts) + 15000) {
         await opts.beforeAiCall?.();
         calls++;
         pageReads++;
@@ -441,7 +442,7 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
   const mNameTrusted = !!trustedName && mName === trustedName;
   // Only after a retailer's page: a manufacturer's page that lacks a field is not searched for again.
   if (retailerOnly && mBrand && mName) {
-    if (left(opts) < MODEL_CALL_MS + 15000) discarded.push('manufacturer page: not searched (the scan’s time limit)');
+    if (left(opts) < modelCallMs(opts) + 15000) discarded.push('manufacturer page: not searched (the scan’s time limit)');
     else {
       try {
         await opts.beforeAiCall?.();
@@ -672,13 +673,15 @@ export function describeSearches(log: WebSearchLog[]): string[] {
     }
   };
   // A search the API reported without its query or pages (they were not asked for, or refused) says nothing here.
-  return log
-    .filter((s) => s.query || s.urls.length)
-    .slice(0, 3)
-    .map((s) => {
+  const searches = log.filter((s) => s.kind !== 'open' && (s.query || s.urls.length)).slice(0, 3);
+  const opened = [...new Set(log.filter((s) => s.kind === 'open').flatMap((s) => s.urls.map(host)).filter(Boolean))];
+  return [
+    ...searches.map((s) => {
       const hosts = [...new Set(s.urls.map(host).filter(Boolean))];
       return `searched ${s.query ? `“${s.query.slice(0, 80)}”` : '(query not reported)'} (${s.urls.length} result${s.urls.length === 1 ? '' : 's'}${hosts.length ? `: ${hosts.slice(0, 5).join(', ')}${hosts.length > 5 ? ' …' : ''}` : ''})`;
-    });
+    }),
+    ...(opened.length ? [`opened ${opened.slice(0, 5).join(', ')}${opened.length > 5 ? ' …' : ''}`] : []),
+  ];
 }
 
 const PAGE_CHECKS = 6;
@@ -722,7 +725,7 @@ async function pageShowingBarcode(opts: ResearchOptions, results: string[], seen
   const unread: string[] = [];
   let checked = 0;
   for (const url of candidates) {
-    if (left(opts) < MODEL_CALL_MS + 25000) break;
+    if (left(opts) < modelCallMs(opts) + 25000) break;
     seen.add(url);
     checked++;
     try {
@@ -757,6 +760,7 @@ async function readPageAttempt(opts: ResearchOptions, page: FetchedPage, ask: st
     system: READ_SYSTEM,
     userContent: [{ type: 'text', text: `Barcode (GTIN/UPC/EAN): ${opts.barcode}. ${ask}\nThe page ${page.url} (it shows this barcode). Its text:\n"""\n${page.plain.slice(0, 60000)}\n"""` }],
     format: { name: 'pet_product_page', schema: SCHEMA },
+    // (Retried once on a timeout: two tries fit in the time a search call is given.)
     timeoutMs: Math.max(5000, Math.min(45000, left(opts) - 10000)),
     maxTokens: 3000,
   });
@@ -771,13 +775,13 @@ async function researchAttempt(opts: ResearchOptions, user: string, mode: Mode):
     system: SYSTEM,
     user,
     format: { name: 'pet_product_research', schema: SCHEMA },
-    timeoutMs: Math.max(5000, Math.min(MODEL_CALL_MS, left(opts) - 10000)),
+    timeoutMs: Math.max(5000, Math.min(modelCallMs(opts), left(opts) - 10000)),
     wantSources: true,
   });
   const discarded: string[] = describeSearches(searchLog);
   const searched = `${searches} search${searches === 1 ? '' : 'es'}, ${citations.length} citation${citations.length === 1 ? '' : 's'}`;
   const results = searchLog.flatMap((x) => x.urls);
-  const queries = searchLog.map((x) => x.query).filter(Boolean);
+  const queries = searchLog.filter((x) => x.kind !== 'open').map((x) => x.query).filter(Boolean);
   if (!data.found) return { facts: null, sources: [], discarded: [...discarded, `model reported no matching product (${searched})`], model, results, queries };
   const lead = { name: data.product_name ?? null, brand: data.brand ?? null };
 

@@ -682,3 +682,61 @@ describe('research 2.7.0 cost fixes (review)', () => {
     expect(r.fetchFailed).toBe(false);
   });
 });
+
+describe('a reasoning research model (gpt-5-mini, 2026-10-31)', () => {
+  const GRAVIES = '00076344886570';
+  const shop = `<html><head><title>Wellness Healthy Indulgence Gravies Chicken &amp; Turkey Cat Food Pouch 3 oz</title></head><body><h1>Wellness Healthy Indulgence Gravies Chicken &amp; Turkey in Gravy Cat Food Pouch</h1>
+    <p>Ingredients: Chicken Broth, Water Sufficient For Processing, Chicken, Potato Starch, Turkey, Eggs, Chicken Liver, Carrots, Natural Flavor, Salt</p>
+    <p>Guaranteed Analysis Crude Protein (min.) 4% Crude Fat (min.) 2% Crude Fiber (max.) 1% Moisture (max.) 85%</p><table><tr><td>UPC</td><td>076344886570</td></tr></table></body></html>`;
+  it('records the pages it opened or searched in, and checks them for the barcode like its search results', async () => {
+    const bodies: { url: string; body: string }[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: { body?: string }) => {
+      if (url.startsWith('https://api.openai.com/')) bodies.push({ url, body: String(init?.body ?? '') });
+      if (url === 'https://api.openai.com/v1/responses') {
+        return new Response(JSON.stringify({ output: [
+          { type: 'reasoning', summary: [] },
+          { type: 'web_search_call', action: { type: 'search', queries: ['"076344886570"', '"0076344886570"'], sources: [{ type: 'url', url: 'https://www.chewy.com/wellness-pouches' }] } },
+          { type: 'web_search_call', action: { type: 'open_page', url: 'https://www.petsupermarket.com/wellness-gravies-chicken-turkey.html' } },
+          { type: 'web_search_call', action: { type: 'find', url: 'https://www.petsupermarket.com/wellness-gravies-chicken-turkey.html', pattern: '076344886570' } },
+          { type: 'web_search_call', action: { type: 'open_page', url: 'chrome://settings' } },
+          { type: 'message', content: [{ type: 'output_text', text: JSON.stringify({ ...modelAnswer({}), found: false }), annotations: [] }] },
+        ] }), { status: 200 });
+      }
+      if (url === 'https://api.openai.com/v1/chat/completions') {
+        return new Response(JSON.stringify({ model: 'gpt-5-mini', choices: [{ message: { content: JSON.stringify(modelAnswer({ product_name: 'Wellness Healthy Indulgence Gravies Chicken & Turkey in Gravy Cat Food Pouch', brand: 'Wellness', intended_for: 'cats', ingredients_verbatim: 'Chicken Broth, Water Sufficient For Processing, Chicken, Potato Starch, Turkey, Eggs, Chicken Liver, Carrots, Natural Flavor, Salt' })) }, finish_reason: 'stop' }] }), { status: 200 });
+      }
+      return new Response(url.includes('petsupermarket') ? shop : '<html><head><title>Wellness</title></head><body><h1>Wellness pouches</h1></body></html>', { status: 200 });
+    }));
+    const r = await researchProduct({ apiKey: 'k', model: 'gpt-5-mini', gtin14: GRAVIES, barcode: '076344886570', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-10-31T00:00:00Z') });
+    const first = JSON.parse(bodies[0].body);
+    expect(first.reasoning).toEqual({ effort: 'low' });
+    expect(first.temperature).toBeUndefined();
+    expect(r.discarded.slice(0, 4)).toEqual([
+      'barcode search: searched “"076344886570" | "0076344886570"” (1 result: chewy.com)',
+      'barcode search: opened petsupermarket.com',
+      'barcode search: model reported no matching product (4 searches, 0 citations)',
+      'barcode search: result pages without this barcode: chewy.com',
+    ]);
+    expect(r.discarded).toContain('barcode search: petsupermarket.com (a search result) shows this barcode, so Purrbi read it');
+    // Both forms were searched in the first call, so the 13-digit form is not searched again.
+    expect(r.discarded.some((d) => d.startsWith('barcode search (13-digit form)'))).toBe(false);
+    expect(r.sources[0]).toMatchObject({ sourceName: 'petsupermarket.com', matchConfidence: 'exact_barcode' });
+    expect(r.facts?.ingredients?.value.slice(0, 2)).toEqual(['Chicken Broth', 'Water Sufficient For Processing']);
+  });
+  it('starts a search only with 90 s and a margin left, where another model needs 60 s', async () => {
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: { body?: string }) => {
+      if (url === 'https://api.openai.com/v1/responses') {
+        calls.push(JSON.parse(String(init?.body ?? '{}')).model);
+        return openAi({ ...modelAnswer({}), found: false });
+      }
+      return new Response('', { status: 404 });
+    }));
+    const base = { apiKey: 'k', gtin14: GRAVIES, barcode: '076344886570', knownSpecies: 'unknown' as const, userAgent: 'test', now: new Date('2026-10-31T00:00:00Z') };
+    const slow = await researchProduct({ ...base, model: 'gpt-5-mini', deadline: Date.now() + 100000 });
+    expect(slow.discarded).toEqual(['barcode search: not run (the scan’s time limit)']);
+    expect(calls).toEqual([]);
+    await researchProduct({ ...base, model: 'gpt-4.1-mini', deadline: Date.now() + 100000 });
+    expect(calls[0]).toBe('gpt-4.1-mini');
+  });
+});

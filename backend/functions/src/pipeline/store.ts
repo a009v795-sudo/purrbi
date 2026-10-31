@@ -72,6 +72,8 @@ export interface Enrichment {
     discarded: string[];
     source: string;
     version?: string;
+    /** The research model the run used (OPENAI_RESEARCH_MODEL): another model is a new method. */
+    model?: string;
     outcome?: 'done' | 'fetch_failed' | 'hint_failed';
     species?: string;
     /** Consecutive unfinished runs (fetch_failed, hint_failed): retried after 12 h, 2 days, 7 days, then not until a new method or 30 days. */

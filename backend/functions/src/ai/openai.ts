@@ -60,6 +60,9 @@ export async function chatJson<T>(opts: {
   }
 }
 
+/** web_search_call actions on one page (reasoning models): the page opened, or searched for words. */
+const OPENED = new Set(['open_page', 'find', 'find_in_page']);
+
 /** Models whose API refused `include` (the search's result pages): not asked for again by this instance. */
 const sourcesRefused = new Set<string>();
 
@@ -73,10 +76,11 @@ export interface UrlCitation {
   title?: string;
 }
 
-/** One web search the model ran: its query and the pages it returned. */
+/** One web search the model ran (its query and the pages it returned), or a page it opened. */
 export interface WebSearchLog {
   query: string;
   urls: string[];
+  kind?: 'search' | 'open';
 }
 
 /**
@@ -117,7 +121,7 @@ export async function researchJson<T>(opts: {
     incomplete_details?: { reason?: string } | null;
     output?: {
       type?: string;
-      action?: { type?: string; query?: string; sources?: { type?: string; url?: string }[] };
+      action?: { type?: string; query?: string; queries?: string[]; url?: string; sources?: { type?: string; url?: string }[] };
       content?: { type?: string; text?: string; annotations?: { type?: string; url?: string; title?: string }[] }[];
     }[];
   };
@@ -153,9 +157,14 @@ export async function researchJson<T>(opts: {
   if (json?.status === 'incomplete') throw new SourceError('OpenAI', 'parse', `output incomplete (${json.incomplete_details?.reason ?? 'no reason given'})`);
   const calls = (json?.output ?? []).filter((o) => o.type === 'web_search_call');
   const searches = calls.length;
-  const searchLog: WebSearchLog[] = calls
-    .filter((o) => !o.action?.type || o.action.type === 'search')
-    .map((o) => ({ query: o.action?.query ?? '', urls: (o.action?.sources ?? []).map((x) => x.url ?? '').filter((u) => /^https?:\/\//.test(u)) }));
+  // Reasoning models also open pages and look for words on them (actions "open_page", "find"): those pages
+  // count as result pages too.
+  const web = (u: string | undefined) => !!u && /^https?:\/\//.test(u);
+  const searchLog: WebSearchLog[] = calls.flatMap((o): WebSearchLog[] => {
+    const a = o.action;
+    if (a?.type && a.type !== 'search') return OPENED.has(a.type) && web(a.url) ? [{ query: '', urls: [a.url as string], kind: 'open' }] : [];
+    return [{ query: a?.query ?? (a?.queries ?? []).join(' | '), urls: (a?.sources ?? []).map((x) => x.url ?? '').filter(web), kind: 'search' }];
+  });
   const message = json?.output?.find((o) => o.type === 'message');
   const part = message?.content?.find((c) => c.type === 'output_text');
   if (!part?.text) throw new SourceError('OpenAI', 'parse', 'no output text');

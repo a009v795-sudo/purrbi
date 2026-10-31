@@ -536,13 +536,16 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   const lastOutcome = meta.enrichment.research?.outcome;
   const unfinished = lastOutcome === 'hint_failed' || lastOutcome === 'fetch_failed';
   const hintStillPaused = lastOutcome === 'hint_failed' && config.barcodeLookupEnabled !== false ? await providerPausedUntil(db, 'upcitemdb', now) : null;
+  // A new method: a new research version, or another research model (a run saved without its model counts as
+  // another model's).
+  const methodChanged = meta.enrichment.research?.version !== RESEARCH_VERSION || meta.enrichment.research?.model !== config.researchModel;
   // Unfinished runs are retried after 12 hours, 2 days and 7 days, then not until a new method or 30 days.
   const attemptsSoFar = meta.enrichment.research?.attempts ?? 1;
   const retryAfterHours = [12, 48, 168][attemptsSoFar - 1];
   const retryDue = unfinished && retryAfterHours !== undefined && ageDays(meta.enrichment.researchAt, now) * 24 >= retryAfterHours && !hintStillPaused;
   const researchDue =
     ageDays(meta.enrichment.researchAt, now) > config.productFreshDays ||
-    meta.enrichment.research?.version !== RESEARCH_VERSION ||
+    methodChanged ||
     retryDue ||
     // A search made while it was unknown who the product is for could not use pages matched by brand and name.
     (meta.enrichment.research?.species === 'unknown' && scope.species !== 'unknown' && !!meta.enrichment.research.filled && meta.enrichment.research.filled.length === 0);
@@ -550,7 +553,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   let researchReturned = false;
   // A search that ran without the barcode database's words, or could not reach its pages, did not finish: it is
   // retried (when due) even though a page it found is already used.
-  const researchWanted = (stillMissing || scope.status === 'out_of_scope') && (!hasWeb || meta.enrichment.research?.version !== RESEARCH_VERSION || retryDue) && researchDue;
+  const researchWanted = (stillMissing || scope.status === 'out_of_scope') && (!hasWeb || methodChanged || retryDue) && researchDue;
   // Why research wanted here did not run (said per missing panel, never as "product unknown").
   let researchNotRun: RetrievalContext['researchNotRun'] = researchWanted && !(aiOk && config.researchEnabled) ? (o.allowFetch ? 'switched_off' : 'saved_evidence') : undefined;
   if (aiOk && config.researchEnabled && researchWanted) {
@@ -616,8 +619,8 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       // without its words (trace cdee0a88-3ff: a Japanese listing) is not the end of the search.
       const hintOutage = hintFailed && (!r.facts || scopeOf(facts, origin).status === 'unknown');
       const outcome = unreachable ? 'fetch_failed' : hintOutage ? 'hint_failed' : 'done';
-      const attempts = outcome === 'done' ? undefined : (unfinished && meta.enrichment.research?.version === RESEARCH_VERSION ? attemptsSoFar + 1 : 1);
-      meta.enrichment.research = { filled, discarded: r.discarded, source: src ? `${src.sourceName} (${src.sourceType})` : '', version: RESEARCH_VERSION, outcome, species: scope.species, ...(attempts ? { attempts } : {}) };
+      const attempts = outcome === 'done' ? undefined : unfinished && !methodChanged ? attemptsSoFar + 1 : 1;
+      meta.enrichment.research = { filled, discarded: r.discarded, source: src ? `${src.sourceName} (${src.sourceType})` : '', version: RESEARCH_VERSION, model: config.researchModel, outcome, species: scope.species, ...(attempts ? { attempts } : {}) };
       metaChanged = true;
       const pageKind = src?.sourceType === 'manufacturer' ? 'manufacturer page' : 'web page';
       if (r.facts && r.verified?.length) job.evidenceNotes.push(...r.verified);

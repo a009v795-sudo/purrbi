@@ -48,7 +48,7 @@ let hintDown = false; // the barcode database (search words for research) is rat
 let hintResetAt: Date | undefined; // when the rate-limited barcode database says its daily allowance resets
 let identityPage = false; // research finds a retailer page showing BC.unknown's barcode (name and brand only)
 let partialPage = false; // research finds a page showing BC.unknown's barcode with its name and brand, not who it is for
-let researchOpts: { knownName?: string; knownBrand?: string }[] = [];
+let researchOpts: { knownName?: string; knownBrand?: string; model?: string }[] = [];
 let verdictInputs: string[] = [];
 
 const NOW = new Date('2026-10-28T12:00:00Z');
@@ -140,7 +140,7 @@ const sources: Sources = {
   },
   async research(o) {
     calls.research = (calls.research ?? 0) + 1;
-    researchOpts.push({ knownName: o.knownName, knownBrand: o.knownBrand });
+    researchOpts.push({ knownName: o.knownName, knownBrand: o.knownBrand, model: o.model });
     if (partialPage && o.barcode === BC.unknown) {
       const page = { sourceId: `web:shop.example.jp:${o.gtin14}`, sourceType: 'retailer_or_web' as const, sourceName: 'shop.example.jp', url: 'https://shop.example.jp/c0012.html', retrievedAt: NOW.toISOString(), matchConfidence: 'exact_barcode' as const, readerVersion: RESEARCH_VERSION };
       return { facts: { productName: { value: 'TEST FIXTURE ウェルネス グレービー 85g', source: page }, brand: { value: 'TESTBRAND', source: page }, classificationSignals: [] }, sources: [page], discarded: [], model: 'mock' };
@@ -1188,6 +1188,33 @@ describe('fallbacks before asking the owner for photos', () => {
       await processScan(at(h), 'u1', ref.id);
       expect(calls.research, `after ${h} h`).toBe(expected);
     }
+  });
+  it('another research model is a new method: a product still missing information is searched again with it, a complete one is not (2026-10-31: gpt-5-mini)', async () => {
+    const scan = async (d: Deps, bc: string) => processScan(d, 'u1', (await newScan('u1', bc)).id);
+    const first = deps({ researchEnabled: true });
+    const unknown = await newScan('u1', BC.unknown);
+    await processScan(first, 'u1', unknown.id);
+    await scan(first, BC.webOnly);
+    expect(calls.research).toBe(2);
+    const meta = async () => (await db.doc(`productMeta/${(await read(unknown)).gtin}`).get()).data()!.enrichment.research;
+    expect(await meta()).toMatchObject({ model: 'mock', outcome: 'done', version: RESEARCH_VERSION });
+    // The same model: nothing is searched again.
+    await scan(first, BC.unknown);
+    await scan(first, BC.webOnly);
+    expect(calls.research).toBe(2);
+    // Another model: the product still missing information only, then not again with that model.
+    const other = deps({ researchEnabled: true, researchModel: 'mock-2' });
+    await scan(other, BC.unknown);
+    await scan(other, BC.webOnly);
+    expect(calls.research).toBe(3);
+    expect(researchOpts.at(-1)?.model).toBe('mock-2');
+    expect(await meta()).toMatchObject({ model: 'mock-2', outcome: 'done' });
+    await scan(other, BC.unknown);
+    expect(calls.research).toBe(3);
+    // A run saved before runs recorded their model counts as another model's.
+    await db.doc(`productMeta/${(await read(unknown)).gtin}`).update({ 'enrichment.research.model': FieldValue.delete() });
+    await scan(other, BC.unknown);
+    expect(calls.research).toBe(4);
   });
   it('a used-up daily allowance of the barcode database is not asked again before it resets (2026-10-30: HTTP 429 on every scan)', async () => {
     hintDown = true;

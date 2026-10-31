@@ -18,7 +18,7 @@
     "VERDICTS_ENABLED": "true",
     "PROMOTE_LABEL_PHOTOS": "true",
     "OPENAI_VISION_MODEL": "gpt-4.1-mini,gpt-5-mini",
-    "OPENAI_RESEARCH_MODEL": "gpt-4.1-mini",
+    "OPENAI_RESEARCH_MODEL": "gpt-5-mini",
     "OPENAI_EXPLAIN_MODEL": "gpt-5-mini,gpt-4.1-mini",
     "OPENAI_VERDICT_MODEL": "gpt-4.1-mini,gpt-5-mini",
     "SOURCE_USER_AGENT": "Purrbi/0.1 (development build; contact@valenciainnovations.com)",
