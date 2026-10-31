@@ -645,7 +645,10 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
                 ? 'The barcode database wasn’t available, so the search had only the barcode to go on and found nothing; Purrbi tries again later.'
                 : hintOutage
                   ? 'A page showing this barcode was found, but it doesn’t say who the product is for; the barcode database wasn’t available for more search words, so Purrbi searches again once it is.'
-                : 'Searched the manufacturer’s and retailers’ pages; nothing could be verified against a page, so nothing was added.',
+                : r.facts && src
+                  ? // A page tied to the product was checked, but holds nothing the record lacks (trace 99877a3e-234).
+                    `${src.sourceName} matches this product (checked on the page) but shows nothing its record lacks, so nothing was added.`
+                  : 'Searched the manufacturer’s and retailers’ pages; nothing could be verified against a page, so nothing was added.',
       );
       // Every step's outcome up to twelve (the trace of trace 11f7cc1e-842 stopped before the page that mattered).
       job.diagnosticNotes.push(...r.discarded.slice(0, 12).map((d) => `Research (${r.model}): ${d}`));

@@ -1158,6 +1158,8 @@ describe('fallbacks before asking the owner for photos', () => {
     await processScan({ ...deps({ researchEnabled: true }), now: () => new Date(NOW.getTime() + 21 * 3600 * 1000) }, 'u1', after.id);
     expect(calls.research).toBe(2);
     expect(calls.hint).toBe(2);
+    // A page tied to the barcode that adds nothing the record lacks is said as such (trace 99877a3e-234).
+    expect((await read(after)).evidenceNotes).toContain('shop.example.jp matches this product (checked on the page) but shows nothing its record lacks, so nothing was added.');
     // Its answer (no record) is kept: a later run reuses it instead of asking again.
     expect((await db.doc(`productMeta/${gtin}`).get()).data()!.enrichment.hintAt).toBeTruthy();
     await db.doc(`productMeta/${gtin}`).update({ 'enrichment.research.version': 'research-2.6.0' });
