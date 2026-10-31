@@ -358,3 +358,42 @@ note that does not name its site. The sentence is now said of the page, not the 
 Checked live by rescanning A (scan `p4-c8b`, trace `ef9050e5-49a`). It reused the saved search, with no OpenAI or
 barcode-database call, and its cards now read: "A page found for this barcode (on ubuy.com.lb) turns automated readers away,
 so nothing could be checked on it."
+
+## Research 2.9.0: result pages checked most promising first (2026-10-31, 22:15 UTC)
+
+**Why:** on 2.8.1, A's run spent its 8 page checks on a document site, a home page and other brands' products.
+desertcart.in, in A's own results, was left past the limit. C's checks went to GS1 help pages and lookup tools' home pages.
+
+**What changed** (commits `2784e1e` and `c5288f2`, the second after review `wf_62f0af14-94b`):
+- Result pages are ranked by their address alone.
+- **Not checked** (named in the trace): home pages, help, tool, forum, encyclopedia, blog or news sections (also on their
+  own host), and listings near the top.
+- **Checked after product pages:** a site's search or listing page and a lookup page for the barcode.
+- **Ranked first:** product addresses, with the brand and the name's words from the most trusted source.
+- **Budget:** one search checks at most 8 pages. What it leaves is ranked again with the next search's pages and checked
+  once no search is left. At most 12 checks a run, within the same time limit.
+- **Verification unchanged:** a page is used only when Purrbi finds the barcode on it.
+
+**Review:** the first version's review found real defects:
+- barcode-lookup pages jumped ahead of shop pages;
+- root-query product and search pages were skipped as home pages;
+- an unverified answer's words reordered the checks against the trusted name;
+- listings and reviews outranked item pages known only by number;
+- inconsistent tokenizing (accents, a trailing /p);
+- help centres on their own host were still checked;
+- a check budget that went first come, first served.
+
+All were fixed in `c5288f2` and have tests. A verifier showed that A's real trace (desertcart.in in its own results) is
+fixed by the ranking alone; the budget per search guards larger first searches. A second review (`wf_1e71acea-222`) checks the
+rework. Unit tests 482/482, emulator tests 95/95, CI green. Deploy 41247102158 (`c5288f2`).
+
+**Reruns** (app `638eb45` web build; B and C on the second test account because the first had used its 10 searches today):
+
+| Test | Scan / trace | What happened | Outcome |
+|---|---|---|---|
+| A `099482481087` (account `accept`) | `p4-c9` / `bb82fa25-38a` | gpt-5-mini ran 6 searches over 2 calls (36 + 56 results). The checks reached Shein, Whole Foods, Instagrid, Health First Market, pricehistory.app and Instacart (none shows the barcode). Ubuy, Shopabunda and two desertcart and Ubuy country sites refuse readers (403). Skipped: Reddit, iHerb's information site, a brand fan site, GS1, WisePIM. **New lead:** the model cited Spoonful's page for this barcode (its address carries the barcode in base64), which answered HTTP 429 (rate limited). | Unscored. Saved as unfinished (pages unreachable for a reason that may pass): searched again after 12 hours. Card: "The manufacturer’s and retailers’ pages couldn’t be reached; Purrbi tries again later." |
+| B `076344886570` (account `demo`) | `p4-c9d` / `aecbb5a2-d9f` | Barcode database title as before. gpt-5-mini cited a second Japanese shop page that shows the barcode (petexjapan.com). Purrbi verified the **calorie content (67 kcal per 100 g)** there. The analysis verified earlier (shop.petemo.jp) stays. Rejected again: the ingredient list, and "for cats" (not in the page's heading or feeding statement). | Unscored, "Not yet confirmed for cats or dogs", now with **analysis and calories**, each checked on a page showing the barcode (three Japanese shops in all). |
+| C `099482517243` (account `demo`) | `p4-c9d` / `3aed4ea3-5f2` | 3 searches. GS1, the forum and the lookup tools' home pages were skipped. The checks went to barcode-related pages (scribd, barcode.codes, jqs.app, qrbarcode.app, …) and none shows the barcode. barcodereport.com refuses readers. | Unscored. Card: "No manufacturer or retailer page could be matched to this barcode." |
+
+The first account's B scan (`p4-c9`, trace `182324dc-2d8`) did not search: "today’s searches for this account are used up".
+That is the per-account daily allowance working as designed.
