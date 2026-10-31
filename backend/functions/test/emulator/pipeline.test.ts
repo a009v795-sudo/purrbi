@@ -47,6 +47,7 @@ let explainUnverified: string | null = null; // every explanation comes back unv
 let hintDown = false; // the barcode database (search words for research) is rate-limiting
 let hintResetAt: Date | undefined; // when the rate-limited barcode database says its daily allowance resets
 let identityPage = false; // research finds a retailer page showing BC.unknown's barcode (name and brand only)
+let partialPage = false; // research finds a page showing BC.unknown's barcode with its name and brand, not who it is for
 let researchOpts: { knownName?: string; knownBrand?: string }[] = [];
 let verdictInputs: string[] = [];
 
@@ -140,6 +141,10 @@ const sources: Sources = {
   async research(o) {
     calls.research = (calls.research ?? 0) + 1;
     researchOpts.push({ knownName: o.knownName, knownBrand: o.knownBrand });
+    if (partialPage && o.barcode === BC.unknown) {
+      const page = { sourceId: `web:shop.example.jp:${o.gtin14}`, sourceType: 'retailer_or_web' as const, sourceName: 'shop.example.jp', url: 'https://shop.example.jp/c0012.html', retrievedAt: NOW.toISOString(), matchConfidence: 'exact_barcode' as const, readerVersion: RESEARCH_VERSION };
+      return { facts: { productName: { value: 'TEST FIXTURE ウェルネス グレービー 85g', source: page }, brand: { value: 'TESTBRAND', source: page }, classificationSignals: [] }, sources: [page], discarded: [], model: 'mock' };
+    }
     if (identityPage && o.barcode === BC.unknown) {
       const page = { sourceId: `web:teststore.example:${o.gtin14}`, sourceType: 'retailer_or_web' as const, sourceName: 'teststore.example', url: 'https://teststore.example/dog-trt', retrievedAt: NOW.toISOString(), matchConfidence: 'exact_barcode' as const, readerVersion: RESEARCH_VERSION };
       return { facts: { productName: { value: 'TEST FIXTURE Dog Trt Frz Dr Wld Salmn', source: page }, brand: { value: 'TESTBRAND', source: page }, classificationSignals: [{ text: 'treat', source: page.sourceId, kind: 'research' as const }, { text: 'intended for cats', source: page.sourceId, kind: 'research' as const }] }, sources: [page], discarded: [], model: 'mock' };
@@ -282,6 +287,7 @@ beforeEach(async () => {
   hintDown = false;
   hintResetAt = undefined;
   identityPage = false;
+  partialPage = false;
   researchOpts = [];
   await fetch(`http://${process.env.FIRESTORE_EMULATOR_HOST}/emulator/v1/projects/demo-purrbi/databases/(default)/documents`, { method: 'DELETE' });
   await db.doc('users/u1/pets/cat1').set({ name: 'Miso', species: 'cat', birthDate: Timestamp.fromDate(new Date('2022-01-01')), allergiesStatus: 'reported', allergies: ['chicken'], profileVersion: 2 });
@@ -1129,6 +1135,58 @@ describe('fallbacks before asking the owner for photos', () => {
     expect(calls.research).toBe(2); // tried again after 12 hours
     expect((await read(later)).fieldStatus.every((x: { status: string }) => x.status === 'not_found')).toBe(true);
   });
+  it('a page found while the barcode database was paused, without who the product is for, is searched again once the database answers (trace cdee0a88-3ff)', async () => {
+    hintDown = true;
+    hintResetAt = new Date(NOW.getTime() + 20 * 3600 * 1000);
+    partialPage = true;
+    const first = await newScan('u1', BC.unknown);
+    await processScan(deps({ researchEnabled: true }), 'u1', first.id);
+    const gtin = (await read(first)).gtin;
+    expect(calls.research).toBe(1);
+    expect((await read(first)).productName).toBe('TEST FIXTURE ウェルネス グレービー 85g');
+    expect((await db.doc(`productMeta/${gtin}`).get()).data()!.enrichment.research.outcome).toBe('hint_failed');
+    // Said as it is: a page was found, it doesn't say who the product is for.
+    expect((await read(first)).fieldStatus[0].detail).toBe('A page showing this barcode was found (shop.example.jp), but not this; the barcode database wasn’t available for more search words, so Purrbi searches again once it is.');
+    // 13 hours later the database is still paused: the same search without its words is not repeated.
+    const later = await newScan('u1', BC.unknown);
+    await processScan({ ...deps({ researchEnabled: true }), now: () => new Date(NOW.getTime() + 13 * 3600 * 1000) }, 'u1', later.id);
+    expect(calls.research).toBe(1);
+    expect(calls.hint).toBe(1);
+    // Once it answers again, the database is asked (the name came only from a web page) and research runs.
+    hintDown = false;
+    const after = await newScan('u1', BC.unknown);
+    await processScan({ ...deps({ researchEnabled: true }), now: () => new Date(NOW.getTime() + 21 * 3600 * 1000) }, 'u1', after.id);
+    expect(calls.research).toBe(2);
+    expect(calls.hint).toBe(2);
+    // Its answer (no record) is kept: a later run reuses it instead of asking again.
+    expect((await db.doc(`productMeta/${gtin}`).get()).data()!.enrichment.hintAt).toBeTruthy();
+    await db.doc(`productMeta/${gtin}`).update({ 'enrichment.research.version': 'research-2.6.0' });
+    const again = await newScan('u1', BC.unknown);
+    await processScan({ ...deps({ researchEnabled: true }), now: () => new Date(NOW.getTime() + 22 * 3600 * 1000) }, 'u1', again.id);
+    expect(calls.research).toBe(3);
+    expect(calls.hint).toBe(2);
+    // A product a database record names is not looked up in the barcode database.
+    calls = {};
+    const named = await newScan('u1', BC.webOnly);
+    await processScan(deps({ researchEnabled: true }), 'u1', named.id);
+    expect(calls.research).toBe(1);
+    expect(calls.hint ?? 0).toBe(0);
+  });
+  it('the barcode database is not asked while today’s AI budget is used up (review of research 2.7.0)', async () => {
+    await db.doc(`system/aiUsage_${NOW.toISOString().slice(0, 10).replace(/-/g, '')}`).set({ calls: 100000 });
+    const ref = await newScan('u1', BC.unknown);
+    await processScan(deps({ researchEnabled: true }), 'u1', ref.id);
+    expect(calls.hint ?? 0).toBe(0); // (the mocked research itself does not check the budget)
+  });
+  it('pages that could not be reached are searched again after 12 hours, 2 days and 7 days, then no more (review of research 2.7.0)', async () => {
+    pagesDown = true;
+    const at = (h: number) => ({ ...deps({ researchEnabled: true }), now: () => new Date(NOW.getTime() + h * 3600 * 1000) });
+    for (const [h, expected] of [[0, 1], [6, 1], [13, 2], [40, 2], [62, 3], [200, 3], [231, 4], [400, 4], [600, 4]] as const) {
+      const ref = await newScan('u1', BC.unknown);
+      await processScan(at(h), 'u1', ref.id);
+      expect(calls.research, `after ${h} h`).toBe(expected);
+    }
+  });
   it('a used-up daily allowance of the barcode database is not asked again before it resets (2026-10-30: HTTP 429 on every scan)', async () => {
     hintDown = true;
     hintResetAt = new Date(NOW.getTime() + 2 * 3600 * 1000);
@@ -1169,7 +1227,9 @@ describe('fallbacks before asking the owner for photos', () => {
     await processScan(deps({ researchEnabled: true }), 'u1', second.id);
     const s = await read(second);
     expect(researchOpts[0]).toMatchObject({ knownName: 'TEST FIXTURE Dog Trt Frz Dr Wld Salmn', knownBrand: 'TESTBRAND' }); // searched by name
-    expect(calls.hint ?? 0).toBe(0); // no search words needed from the barcode database
+    // A name in Latin script is known (from a page showing the barcode): the barcode database is not asked; it is
+    // asked only when no name, or only a name in another script, is known (research 2.7.0, trace cdee0a88-3ff).
+    expect(calls.hint ?? 0).toBe(0);
     expect(s.productName).toBe('TEST FIXTURE Dog Trt Frz Dr Wld Salmn');
     expect(s.brand).toBe('TESTBRAND');
     expect(s.productFound).toBe(true);

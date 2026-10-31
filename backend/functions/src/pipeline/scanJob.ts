@@ -28,7 +28,7 @@ import { lookupBarcodeHint as barcodeHintImpl, type BarcodeHint } from '../sourc
 import { readDatabaseLabelImages as databaseImagesImpl } from '../sources/labelImages';
 import { checkRecalls as checkRecallsImpl } from '../sources/openfda';
 import { databaseGuarantees, DB_FOR_TYPE, implausibleAnalysis, lookupOpenFacts as lookupOpenFactsImpl, openFactsToFacts, type OpenFactsDb, type OpenFactsLookup } from '../sources/openFacts';
-import { RESEARCH_RESULTS_IN_USE, RESEARCH_VERSION, researchProduct as researchImpl, type ResearchOutcome } from '../sources/research';
+import { otherScript, RESEARCH_RESULTS_IN_USE, RESEARCH_VERSION, researchProduct as researchImpl, type ResearchOutcome } from '../sources/research';
 import { currentCalls, errorDetail, runWithCallLog } from '../util/diagnostics';
 import { SourceError } from '../util/http';
 import { rematchAnalysis } from '../domain/nutrition';
@@ -37,6 +37,7 @@ import { corroborateLabel } from './corroborate';
 import { dropStaleImageReads, enrichmentFacts, fillMissing, labelToFacts, missingInfo, retrievalStatus, supersededIdentity, type PhotoRequest, type RetrievalContext } from './facts';
 import { explanationFields, highlightFields, ingredientRowFields, jobFields, resultFields, type JobInfo } from './serialize';
 import {
+  aiBudgetLeft,
   consumeAiBudget,
   pauseProvider,
   providerPausedUntil,
@@ -530,15 +531,26 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   // Research also runs when it is unresolved whether the product is for cats or dogs.
   const stillMissing = scope.status === 'unknown' || scope.category === 'unknown' || missingInfo(facts, scope, scope.category).some((r) => r.purpose !== 'front' || !facts.productName);
   const hasWeb = facts.sources.some((s) => s.sourceType === 'manufacturer' || s.sourceType === 'retailer_or_web');
+  // A search made while the barcode database was paused is repeated only once it answers again: the same
+  // search without its words would find the same nothing.
+  const lastOutcome = meta.enrichment.research?.outcome;
+  const unfinished = lastOutcome === 'hint_failed' || lastOutcome === 'fetch_failed';
+  const hintStillPaused = lastOutcome === 'hint_failed' && config.barcodeLookupEnabled !== false ? await providerPausedUntil(db, 'upcitemdb', now) : null;
+  // Unfinished runs are retried after 12 hours, 2 days and 7 days, then not until a new method or 30 days.
+  const attemptsSoFar = meta.enrichment.research?.attempts ?? 1;
+  const retryAfterHours = [12, 48, 168][attemptsSoFar - 1];
+  const retryDue = unfinished && retryAfterHours !== undefined && ageDays(meta.enrichment.researchAt, now) * 24 >= retryAfterHours && !hintStillPaused;
   const researchDue =
     ageDays(meta.enrichment.researchAt, now) > config.productFreshDays ||
     meta.enrichment.research?.version !== RESEARCH_VERSION ||
-    ((meta.enrichment.research?.outcome === 'fetch_failed' || meta.enrichment.research?.outcome === 'hint_failed') && ageDays(meta.enrichment.researchAt, now) * 24 >= 12) ||
+    retryDue ||
     // A search made while it was unknown who the product is for could not use pages matched by brand and name.
     (meta.enrichment.research?.species === 'unknown' && scope.species !== 'unknown' && !!meta.enrichment.research.filled && meta.enrichment.research.filled.length === 0);
   // A page already used is searched again only after a new research method (which may read more of it), and only while something is missing.
   let researchReturned = false;
-  const researchWanted = (stillMissing || scope.status === 'out_of_scope') && (!hasWeb || meta.enrichment.research?.version !== RESEARCH_VERSION) && researchDue;
+  // A search that ran without the barcode database's words, or could not reach its pages, did not finish: it is
+  // retried (when due) even though a page it found is already used.
+  const researchWanted = (stillMissing || scope.status === 'out_of_scope') && (!hasWeb || meta.enrichment.research?.version !== RESEARCH_VERSION || retryDue) && researchDue;
   // Why research wanted here did not run (said per missing panel, never as "product unknown").
   let researchNotRun: RetrievalContext['researchNotRun'] = researchWanted && !(aiOk && config.researchEnabled) ? (o.allowFetch ? 'switched_off' : 'saved_evidence') : undefined;
   if (aiOk && config.researchEnabled && researchWanted) {
@@ -549,7 +561,18 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       // for (a hint only: nothing from it is shown or used as a fact). Its failure is noted, never "unknown".
       let hint: BarcodeHint | null = null;
       let hintFailed = false;
-      if (!facts.productName && !facts.brand && !keptIdentity.productName && !keptIdentity.brand && config.barcodeLookupEnabled !== false && deps.sources.barcodeHint) {
+      // Asked when no product database record or owner label names the product and no name in Latin script is known
+      // (a name only from an import listing in another script left research without English words, trace
+      // cdee0a88-3ff). Its answer, a record or none, is kept 30 days; nothing is asked while today's AI budget is
+      // used up (research would stop at once, and the shared allowance would be spent for nothing).
+      const fromRecordOrLabel = (f?: { source?: SourceRef }) => !!f?.source && f.source.sourceType !== 'manufacturer' && f.source.sourceType !== 'retailer_or_web';
+      const knownName = facts.productName?.value ?? keptIdentity.productName?.value;
+      const wantHint = !fromRecordOrLabel(facts.productName) && (!knownName || otherScript(knownName)) && config.barcodeLookupEnabled !== false && !!deps.sources.barcodeHint;
+      const savedHint = meta.enrichment.hintAt && ageDays(meta.enrichment.hintAt, now) <= 30 ? (meta.enrichment.hint ?? null) : undefined;
+      if (wantHint && savedHint !== undefined) {
+        hint = savedHint;
+        if (hint) job.evidenceNotes.push(`${hint.source} lists this barcode as “${hint.title}”${hint.brand ? ` (${hint.brand})` : ''}; Purrbi searched for that product and used only what a page proved.`);
+      } else if (wantHint && deps.sources.barcodeHint && (await aiBudgetLeft(db, config.limits, now))) {
         // A used-up daily allowance is not asked again before it resets (the same request would fail again).
         const paused = await providerPausedUntil(db, 'upcitemdb', now);
         if (paused) {
@@ -558,6 +581,9 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
         } else {
           try {
             hint = await deps.sources.barcodeHint(gtin, config.userAgent);
+            meta.enrichment.hint = hint;
+            meta.enrichment.hintAt = now;
+            metaChanged = true;
             if (hint) job.evidenceNotes.push(`${hint.source} lists this barcode as “${hint.title}”${hint.brand ? ` (${hint.brand})` : ''}; Purrbi searched for that product and used only what a page proved.`);
           } catch (err) {
             hintFailed = true;
@@ -586,8 +612,12 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       meta.enrichment.researchAt = now;
       const unreachable = !r.facts && r.fetchFailed === true;
       // Nothing found while the barcode database (the search words) didn't answer is tried again soon, like unreachable pages.
-      const hintOutage = !r.facts && hintFailed;
-      meta.enrichment.research = { filled, discarded: r.discarded, source: src ? `${src.sourceName} (${src.sourceType})` : '', version: RESEARCH_VERSION, outcome: unreachable ? 'fetch_failed' : hintOutage ? 'hint_failed' : 'done', species: scope.species };
+      // Also when the barcode database was unavailable and who the product is for is still unknown: a page found
+      // without its words (trace cdee0a88-3ff: a Japanese listing) is not the end of the search.
+      const hintOutage = hintFailed && (!r.facts || scopeOf(facts, origin).status === 'unknown');
+      const outcome = unreachable ? 'fetch_failed' : hintOutage ? 'hint_failed' : 'done';
+      const attempts = outcome === 'done' ? undefined : (unfinished && meta.enrichment.research?.version === RESEARCH_VERSION ? attemptsSoFar + 1 : 1);
+      meta.enrichment.research = { filled, discarded: r.discarded, source: src ? `${src.sourceName} (${src.sourceType})` : '', version: RESEARCH_VERSION, outcome, species: scope.species, ...(attempts ? { attempts } : {}) };
       metaChanged = true;
       const pageKind = src?.sourceType === 'manufacturer' ? 'manufacturer page' : 'web page';
       if (r.facts && r.verified?.length) job.evidenceNotes.push(...r.verified);
@@ -611,8 +641,10 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
             ? 'No further label details could be verified on that page.'
             : unreachable
               ? 'The manufacturer’s or retailers’ pages couldn’t be reached to check them, so nothing was added; Purrbi tries again later.'
-              : hintOutage
+              : hintOutage && !r.facts
                 ? 'The barcode database wasn’t available, so the search had only the barcode to go on and found nothing; Purrbi tries again later.'
+                : hintOutage
+                  ? 'A page showing this barcode was found, but it doesn’t say who the product is for; the barcode database wasn’t available for more search words, so Purrbi searches again once it is.'
                 : 'Searched the manufacturer’s and retailers’ pages; nothing could be verified against a page, so nothing was added.',
       );
       // Every step's outcome up to twelve (the trace of trace 11f7cc1e-842 stopped before the page that mattered).

@@ -60,6 +60,14 @@ export async function chatJson<T>(opts: {
   }
 }
 
+/** Models whose API refused `include` (the search's result pages): not asked for again by this instance. */
+const sourcesRefused = new Set<string>();
+
+/** For tests: forget the refusals. */
+export function resetResearchClientState(): void {
+  sourcesRefused.clear();
+}
+
 export interface UrlCitation {
   url: string;
   title?: string;
@@ -85,6 +93,8 @@ export async function researchJson<T>(opts: {
   format: JsonSchemaFormat;
   timeoutMs: number;
   allowedDomains?: string[];
+  /** Ask for each search's result pages (research checks them; explanations do not need them). */
+  wantSources?: boolean;
 }): Promise<{ data: T; citations: UrlCitation[]; searches: number; model: string; searchLog: WebSearchLog[] }> {
   const tool: Record<string, unknown> = { type: 'web_search' };
   if (opts.allowedDomains?.length) tool.filters = { allowed_domains: opts.allowedDomains };
@@ -94,7 +104,7 @@ export async function researchJson<T>(opts: {
     tools: [tool],
     max_output_tokens: reasoning ? 16000 : 3000,
     ...(reasoning ? { reasoning: { effort: 'low' } } : {}),
-    include: ['web_search_call.action.sources'] as string[] | undefined,
+    include: opts.wantSources && !sourcesRefused.has(opts.model) ? (['web_search_call.action.sources'] as string[] | undefined) : undefined,
     input: [
       { role: 'system', content: opts.system },
       { role: 'user', content: opts.user },
@@ -127,7 +137,10 @@ export async function researchJson<T>(opts: {
   } catch (err) {
     if (!(err instanceof SourceError && err.status === 400)) throw err;
     // The search's result pages are only for the trace and Purrbi's own checks: refused, they are not asked for.
-    if (/include/i.test(err.message)) sent = { ...sent, include: undefined };
+    if (sent.include && /include/i.test(err.message)) {
+      sourcesRefused.add(opts.model);
+      sent = { ...sent, include: undefined };
+    }
     // A model that refuses the search tool's domain filter (HTTP 400) is asked once more without it.
     // The result stays restricted: callers keep only citations on the allowed sites whose quote is
     // found again on the fetched page.

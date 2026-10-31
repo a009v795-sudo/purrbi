@@ -195,10 +195,17 @@ export function retrievalStatus(purpose: PhotoPurpose, ctx: RetrievalContext): F
     const reached = r.discarded.some((d) => /match(?:es|ed) only|does not show this product’s barcode|another (?:recipe|variant)/.test(d));
     return out('source_unavailable', reached ? 'A page the search found couldn’t be read, and the others it could read didn’t show this product; Purrbi tries again later.' : 'The manufacturer’s and retailers’ pages couldn’t be reached; Purrbi tries again later.');
   }
-  if (r?.outcome === 'hint_failed') return out('source_unavailable', 'The barcode database wasn’t available, so the search had only the barcode to go on and found nothing; Purrbi tries again later.');
+  if (r?.outcome === 'hint_failed') {
+    // A page tied to the barcode was found and used, but it says nothing of who the product is for (trace cdee0a88-3ff).
+    const page = r.source.replace(/\s*\((?:manufacturer|retailer_or_web)\)$/, '');
+    return out('source_unavailable', page ? `A page showing this barcode was found (${page}), but not this; the barcode database wasn’t available for more search words, so Purrbi searches again once it is.` : 'The barcode database wasn’t available, so the search had only the barcode to go on and found nothing; Purrbi tries again later.');
+  }
   if (!r && ctx.researchNotRun === 'error') return out('source_unavailable', 'Purrbi’s search for the manufacturer’s page didn’t work just now; it tries again later.');
   if (ctx.images?.failed?.some((x) => panel(x) === purpose)) return out('not_read', 'The database’s label image of this panel couldn’t be read just now; Purrbi tries again later.');
   if (r) {
+    // The pages that show this barcode turn automated readers away (trace 6402eaaf-3d7: eBay, Ubuy): asking again won't change it.
+    const refusing = [...new Set(r.discarded.map((d) => /^(?:[^:]+: )?(\S+) refuses automated readers/.exec(d)?.[1]).filter((h): h is string => !!h))];
+    if (refusing.length && !r.source) return out('source_unavailable', `The pages that show this barcode (${refusing.slice(0, 3).join(', ')}) turn automated readers away, so it couldn’t be checked there.`);
     // The only page found was not this product: said as such, for every panel.
     if (r.discarded.some((d) => /does not show this product’s barcode or its brand and name/.test(d)) && !r.source)
       return out('rejected', 'The page the search found doesn’t show this barcode or this product’s name, so nothing from it was used.');

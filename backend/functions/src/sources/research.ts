@@ -17,9 +17,9 @@ import { httpBytes, httpJson, httpRequest, SourceError } from '../util/http';
 import type { BarcodeHint } from './barcodeLookup';
 import { altTextIngredientLists, documentFacts, markupGtins, nameOnPage, nameTokens, nutritionDocLinks, pageText, parseShopifyProduct, pdfSafety, productHeading, shopifyProductUrl, textGtins } from './pageEvidence';
 
-export const RESEARCH_VERSION = 'research-2.6.0'; // 2.6.0: the barcode's digits are searched alone first. 2.5.0: the search's result pages are checked site by site (each site's first result, then its second), after every search of the run, at most eight. 2.4.0: a page printing other barcodes besides this one is a listing, not the product's page; each analysis value must be printed after its nutrient's name; the manufacturer's page is sought by the answer's name when no other is known. Results of 2.3.0 are not used (one took another variant's analysis). 2.3.0: the search's own result pages are recorded and checked by Purrbi for the barcode; the first that shows it is read from Purrbi's copy. 2.2.0: the barcode is searched in the forms pages print it; a page tied to the barcode that shows nothing about the product (a price list) ends no search, and what such an answer named is searched for next; a barcode with other numbers beside it is still found. 2.1.0: a page tied to the product names it by its own heading; a web page's sentence that names no species, life stage or standard is not a feeding statement. 2.0.0: alt text, markup and Shopify barcodes, linked nutrition documents, a manufacturer follow-up, catalogue abbreviations, package sizes
+export const RESEARCH_VERSION = 'research-2.7.0'; // 2.7.0: the barcode's 13-digit form is searched too; search words prefer a Latin-script name (an import listing's title in another script finds that language's pages). 2.6.0: the barcode's digits are searched alone first. 2.5.0: the search's result pages are checked site by site (each site's first result, then its second), after every search of the run, at most eight. 2.4.0: a page printing other barcodes besides this one is a listing, not the product's page; each analysis value must be printed after its nutrient's name; the manufacturer's page is sought by the answer's name when no other is known. Results of 2.3.0 are not used (one took another variant's analysis). 2.3.0: the search's own result pages are recorded and checked by Purrbi for the barcode; the first that shows it is read from Purrbi's copy. 2.2.0: the barcode is searched in the forms pages print it; a page tied to the barcode that shows nothing about the product (a price list) ends no search, and what such an answer named is searched for next; a barcode with other numbers beside it is still found. 2.1.0: a page tied to the product names it by its own heading; a web page's sentence that names no species, life stage or standard is not a feeding statement. 2.0.0: alt text, markup and Shopify barcodes, linked nutrition documents, a manufacturer follow-up, catalogue abbreviations, package sizes
 /** Research results still used as they were saved (older ones are read again: they could take who a product is for from a retailer's title). */
-export const RESEARCH_RESULTS_IN_USE: ReadonlySet<string> = new Set([RESEARCH_VERSION, 'research-2.5.0', 'research-2.4.0', 'research-2.2.0', 'research-2.1.0', 'research-2.0.0']); // not 2.3.0
+export const RESEARCH_RESULTS_IN_USE: ReadonlySet<string> = new Set([RESEARCH_VERSION, 'research-2.6.0', 'research-2.5.0', 'research-2.4.0', 'research-2.2.0', 'research-2.1.0', 'research-2.0.0']); // not 2.3.0
 
 const nullableString = { type: ['string', 'null'] };
 const SCHEMA = {
@@ -178,8 +178,9 @@ export interface ResearchOutcome {
   pageTitle?: string;
   /** The brand and name an answer gave, unverified: only words for another search, never a fact. */
   lead?: { name: string | null; brand: string | null };
-  /** The pages the web search returned (in its order), and those already fetched to verify the answer. */
+  /** The pages the web search returned (in its order), the queries it ran, and the pages fetched to verify the answer. */
   results?: string[];
+  queries?: string[];
   fetched?: string[];
 }
 
@@ -203,6 +204,8 @@ interface ResearchOptions {
   beforeAiCall?: () => Promise<void>;
   /** Epoch ms by which research must be done (the scan job's time limit): later steps are skipped, never left running. */
   deadline?: number;
+  /** Pages fetched in this research run (or the error they gave): each is fetched once per run. */
+  pageCache?: Map<string, FetchedPage | Error>;
 }
 
 type Mode = 'barcode' | 'name' | 'manufacturer';
@@ -250,6 +253,19 @@ function printedAfterName(raw: string, nutrient: string, label: string, value: n
   return false;
 }
 
+/**
+ * Whether a name is clearly written in another script than Latin (an import listing's Japanese title): it is kept
+ * as the name printed, but as search words it finds pages in that language, and it is never what a page is
+ * matched to by name. Short names ("Go!", "K9") are not.
+ */
+export function otherScript(text: string | null | undefined): boolean {
+  const letters = [...(text ?? '')].filter((c) => /\p{L}/u.test(c));
+  return letters.length >= 3 && letters.filter((c) => /\p{Script=Latin}/u.test(c)).length / letters.length < 0.6;
+}
+
+/** The first name given that is not in another script, else the first given: search words only. */
+const preferLatin = (...names: (string | null | undefined)[]): string | undefined => names.find((n) => !!n && !otherScript(n)) ?? names.find((n) => !!n) ?? undefined;
+
 /** Whether a page's facts say anything about the product itself, beyond its brand and package size. */
 const aboutProduct = (f: Partial<ProductFacts>) =>
   !!(f.productName || f.ingredients?.value.length || f.guaranteedAnalysis?.value.length || f.adequacy || f.calories?.value.length || f.activeIngredients?.value.length || f.classificationSignals?.length);
@@ -291,17 +307,26 @@ function mergeResearch(base: Partial<ProductFacts>, extra: Partial<ProductFacts>
  * found that way must show the barcode). When the page found is a retailer's, or label
  * fields are still missing, the manufacturer's own page is sought for them. The barcode search's own result
  * pages are checked by Purrbi for the barcode (sites taking turns, at most eight pages a run), and the first
- * that shows it is read from Purrbi's copy (at most two reads). Each candidate page is verified the same way;
- * at most six model calls, all within the job's time limit.
+ * that shows it is read from Purrbi's copy (at most two reads). A UPC-A's 13-digit form is searched on its own
+ * when the 12 digits find nothing. Each candidate page is verified the same way; at most seven model calls,
+ * all within the job's time limit.
  */
 export async function researchProduct(opts: ResearchOptions): Promise<ResearchOutcome> {
+  opts = { ...opts, pageCache: opts.pageCache ?? new Map() };
   const ask = 'Find who it is for and its ingredient list, guaranteed analysis, calorie content, package size and nutritional adequacy (feeding) statement; for a supplement, its active ingredients with amounts (start that text with "Active ingredients").';
   const hint = opts.hint ? `A barcode database lists this barcode as "${opts.hint.title}"${opts.hint.brand ? ` (brand "${opts.hint.brand}")` : ''}; that listing is unverified, so confirm the product on a page.` : '';
   // Search words only: a barcode database's title is never what a page is checked against.
   const name = opts.knownName ?? opts.hint?.title;
   const brand = opts.knownBrand ?? opts.hint?.brand;
+  // A known name in another script (a Japanese import listing's, trace cdee0a88-3ff) gives way to the database's
+  // title as words to search for. A search on other words than the trusted name may then use only a page tied
+  // to the product by its barcode, recipe or variants (never one matched by name).
+  const searchName = preferLatin(opts.knownName, opts.hint?.title);
+  const searchBrand = preferLatin(opts.knownBrand, opts.hint?.brand);
+  const nameTrusted = !!opts.knownName && searchName === opts.knownName;
   // Shops and distributors list a UPC-A as 12 or 13 digits; the package prints it spaced under the bars.
   const forms = printedForms(opts.gtin14);
+  const ean13 = forms.length > 1 && forms[1].length === 13 ? forms[1] : null;
   // The digits alone first: a brand in the query finds other businesses of that name ("Wellness product
   // 076344886570" found wellness clinics, trace 11f7cc1e-842).
   const printed = [
@@ -310,11 +335,11 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
   ]
     .filter(Boolean)
     .join(' ');
-  const attempts: { label: string; mode: Mode; user: string }[] = [
-    { label: 'barcode search', mode: 'barcode', user: [`Barcode (GTIN/UPC/EAN): ${opts.barcode}.`, printed, opts.knownBrand ? `Brand (from a database record): ${opts.knownBrand}.` : '', opts.knownName ? `Product name (from a database record): ${opts.knownName}.` : '', hint, ask].filter(Boolean).join(' ') },
+  const attempts: { label: string; mode: Mode; user: string; untrustedName?: boolean }[] = [
+    { label: 'barcode search', mode: 'barcode', user: [`Barcode (GTIN/UPC/EAN): ${opts.barcode}.`, printed, opts.knownBrand ? `Brand (from a database record or a page showing this barcode): ${opts.knownBrand}.` : '', opts.knownName ? `Product name (from a database record or a page showing this barcode): ${opts.knownName}.` : '', hint, ask].filter(Boolean).join(' ') },
     // A brand alone is no search ("Wellness 076344886570" finds other businesses, trace 56bd298f-a6a): a name is needed.
     ...(name
-      ? [{ label: 'name search', mode: 'name' as Mode, user: [`Search by product identity rather than barcode: brand "${brand ?? ''}", product "${name}". Its barcode is ${opts.barcode}; the page must show the same brand and product (recipe and variant).`, ask].join(' ') }]
+      ? [{ label: 'name search', mode: 'name' as Mode, untrustedName: !nameTrusted, user: [`Search by product identity rather than barcode: brand "${searchBrand ?? ''}", product "${searchName}". Its barcode is ${opts.barcode}; the page must show the same brand and product (recipe and variant).`, ask].join(' ') }]
       : []),
   ];
   const discarded: string[] = [];
@@ -325,6 +350,7 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
   // Result pages Purrbi checks itself, over all searches of this run, and the pages it has fetched.
   let pageChecks = 0;
   let pageReads = 0;
+  let lead: { name: string | null; brand: string | null } | null = null;
   const seenPages = new Set<string>();
   for (let i = 0; i < attempts.length; i++) {
     const attempt = attempts[i];
@@ -334,7 +360,7 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
     }
     await opts.beforeAiCall?.();
     calls++;
-    const r = await researchAttempt({ ...opts, knownBrand: attempt.mode === 'name' ? brand : opts.knownBrand }, attempt.user, attempt.mode);
+    const r = await researchAttempt({ ...opts, knownBrand: attempt.mode === 'name' ? brand : opts.knownBrand, ...(attempt.untrustedName ? { knownName: undefined } : {}) }, attempt.user, attempt.mode);
     model = r.model;
     discarded.push(...r.discarded.map((d) => `${attempt.label}: ${d}`));
     fetchFailed = fetchFailed || r.fetchFailed === true;
@@ -364,11 +390,29 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
         }
       } else if (checked.page) discarded.push(`reading ${checked.host}: not run (the scan’s time limit)`);
     }
+    // The barcode's other printed form, searched on its own: one search per call, and a UPC-A's 13-digit form
+    // is indexed apart from its 12 digits (trace 1ba6a7a3-4ca: "099482517243" gave no result; pages list it
+    // as 0099482517243).
+    // (Not when the first call already searched that form itself.)
+    if (attempt.label === 'barcode search' && ean13 && !(r.queries ?? []).some((q) => q.includes(ean13))) {
+      attempts.splice(i + 1, 0, {
+        label: 'barcode search (13-digit form)',
+        mode: 'barcode',
+        user: [`Barcode (EAN-13): ${ean13}, the same product's 13-digit form of ${opts.barcode}.`, `Search for "${ean13}" alone, in quotes, with no other word.`, opts.knownBrand ? `Brand (from a database record or a page showing this barcode): ${opts.knownBrand}.` : '', hint, ask].filter(Boolean).join(' '),
+      });
+    }
     // With nothing known to search by, the brand and name the barcode search's answer gave (unverified, from a
     // page that could not be checked or did not prove them) are searched for next. Only a page that shows
     // this barcode can then be used: no name is trusted to match a page by.
-    const lead = { name: r.lead?.name ?? r.pageTitle ?? null, brand: brand ?? r.lead?.brand ?? null };
-    if (attempt.mode === 'barcode' && !name && (lead.name || (!brand && lead.brand))) {
+    // The lead comes from the barcode searches' answers (one that names the product first), and is searched
+    // after the last of them.
+    if (attempt.mode === 'barcode') {
+      const answer = { name: preferLatin(r.lead?.name, r.pageTitle) ?? null, brand: r.lead?.brand ?? null };
+      if (!lead || (!lead.name && answer.name)) lead = answer;
+    }
+    const lastBarcodeSearch = attempt.mode === 'barcode' && (attempt.label === 'barcode search (13-digit form)' || !attempts.some((a) => a.label === 'barcode search (13-digit form)'));
+    if (lastBarcodeSearch && lead && !name && (lead.name || (!brand && lead.brand))) {
+      lead = { name: lead.name, brand: brand ?? lead.brand };
       attempts.push({
         label: 'search by the answer’s name',
         mode: 'name',
@@ -387,9 +431,14 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
   const still = missingFields({ ...found.facts, ...(opts.knownIngredients?.length && !found.facts.ingredients ? { ingredients: { value: opts.knownIngredients, source: found.sources[0] } } : {}) });
   // What the manufacturer's page must match: a name shown on the page proven to be this product, or the database's.
   const trustedName = found.facts.productName?.value ?? found.pageTitle ?? opts.knownName;
-  // Without a name shown on a page or a database's, the answer's (search words only: its page must then show the barcode).
-  const mName = trustedName ?? name ?? found.lead?.name ?? undefined;
+  // Without a name shown on a page or a database's, the answer's (search words only: its page must then show the
+  // barcode). A name in another script is searched for only when there is no other: it finds that language's
+  // site of the brand (trace cdee0a88-3ff: Wellness Japan, not the US page that carries the barcode). A search
+  // on other words than the trusted name uses only a page tied by barcode, recipe or variants.
+  const mName = preferLatin(trustedName, opts.hint?.title, found.lead?.name, name);
   const mBrand = found.facts.brand?.value ?? brand;
+  const mSearchBrand = preferLatin(found.facts.brand?.value, brand);
+  const mNameTrusted = !!trustedName && mName === trustedName;
   // Only after a retailer's page: a manufacturer's page that lacks a field is not searched for again.
   if (retailerOnly && mBrand && mName) {
     if (left(opts) < MODEL_CALL_MS + 15000) discarded.push('manufacturer page: not searched (the scan’s time limit)');
@@ -400,12 +449,12 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
         const species = speciesOf(found.facts) ?? opts.knownSpecies;
         const size = found.facts.packageSize?.value.text;
         const user = [
-          `Find the manufacturer’s own product page for this exact product: brand "${mBrand}", product "${mName}"${size ? `, package size ${size}` : ''}, barcode ${opts.barcode}.`,
+          `Find the manufacturer’s own product page for this exact product: brand "${mSearchBrand ?? mBrand}", product "${mName}"${size ? `, package size ${size}` : ''}, barcode ${opts.barcode}.`,
           'Catalogue titles abbreviate words (Trt = treat, Frz Dr = freeze dried, Wld = wild): search for the full product name on the brand’s website.',
           `Report what that page shows${still.length ? `, especially the ${still.join(', ')}` : ''}. ${ask}`,
         ].join(' ');
         const firstList = found.facts.ingredients ? `the list on ${found.sources[0]?.sourceName ?? 'the first page'}` : undefined;
-        const r2 = await researchAttempt({ ...opts, knownName: trustedName, knownBrand: mBrand, knownSpecies: species ?? 'unknown', knownIngredients: found.facts.ingredients?.value ?? opts.knownIngredients, knownIngredientsFrom: firstList ?? opts.knownIngredientsFrom }, user, 'manufacturer');
+        const r2 = await researchAttempt({ ...opts, knownName: mNameTrusted ? trustedName : undefined, knownBrand: mBrand, knownSpecies: species ?? 'unknown', knownIngredients: found.facts.ingredients?.value ?? opts.knownIngredients, knownIngredientsFrom: firstList ?? opts.knownIngredientsFrom }, user, 'manufacturer');
         model = r2.model;
         discarded.push(...r2.discarded.map((d) => `manufacturer page: ${d}`));
         if (r2.facts) {
@@ -464,6 +513,22 @@ interface FetchedPage {
   family: number;
   /** The package size of the Shopify variant the barcode belongs to. */
   variantSize: PackageSize | null;
+}
+
+/** A page fetched once per research run: a page refused or failed earlier in the run is not fetched again. */
+async function fetchOnce(url: string, opts: ResearchOptions): Promise<FetchedPage> {
+  const key = canonical(url);
+  const hit = opts.pageCache?.get(key);
+  if (hit instanceof Error) throw hit;
+  if (hit) return hit;
+  try {
+    const page = await fetchPage(url, opts);
+    opts.pageCache?.set(key, page);
+    return page;
+  } catch (err) {
+    opts.pageCache?.set(key, err as Error);
+    throw err;
+  }
 }
 
 async function fetchPage(url: string, opts: ResearchOptions): Promise<FetchedPage> {
@@ -618,6 +683,14 @@ export function describeSearches(log: WebSearchLog[]): string[] {
 
 const PAGE_CHECKS = 6;
 
+const hostOf = (u: string) => {
+  try {
+    return new URL(u).hostname.replace(/^www\./, '');
+  } catch {
+    return u.slice(0, 60);
+  }
+};
+
 /**
  * The first of a search's result pages that shows this barcode, fetched and checked by Purrbi itself (text,
  * markup, Shopify record). Sites take turns (each site's first result, then each site's second), so one site's
@@ -653,7 +726,7 @@ async function pageShowingBarcode(opts: ResearchOptions, results: string[], seen
     seen.add(url);
     checked++;
     try {
-      const page = await fetchPage(url, opts);
+      const page = await fetchOnce(url, opts);
       if (page.barcode) return { page, host: hostOf(url), checked, notes: [...(without.length ? [`result pages without this barcode: ${without.join(', ')}`] : []), `${hostOf(url)} (a search result) shows this barcode${page.barcode === 'text' ? '' : page.barcode === 'markup' ? ' in its page data' : ' in its product record'}, so Purrbi read it`] };
       without.push(page.family ? `${hostOf(url)} (lists it among ${page.family} barcodes)` : hostOf(url));
     } catch (err) {
@@ -699,11 +772,13 @@ async function researchAttempt(opts: ResearchOptions, user: string, mode: Mode):
     user,
     format: { name: 'pet_product_research', schema: SCHEMA },
     timeoutMs: Math.max(5000, Math.min(MODEL_CALL_MS, left(opts) - 10000)),
+    wantSources: true,
   });
   const discarded: string[] = describeSearches(searchLog);
   const searched = `${searches} search${searches === 1 ? '' : 'es'}, ${citations.length} citation${citations.length === 1 ? '' : 's'}`;
   const results = searchLog.flatMap((x) => x.urls);
-  if (!data.found) return { facts: null, sources: [], discarded: [...discarded, `model reported no matching product (${searched})`], model, results };
+  const queries = searchLog.map((x) => x.query).filter(Boolean);
+  if (!data.found) return { facts: null, sources: [], discarded: [...discarded, `model reported no matching product (${searched})`], model, results, queries };
   const lead = { name: data.product_name ?? null, brand: data.brand ?? null };
 
   // Pages the search cited come first. A page the model names without a citation (models often attach
@@ -711,22 +786,28 @@ async function researchAttempt(opts: ResearchOptions, user: string, mode: Mode):
   const cited = new Set(citations.map((c) => canonical(c.url)));
   const named = [...new Set((data.source_urls ?? []).map(canonical).filter((u) => /^https:\/\//.test(u)))];
   const urls = [...named.filter((u) => cited.has(u)), ...named.filter((u) => !cited.has(u))].slice(0, 2);
-  if (!urls.length) return { facts: null, sources: [], discarded: [...discarded, `no source page was named (${searched})`], model, lead, results };
+  if (!urls.length) return { facts: null, sources: [], discarded: [...discarded, `no source page was named (${searched})`], model, lead, results, queries };
 
   const pages: FetchedPage[] = [];
+  // A refusal (401, 403, 404, 410: a site that turns automated readers away, a page gone) does not change when
+  // asked again; a timeout, a network error, a rate limit or a server error may (trace 6402eaaf-3d7: eBay 403).
+  let transient = false;
   for (const url of urls) {
     if (left(opts) < 12000) {
       discarded.push(`${url.slice(0, 120)} not fetched (the scan’s time limit)`);
+      transient = true;
       continue;
     }
     try {
-      pages.push(await fetchPage(url, opts));
+      pages.push(await fetchOnce(url, opts));
     } catch (err) {
-      discarded.push(`could not fetch ${url.slice(0, 120)} to verify it${err instanceof SourceError ? ` (${err.status ? `HTTP ${err.status}` : err.kind})` : ''}`);
+      const refused = err instanceof SourceError && [401, 403, 404, 410].includes(err.status ?? 0);
+      transient = transient || !refused;
+      discarded.push(refused ? `${hostOf(url)} refuses automated readers or has no such page (HTTP ${(err as SourceError).status}), so ${url.slice(0, 120)} could not be checked` : `could not fetch ${url.slice(0, 120)} to verify it${err instanceof SourceError ? ` (${err.status ? `HTTP ${err.status}` : err.kind})` : ''}`);
     }
   }
-  if (!pages.length) return { facts: null, sources: [], discarded, model, fetchFailed: true, lead, results, fetched: urls };
-  return { ...(await verifyAnswer(opts, data, pages, mode, model, discarded)), lead, results, fetched: urls };
+  if (!pages.length) return { facts: null, sources: [], discarded, model, fetchFailed: transient, lead, results, queries, fetched: urls };
+  return { ...(await verifyAnswer(opts, data, pages, mode, model, discarded)), lead, results, queries, fetched: urls };
 }
 
 /**
@@ -748,7 +829,8 @@ async function verifyAnswer(opts: ResearchOptions, data: RawResearch, pages: Fet
   // Without the barcode, a page must name the product as Purrbi already knows it (from its database record or
   // a page shown to be this product), in the page's own heading, who it is for included: never the answer's
   // own name for the page, which would match any page it chose.
-  const trusted = opts.knownName ?? null;
+  // A name in another script reduces to its few Latin letters (often only the brand) as words: never matched by name.
+  const trusted = opts.knownName && !otherScript(opts.knownName) ? opts.knownName : null;
   const trustedNameOn = (p: FetchedPage) => !!trusted && (inHeading(p, trusted) || nameOnPage(trusted, p.heading, { species: true }));
   // Each page's ingredient list: the answer's copy when all of it is on that page in order, else the list the
   // page publishes as an image's alt text (read by Purrbi), when it shows exactly one.

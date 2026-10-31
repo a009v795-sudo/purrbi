@@ -1,7 +1,7 @@
 # Purrbi assessment methodology
 
 Version: `assessment-3.0.0` overall, made of `purrbi-score-3.0.0` (score), `scope-3.0.0` (classification), `verdict-2.1.0` (verdict),
-`kb-2026-10-28-draft` (ingredient notes), `label-extract-2.3.0` (label reader), `research-2.6.0` (web research), `explain-2.0.0` (claim-checked explanations).
+`kb-2026-10-28-draft` (ingredient notes), `label-extract-2.3.0` (label reader), `research-2.7.0` (web research), `explain-2.0.0` (claim-checked explanations).
 A saved result records `assessmentVersion` and its parts (`scoreVersion`, `kbVersion`, `scopeVersion`); the shared product record its
 classification version; each fact read from a label, page or document its reader's version; each explanation its own. When the app opens
 a result saved under an older `assessmentVersion` it asks for a re-check (section 10), so a known bad classification is corrected without
@@ -283,12 +283,14 @@ A result that uses the owner's photo before it is tied to the barcode says "Labe
 
 ## 10. Retrieval before photos, and keeping results current
 
-**Research `research-2.6.0`** (`sources/research.ts`, `pageEvidence.ts`). When the pet databases lack something, research looks for it before
+**Research `research-2.7.0`** (`sources/research.ts`, `pageEvidence.ts`). When the pet databases lack something, research looks for it before
 any photo is asked for:
-- With no name or brand from any database, a public barcode database (UPCitemdb's free lookup, `BARCODE_LOOKUP_ENABLED`) is asked for the
+- When no product database record or owner label names the product and no name in Latin script is known (also when the only name came
+  from a web page in another script), a public barcode database (UPCitemdb's free lookup, `BARCODE_LOOKUP_ENABLED`) is asked for the
   product's title, only to tell research what to search for; nothing from it is shown or used as a fact. Its failure is recorded as such.
   Its free allowance (100 requests a day) is shared by every Cloud Functions instance: after HTTP 429 it is not asked again until the reset
-  time it gives, so the same failing request is not repeated on every scan.
+  time it gives, so the same failing request is not repeated on every scan. Its answer, a record or none, is kept 30 days per product, and
+  it is not asked while today's AI budget is used up (research would stop before using it).
 - The barcode search asks for the barcode's digits alone first (a brand in the query finds other businesses of that name), and names the forms pages print the barcode in (a UPC-A as its 12 digits, its 13-digit EAN form, and spaced as under the
   bars, "0 76344 88657 0"). A catalogue, price list or search-results page is not the product's page: one that shows the barcode but nothing
   else about the product ends no search. With no name or brand from any source, the brand and name the barcode search's answer gave are
@@ -299,6 +301,17 @@ any photo is asked for:
   sites it returned) and Purrbi checks them for the barcode itself, sites taking turns so one site's pages for other products do not use
   up the checks (at most eight pages a run); the first that shows it is read by the model from Purrbi's
   copy of the page (no web search) and every value is checked on that page as usual.
+- The model makes one search per request, and search engines index a UPC-A's 13-digit form apart from its 12 digits. When the 12
+  digits find nothing usable, the 13-digit form is searched on its own. Search words prefer a name in Latin script. A name a page
+  prints in another script (an import listing's Japanese title) stays the product's name as printed, and pages without the barcode
+  must still match it, but it is not what research searches for when the barcode database's title or another name is available.
+  A search on words other than the trusted name uses only a page tied by barcode, recipe or variants, and a name in another script is
+  never what a page is matched to by name (it reduces to its few Latin letters, often only the brand).
+- A search that ran while the barcode database was paused, and left who the product is for unknown, did not finish. Neither did one
+  whose pages could not be reached for a reason that may pass (a timeout, a rate limit, a server error). Both are retried after
+  12 hours, 2 days and 7 days (the first only once the database answers again), then not until a new method or 30 days. A site
+  that turns automated readers away (HTTP 403) or a page that is gone is a final answer: the result says the pages showing the
+  barcode refuse automated readers, and they are not asked again on every scan.
 - A page that prints other barcodes besides this one in its text lists several products (a set, a range, its variants): the barcode is
   one of them, not the page's own, so the page is a weak match (its analysis, ingredients and calories are not used), unless its markup
   names this barcode alone. An analysis value from a web page counts only as the first number printed after its nutrient's name

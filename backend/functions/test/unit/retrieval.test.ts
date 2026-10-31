@@ -44,7 +44,10 @@ const modelAnswer = (over: Record<string, unknown>) => ({
 });
 const openAi = (json: unknown) => new Response(JSON.stringify({ output: [{ type: 'web_search_call' }, { type: 'message', content: [{ type: 'output_text', text: JSON.stringify(json), annotations: [] }] }] }), { status: 200 });
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(async () => {
+  vi.unstubAllGlobals();
+  (await import('../../src/ai/openai')).resetResearchClientState();
+});
 
 describe('package sizes and calories', () => {
   it('keeps each calorie value with its package: 70 and 133 kcal are two can sizes, not two servings', () => {
@@ -312,7 +315,9 @@ describe('barcode-only research (tests A/B/C, 2026-10-30)', () => {
     }));
     const r = await researchProduct({ apiKey: 'k', model: 'm', gtin14: '00099482481087', barcode: '099482481087', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-10-30T00:00:00Z') });
     expect(r.facts).toBeNull();
-    expect(bodies).toHaveLength(1); // nothing named: no second search
+    // Nothing named: no search by name; the 13-digit form is searched on its own (since research 2.7.0).
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]).toContain('Search for \\"0099482481087\\" alone');
     expect(bodies[0]).toContain('Pages print it as \\"099482481087\\", \\"0099482481087\\", \\"0 99482 48108 7\\"');
     // The digits alone first (trace 11f7cc1e-842: "Wellness product 076344886570" found wellness clinics).
     expect(bodies[0]).toContain('Search the barcode\'s digits alone first, in quotes (\\"099482481087\\"), with no other word');
@@ -325,6 +330,7 @@ describe('barcode-only research (tests A/B/C, 2026-10-30)', () => {
       <p>Guaranteed Analysis</p><p>Crude Protein (min.) 4% Crude Fat (min.) 2% Crude Fiber (max.) 1% Moisture (max.) 85% Ash (max.) 2.5%</p><div class="ps-widget" ps-sku=" 076344886570 "></div><p>Available Sizes: 3 Ounce Retort Pouch</p></body></html>`;
     const answers = [
       modelAnswer({ product_name: 'Wellness Healthy Indulgence Gravies Chicken & Turkey', brand: 'Wellness', intended_for: 'cats', source_urls: ['https://www.admc.us/wp-content/uploads/2022/02/price-list.htm'] }),
+      { ...modelAnswer({}), found: false }, // the 13-digit form (research 2.7.0)
       modelAnswer({ product_name: 'Complete Health Healthy Indulgence Gravies Chicken & Turkey', brand: 'Wellness', intended_for: 'cats', source_urls: ['https://www.wellnesspetfood.com/product-catalog/healthy-indulgence-gravies-chicken-turkey/'] }),
     ];
     const bodies: string[] = [];
@@ -336,10 +342,10 @@ describe('barcode-only research (tests A/B/C, 2026-10-30)', () => {
       return new Response(url.includes('admc') ? priceList : maker, { status: 200 });
     }));
     const r = await researchProduct({ apiKey: 'k', model: 'm', gtin14: GRAVIES, barcode: '076344886570', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-10-30T00:00:00Z') });
-    expect(r.calls).toBe(2);
+    expect(r.calls).toBe(3);
     expect(r.discarded).toContain('barcode search: admc.us shows this barcode but nothing else about the product (no name, ingredients, analysis or feeding statement), so the search went on');
-    expect(bodies[1]).toContain('Search by product identity: brand \\"Wellness\\", product \\"Wellness Healthy Indulgence Gravies Chicken & Turkey\\" (as an earlier search answer named it; unverified).');
-    expect(bodies[1]).toContain('use only a page that shows this barcode');
+    expect(bodies[2]).toContain('Search by product identity: brand \\"Wellness\\", product \\"Wellness Healthy Indulgence Gravies Chicken & Turkey\\" (as an earlier search answer named it; unverified).');
+    expect(bodies[2]).toContain('use only a page that shows this barcode');
     expect(r.sources[0]).toMatchObject({ sourceName: 'wellnesspetfood.com', sourceType: 'manufacturer', matchConfidence: 'exact_barcode' });
     expect(r.facts?.ingredients?.value.slice(0, 3)).toEqual(['Chicken Broth', 'Water Sufficient For Processing', 'Chicken']);
     expect(r.facts?.guaranteedAnalysis?.value.find((g) => g.nutrient === 'crude_protein')?.value).toBe(4);
@@ -358,9 +364,9 @@ describe('barcode-only research (tests A/B/C, 2026-10-30)', () => {
       return new Response(lookalike, { status: 200 });
     }));
     const r = await researchProduct({ apiKey: 'k', model: 'm', gtin14: GRAVIES, barcode: '076344886570', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-10-30T00:00:00Z') });
-    expect(n).toBe(2); // the barcode search, then one search by the answer's name; no more
+    expect(n).toBe(3); // the barcode search, its 13-digit form, then one search by the answer's name; no more
     expect(r.facts).toBeNull();
-    expect(r.discarded.filter((d) => d.includes('does not show this product’s barcode'))).toHaveLength(2);
+    expect(r.discarded.filter((d) => d.includes('does not show this product’s barcode'))).toHaveLength(3);
   });
 });
 
@@ -450,7 +456,8 @@ describe('the search’s result pages, checked by Purrbi (test B rerun, trace cd
       return new Response('', { status: 404 });
     }));
     const r = await researchProduct({ apiKey: 'k', model: 'm', gtin14: GRAVIES, barcode: '076344886570', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-10-30T00:00:00Z') });
-    expect(sent.map((b) => 'include' in b)).toEqual([true, false]);
+    // Refused once, not asked for again in later searches (here the 13-digit form's).
+    expect(sent.map((b) => 'include' in b)).toEqual([true, false, false]);
     expect(r.discarded).toContain('barcode search: model reported no matching product (1 search, 0 citations)');
   });
 });
@@ -519,5 +526,159 @@ describe('result pages checked site by site; no search by a brand alone (test B,
     expect(r.sources[0]).toMatchObject({ sourceName: 'petsupermarket.com', matchConfidence: 'exact_barcode' });
     expect(r.facts?.guaranteedAnalysis?.value.map((g) => `${g.nutrient}:${g.value}`)).toEqual(['crude_protein:4', 'crude_fat:2', 'crude_fiber:1', 'moisture:85']);
     expect(bodies.some((b) => b.includes('Search by product identity rather than barcode: brand \\"Wellness\\", product \\"\\"'))).toBe(false);
+  });
+});
+
+// Cycle 5 (backend 1021e47): A "099482481087" gave 2 results (eBay, Ubuy; both refuse automated readers) and C
+// "099482517243" none, one search per call, in the 12-digit form only; independent searches find A on Spoonful and C
+// on Amazon under the 13-digit form. B's manufacturer search used a Japanese listing's heading and reached Wellness
+// Japan (trace cdee0a88-3ff). The pages below are synthetic.
+describe('the barcode’s 13-digit form and Latin-script search words (cycle 5, traces 6402eaaf-3d7, 1ba6a7a3-4ca, cdee0a88-3ff)', () => {
+  it('searches the 13-digit form on its own when the 12 digits find nothing, and uses a page it finds that shows the barcode', async () => {
+    const spoonful = '<html><head><title>Whole Paws, Cat Food Can Salmon, 5.5 Ounce Ingredients</title></head><body><h1>Whole Paws, Cat Food Can Salmon, 5.5 Ounce</h1><p>Barcode 0099482481087</p><p>Ingredients: Salmon, Chicken, Chicken Liver, Salmon Broth, Carrots, Peas, Natural Flavor, Salt, Sunflower Oil</p></body></html>';
+    const answers = [
+      { ...modelAnswer({}), found: false },
+      modelAnswer({ product_name: 'Whole Paws, Cat Food Can Salmon, 5.5 Ounce', brand: 'Whole Paws', intended_for: 'cats', ingredients_verbatim: 'Salmon, Chicken, Chicken Liver, Salmon Broth, Carrots, Peas, Natural Flavor, Salt, Sunflower Oil', source_urls: ['https://spoonfulapp.com/products/whole-paws-cat-food-can-salmon-55-ounce/MDA5OTQ4MjQ4MTA4Nw=='] }),
+      { ...modelAnswer({}), found: false },
+    ];
+    const bodies: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: { body?: string }) => {
+      if (url.startsWith('https://api.openai.com/')) {
+        bodies.push(String(init?.body ?? ''));
+        return openAi(answers[Math.min(bodies.length - 1, answers.length - 1)]);
+      }
+      return new Response(url.includes('spoonfulapp') ? spoonful : '<html><body>none</body></html>', { status: 200 });
+    }));
+    const r = await researchProduct({ apiKey: 'k', model: 'm', gtin14: '00099482481087', barcode: '099482481087', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-10-31T00:00:00Z') });
+    expect(bodies[1]).toContain('Barcode (EAN-13): 0099482481087, the same product\\u0027s 13-digit form'.replace('\\u0027', "'"));
+    expect(bodies[1]).toContain('Search for \\"0099482481087\\" alone, in quotes, with no other word.');
+    expect(r.discarded[0]).toBe('barcode search: model reported no matching product (1 search, 0 citations)');
+    expect(r.sources[0]).toMatchObject({ sourceName: 'spoonfulapp.com', matchConfidence: 'exact_barcode' });
+    expect(r.facts?.ingredients?.value.slice(0, 3)).toEqual(['Salmon', 'Chicken', 'Chicken Liver']);
+    expect((r.facts?.classificationSignals ?? []).map((c) => c.text)).toContain('intended for cats');
+  });
+  it('searches with a Latin-script name, not a Japanese listing’s heading, and still checks pages against the barcode', async () => {
+    const { otherScript } = await import('../../src/sources/research');
+    expect(otherScript('WELLNESS（ウェルネス） ヘルシーインダルジェンス 柔らか味わいグレービー仕立て チキン＆ターキー 85gパウチ')).toBe(true);
+    expect(otherScript('WELLNESS（ウェルネス）')).toBe(false);
+    expect(otherScript('Wellness Healthy Indulgence Gravies with Chicken & Turkey in Gravy')).toBe(false);
+    expect(otherScript('Go!')).toBe(false); // short names keep their place
+    expect(otherScript('K9')).toBe(false);
+    const bodies: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: { body?: string }) => {
+      if (url.startsWith('https://api.openai.com/')) bodies.push(String(init?.body ?? ''));
+      return openAi({ ...modelAnswer({}), found: false });
+    }));
+    await researchProduct({
+      apiKey: 'k', model: 'm', gtin14: '00076344886570', barcode: '076344886570', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-10-31T00:00:00Z'),
+      knownName: 'WELLNESS（ウェルネス） ヘルシーインダルジェンス 柔らか味わいグレービー仕立て チキン＆ターキー 85gパウチ (86570)', knownBrand: 'WELLNESS（ウェルネス）',
+      hint: { title: 'Wellness Healthy Indulgence Gravies with Chicken & Turkey in Gravy', brand: 'Wellness Natural Pet Food', category: '', source: 'UPCitemdb (barcode database)' },
+    });
+    const users = bodies.map((b) => JSON.parse(b).input[1].content as string);
+    const nameSearch = users.find((u) => u.startsWith('Search by product identity rather than barcode'));
+    expect(nameSearch).toContain('product "Wellness Healthy Indulgence Gravies with Chicken & Turkey in Gravy"');
+    expect(nameSearch).not.toContain('ヘルシーインダルジェンス');
+    expect(users.map((u) => u.slice(0, 26))).toEqual(['Barcode (GTIN/UPC/EAN): 07', 'Barcode (EAN-13): 00763448', 'Search by product identity']);
+  });
+});
+
+// Adversarial review of research 2.7.0 (workflow wf_a90dae4d-2e0): search words other than the trusted name must not let
+// a page in by name; refusals are final; EAN-8 has no 13-digit form; the lead is the answer that names the product; an
+// API's refusal of the result-page option belongs to that model.
+describe('research 2.7.0 review fixes', () => {
+  const B = '00076344886570';
+  const JAPANESE = 'WELLNESS（ウェルネス） ヘルシーインダルジェンス 柔らか味わいグレービー仕立て チキン＆ターキー 85gパウチ (86570)';
+  it('a search on the database’s English title, with a Japanese trusted name, does not take another flavour’s page by name', async () => {
+    const otherFlavour = '<html><head><title>Wellness Healthy Indulgence Gravies Tuna &amp; Salmon</title></head><body><h1>Wellness Healthy Indulgence Gravies Tuna &amp; Salmon</h1><p>Feeding: complete and balanced for adult cats.</p><p>Ingredients: Tuna Broth, Tuna, Salmon</p></body></html>';
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.startsWith('https://api.openai.com/')) return openAi(modelAnswer({ product_name: 'Wellness Healthy Indulgence Gravies Tuna & Salmon', brand: 'Wellness', intended_for: 'cats', ingredients_verbatim: 'Tuna Broth, Tuna, Salmon', source_urls: ['https://www.wellnesspetfood.com/product-catalog/healthy-indulgence-gravies-tuna-salmon/'] }));
+      return new Response(otherFlavour, { status: 200 });
+    }));
+    const r = await researchProduct({ apiKey: 'k', model: 'm', gtin14: B, barcode: '076344886570', knownSpecies: 'cat', userAgent: 'test', now: new Date('2026-10-31T00:00:00Z'), knownName: JAPANESE, knownBrand: 'WELLNESS（ウェルネス）', hint: { title: 'Wellness Healthy Indulgence Gravies with Chicken & Turkey in Gravy', brand: 'Wellness Natural Pet Food', category: '', source: 'UPCitemdb (barcode database)' } });
+    expect(r.facts).toBeNull();
+    expect(r.discarded.some((d) => d.startsWith('name search: the cited page does not show this product’s barcode or its brand and name'))).toBe(true);
+  });
+  it('pages that turn automated readers away are not a failure to retry, and the status says so', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.startsWith('https://api.openai.com/')) return openAi(modelAnswer({ product_name: 'Whole Paws Grain-Free Salmon Pate 5.5 oz', brand: 'Whole Paws', source_urls: ['https://www.ebay.com/itm/147318116815', 'https://www.ubuy.com.lb/en/product/243GOJJA-whole-paws'] }));
+      return new Response('Access denied', { status: 403 });
+    }));
+    const r = await researchProduct({ apiKey: 'k', model: 'm', gtin14: '00099482481087', barcode: '099482481087', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-10-31T00:00:00Z') });
+    expect(r.facts).toBeNull();
+    expect(r.fetchFailed).toBe(false);
+    expect(r.discarded).toContain('barcode search: ebay.com refuses automated readers or has no such page (HTTP 403), so https://www.ebay.com/itm/147318116815 could not be checked');
+    const { retrievalStatus } = await import('../../src/pipeline/facts');
+    expect(retrievalStatus('front', { research: { outcome: 'done', discarded: r.discarded, source: '', at: new Date('2026-10-31T00:00:00Z') } })).toEqual({
+      purpose: 'front', status: 'source_unavailable', detail: 'The pages that show this barcode (ebay.com, ubuy.com.lb) turn automated readers away, so it couldn’t be checked there.',
+    });
+  });
+  it('an EAN-8 has no 13-digit search', async () => {
+    const bodies: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: { body?: string }) => {
+      if (url.startsWith('https://api.openai.com/')) bodies.push(String(init?.body ?? ''));
+      return openAi({ ...modelAnswer({}), found: false });
+    }));
+    await researchProduct({ apiKey: 'k', model: 'm', gtin14: '00000096385074', barcode: '96385074', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-10-31T00:00:00Z') });
+    expect(bodies).toHaveLength(1);
+  });
+  it('the search by name uses the barcode search that names the product, after the last barcode search', async () => {
+    const answers = [
+      modelAnswer({ brand: 'Wellness', product_name: null, source_urls: ['https://shop.example/gone'] }),
+      modelAnswer({ brand: 'Wellness', product_name: 'Wellness Healthy Indulgence Gravies Chicken & Turkey', source_urls: ['https://shop.example/gone2'] }),
+      { ...modelAnswer({}), found: false },
+    ];
+    const bodies: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: { body?: string }) => {
+      if (url.startsWith('https://api.openai.com/')) {
+        bodies.push(String(init?.body ?? ''));
+        return openAi(answers[Math.min(bodies.length - 1, 2)]);
+      }
+      return new Response('gone', { status: 404 });
+    }));
+    await researchProduct({ apiKey: 'k', model: 'm', gtin14: B, barcode: '076344886570', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-10-31T00:00:00Z') });
+    expect(bodies).toHaveLength(3);
+    expect(JSON.parse(bodies[2]).input[1].content).toContain('product "Wellness Healthy Indulgence Gravies Chicken & Turkey"');
+  });
+  it('a model that refuses the result-page option does not switch it off for another model', async () => {
+    const sent: { model: string; include: boolean }[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: { body?: string }) => {
+      if (url === 'https://api.openai.com/v1/responses') {
+        const body = JSON.parse(String(init?.body ?? '{}'));
+        sent.push({ model: body.model, include: 'include' in body });
+        if (body.include && body.model === 'm-refuses') return new Response(JSON.stringify({ error: { message: "Unsupported parameter: 'include'" } }), { status: 400 });
+        return openAi({ ...modelAnswer({}), found: false });
+      }
+      return new Response('', { status: 404 });
+    }));
+    const base = { apiKey: 'k', gtin14: '00000096385074', barcode: '96385074', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-10-31T00:00:00Z') };
+    await researchProduct({ ...base, model: 'm-refuses' });
+    await researchProduct({ ...base, model: 'm' });
+    expect(sent).toEqual([{ model: 'm-refuses', include: true }, { model: 'm-refuses', include: false }, { model: 'm', include: true }]);
+  });
+});
+
+describe('research 2.7.0 cost fixes (review)', () => {
+  it('does not repeat the 13-digit search when the first call already searched that form', async () => {
+    const bodies: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: { body?: string }) => {
+      if (url.startsWith('https://api.openai.com/')) {
+        bodies.push(String(init?.body ?? ''));
+        return new Response(JSON.stringify({ output: [{ type: 'web_search_call', action: { type: 'search', query: '"099482517243"', sources: [] } }, { type: 'web_search_call', action: { type: 'search', query: '"0099482517243"', sources: [] } }, { type: 'message', content: [{ type: 'output_text', text: JSON.stringify({ ...modelAnswer({}), found: false }), annotations: [] }] }] }), { status: 200 });
+      }
+      return new Response('', { status: 404 });
+    }));
+    await researchProduct({ apiKey: 'k', model: 'm', gtin14: '00099482517243', barcode: '099482517243', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-10-31T00:00:00Z') });
+    expect(bodies).toHaveLength(1);
+  });
+  it('fetches a page once per run: a page refused for one search is not fetched again for the next', async () => {
+    const pages: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.startsWith('https://api.openai.com/')) return openAi(modelAnswer({ product_name: 'Whole Paws Salmon Pate', brand: 'Whole Paws', source_urls: ['https://www.ebay.com/itm/147318116815'] }));
+      pages.push(url);
+      return new Response('Access denied', { status: 403 });
+    }));
+    const r = await researchProduct({ apiKey: 'k', model: 'm', gtin14: '00099482481087', barcode: '099482481087', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-10-31T00:00:00Z') });
+    expect(pages.filter((u) => u.includes('ebay.com'))).toHaveLength(1);
+    expect(r.fetchFailed).toBe(false);
   });
 });

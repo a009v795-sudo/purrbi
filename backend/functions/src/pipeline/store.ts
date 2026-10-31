@@ -30,6 +30,12 @@ export async function consumeQuota(db: Firestore, uid: string, kind: 'scans' | '
 }
 
 /** Global daily budget for paid AI calls, independent of the per-user limits. */
+/** Whether today's global AI budget has a call left (read only, nothing used). */
+export async function aiBudgetLeft(db: Firestore, limits: Limits, now: Date): Promise<boolean> {
+  const used = ((await db.doc(`system/aiUsage_${dayKey(now)}`).get()).get('calls') as number | undefined) ?? 0;
+  return used < limits.aiCallsPerDayGlobal;
+}
+
 export async function consumeAiBudget(db: Firestore, limits: Limits, now: Date): Promise<void> {
   const ref = db.doc(`system/aiUsage_${dayKey(now)}`);
   await db.runTransaction(async (tx) => {
@@ -55,10 +61,22 @@ export async function pauseProvider(db: Firestore, provider: string, until: Date
 /** When optional AI enrichment was last attempted for a product, and what it found (public facts only). */
 export interface Enrichment {
   databaseImagesAt?: Date | null;
+  /** The barcode database's answer for this barcode (its title and brand, or none), reused for 30 days instead of asking again. */
+  hint?: { title: string; brand: string; category: string; source: string } | null;
+  hintAt?: Date | null;
   databaseImages?: { read: string[]; skipped: string[]; failed?: string[]; version?: string };
   researchAt?: Date | null;
-  /** outcome "fetch_failed": no candidate page could be reached; "hint_failed": nothing found while the barcode database (the search words) didn't answer. Both are tried again after a few hours, never a 30-day negative */
-  research?: { filled: string[]; discarded: string[]; source: string; version?: string; outcome?: 'done' | 'fetch_failed' | 'hint_failed'; species?: string };
+  /** outcome "fetch_failed": no candidate page could be reached for a reason that may pass (timeout, rate limit, server error); "hint_failed": nothing, or nothing saying who the product is for, found while the barcode database (the search words) was unavailable. Both are retried a bounded number of times, never a 30-day negative */
+  research?: {
+    filled: string[];
+    discarded: string[];
+    source: string;
+    version?: string;
+    outcome?: 'done' | 'fetch_failed' | 'hint_failed';
+    species?: string;
+    /** Consecutive unfinished runs (fetch_failed, hint_failed): retried after 12 h, 2 days, 7 days, then not until a new method or 30 days. */
+    attempts?: number;
+  };
 }
 
 export interface StoredProduct {
@@ -135,6 +153,7 @@ export async function readProductMeta(db: Firestore, gtin: string): Promise<Prod
       databaseImages: d.enrichment?.databaseImages ?? undefined,
       researchAt: toDate(d.enrichment?.researchAt),
       research: d.enrichment?.research ?? undefined,
+      ...(d.enrichment?.hintAt ? { hint: d.enrichment?.hint ?? null, hintAt: toDate(d.enrichment.hintAt) } : {}),
     },
   };
 }
@@ -227,7 +246,7 @@ export async function writeProduct(
 
 function enrichmentDoc(e: Enrichment): Record<string, unknown> {
   const ts = (d: Date | null | undefined) => (d ? Timestamp.fromDate(d) : null);
-  return { databaseImagesAt: ts(e.databaseImagesAt), databaseImages: e.databaseImages ?? null, researchAt: ts(e.researchAt), research: e.research ?? null };
+  return { databaseImagesAt: ts(e.databaseImagesAt), databaseImages: e.databaseImages ?? null, researchAt: ts(e.researchAt), research: e.research ?? null, ...(e.hintAt ? { hint: e.hint ?? null, hintAt: ts(e.hintAt) } : {}) };
 }
 
 export async function writeRecall(db: Firestore, gtin: string, recall: RecallCheck, now: Date): Promise<void> {
