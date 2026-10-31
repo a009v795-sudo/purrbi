@@ -910,8 +910,7 @@ describe('research 2.8.1: what the cards and the trace say', () => {
     const r = await researchProduct({ apiKey: 'k', model: 'gpt-5-mini', gtin14: '00099482517243', barcode: '099482517243', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-10-31T06:00:00Z') });
     expect(r.discarded).toContain('barcode search: result documents not checked (Purrbi checks web pages only): https://beda.cz/files/cenik-2026.pdf');
     expect(r.discarded).toContain('barcode search: result pages not checked (no secure address): http://e-chinalife.com/goods/099482517243');
-    // A search checks 8; with no search left, 4 more; the last 2 are named.
-    expect(r.discarded).toContain('remaining result pages: result pages not checked (the run’s 12 checks or two reads were used): shop12.example, shop13.example');
+    expect(r.discarded).toContain('barcode search: result pages not checked (at most 12 a run): shop12.example, shop13.example');
     // The scan keeps these in its trace (up to twenty research notes).
     const { retrievalStatus } = await import('../../src/pipeline/facts');
     expect(retrievalStatus('ingredients', { research: { outcome: 'done', discarded: r.discarded, source: '', at } }).status).toBe('not_found');
@@ -981,9 +980,8 @@ describe('research 2.8.1 review fixes', () => {
     // Search 1: chewy.com's third and fourth results go by the per-site rule (not by the run's limit).
     expect(r.discarded).toContain('barcode search: result pages not checked (at most two per site in a search): chewy.com');
     expect(r.discarded.filter((d) => d.includes('cenik-2026.pdf'))).toEqual(['barcode search: result documents not checked (Purrbi checks web pages only): https://beda.cz/files/cenik-2026.pdf']);
-    // Search 1 used its share (8); search 2 (the 13-digit form) gets the other 4, ranked with search 1's leftovers.
-    expect(r.discarded.some((d) => d.startsWith('barcode search (13-digit form): result pages without this barcode: later.example'))).toBe(true);
-    expect(r.discarded).toContain('remaining result pages: result pages not checked (the run’s 12 checks or two reads were used): chewy.com');
+    // Search 1 used the run's 12 checks: search 2's (the 13-digit form's) page is named, not checked.
+    expect(r.discarded).toContain('barcode search (13-digit form): result pages not checked (the run’s 12 checks or two reads were used): later.example');
   });
 });
 
@@ -1026,20 +1024,15 @@ describe('research 2.9.0: result pages ranked by their address', () => {
     await researchProduct({ ...A, knownBrand: 'Whole Paws', knownName: 'Whole Paws Salmon Pate' });
     expect(fetched.map((u) => new URL(u).hostname)).toEqual(['www.petsupermarket.com', 'www.wholepaws.example', 'www.wholepaws.example', 'www.barcodes.example']);
   });
-  it('A as it happened: the search by name’s marketplace pages are reached and the one showing the barcode is read', async () => {
-    let call = 0;
+  it('A as it happened (trace 16590db9-020): desertcart.in, in the barcode search’s own 19 results, is checked among the first and read', async () => {
     const fetched: string[] = [];
     const desertcart = `<html><head><title>Whole Paws Grain-Free Salmon Pate 5.5 oz</title></head><body><h1>Whole Paws Grain-Free Salmon Paté Loaf Cat Food, 5.5 oz</h1>
       <p>Ingredients: Salmon, Water Sufficient for Processing, Salmon Broth, Liver, Pea Protein, Natural Flavor, Guar Gum, Tricalcium Phosphate, Potassium Chloride, Salt</p>
       <p>Guaranteed Analysis: Crude Protein (min) 9.0%, Crude Fat (min) 5.0%, Crude Fiber (max) 1.5%, Moisture (max) 78.0%</p><table><tr><td>UPC</td><td>099482481087</td></tr></table></body></html>`;
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
-      if (url === 'https://api.openai.com/v1/responses') {
-        call++;
-        // Search 1 (the barcode): eleven pages, mostly not this product; search 2 (by the answer's name): marketplace pages.
-        return call === 1
-          ? respond(['https://www.scribd.com/document/1/BROS-150', 'https://pi.bigparadox.com/', 'https://www.e-chinalife.com/upload/a.pdf', ...Array.from({ length: 15 }, (_, i) => `https://salmon${i}.example/products/open-farm-salmon-pate-${i}`), 'https://www.pawdiet.com/reviews/whole-paws-salmon-pate'], answer(true))
-          : respond(['https://www.cats.com/whole-paws-cat-food-review', 'https://www.desertcart.in/products/12345-whole-paws-grain-free-salmon-pate-5-5-oz', 'https://pricehistory.app/p/whole-paws-grain-free-salmon-pate'], answer(false));
-      }
+      if (url === 'https://api.openai.com/v1/responses')
+        // As in the trace: 19 results, a document site, a home page, a PDF, other brands' salmon pâtés, a review, desertcart.in last.
+        return respond(['https://www.scribd.com/document/1/BROS-150', 'https://pi.bigparadox.com/', 'https://www.e-chinalife.com/upload/a.pdf', ...Array.from({ length: 14 }, (_, i) => `https://salmon${i}.example/products/open-farm-salmon-pate-${i}`), 'https://www.pawdiet.com/reviews/whole-paws-salmon-pate', 'https://www.desertcart.in/products/12345-whole-paws-grain-free-salmon-pate-5-5-oz'], answer(true));
       if (url.includes('chat/completions'))
         return new Response(JSON.stringify({ model: 'gpt-5-mini', choices: [{ message: { content: JSON.stringify(modelAnswer({ product_name: 'Whole Paws Grain-Free Salmon Paté Loaf Cat Food, 5.5 oz', brand: 'Whole Paws', intended_for: 'cats', ingredients_verbatim: 'Salmon, Water Sufficient for Processing, Salmon Broth, Liver, Pea Protein, Natural Flavor, Guar Gum, Tricalcium Phosphate, Potassium Chloride, Salt' })) }, finish_reason: 'stop' }] }), { status: 200 });
       // (A Shopify-style address also fetches its product record, url.js: one page, two fetches.)
@@ -1047,13 +1040,10 @@ describe('research 2.9.0: result pages ranked by their address', () => {
       return new Response(url.includes('desertcart') ? desertcart : plain, { status: 200 });
     }));
     const r = await researchProduct(A);
-    // Search 1 has 19 results, 17 checkable (as A's did): it spends 8 checks, so the search by name keeps its share. The
-    // answer named Whole Paws: its review page comes before other brands' salmon pâtés; the home page is skipped.
-    expect(fetched[0]).toBe('www.pawdiet.com');
-    expect(fetched.filter((h) => /^salmon\d+\.example$/.test(h))).toHaveLength(7);
+    // On 2.8.1 desertcart.in was left past the eight checks; the answer named Whole Paws, so its page now comes first.
+    expect(fetched[0]).toBe('www.desertcart.in');
     expect(fetched).not.toContain('pi.bigparadox.com');
-    expect(fetched).toContain('www.desertcart.in');
-    expect(r.discarded).toContain('search by the answer’s name: desertcart.in (a search result) shows this barcode, so Purrbi read it');
+    expect(r.discarded).toContain('barcode search: desertcart.in (a search result) shows this barcode, so Purrbi read it');
     expect(r.sources[0]).toMatchObject({ sourceName: 'desertcart.in', matchConfidence: 'exact_barcode' });
     expect((r.facts?.classificationSignals ?? []).map((c) => c.text)).toContain('intended for cats');
   });
@@ -1108,5 +1098,60 @@ describe('research 2.9.0 review fixes', () => {
     const { fetched, r } = await run(['https://help.gs1us.org/hc/en-us/articles/123-how-to-verify', 'https://www.ubuy.com.lb/en/', 'https://www.chewy.com/whole-paws/dp/1']);
     expect(fetched.map((u) => new URL(u).hostname)).toEqual(['www.chewy.com']);
     expect(r.discarded.some((d) => /home pages.*help\.gs1us\.org.*ubuy\.com\.lb/.test(d))).toBe(true);
+  });
+});
+
+// Re-review of research 2.9.0 (workflow wf_1e71acea-222).
+describe('research 2.9.0 re-review fixes', () => {
+  const plain = '<html><head><title>Page</title></head><body><h1>Something else</h1></body></html>';
+  const order = async (barcode: string, results: string[], over: Record<string, unknown> = {}) => {
+    const fetched: string[] = [];
+    const gtin14 = barcode.padStart(14, '0');
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url === 'https://api.openai.com/v1/responses')
+        return new Response(JSON.stringify({ output: [{ type: 'web_search_call', action: { type: 'search', queries: [`"${barcode}"`, `"${gtin14.slice(1)}"`], sources: results.map((u) => ({ type: 'url', url: u })) } }, { type: 'message', content: [{ type: 'output_text', text: JSON.stringify({ ...modelAnswer({}), found: false }), annotations: [] }] }] }), { status: 200 });
+      if (!url.endsWith('.js')) fetched.push(url);
+      return new Response(plain, { status: 200 });
+    }));
+    await researchProduct({ apiKey: 'k', model: 'gpt-5-mini', gtin14, barcode, knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-10-31T23:00:00Z'), ...over });
+    return fetched;
+  };
+  it('the maker’s own page carries its brand in its host: it is not taken for another brand’s product (test B)', async () => {
+    const maker = 'https://www.wellnesspetfood.com/product-catalog/healthy-indulgence-gravies-chicken-turkey';
+    const fetched = await order('076344886570', [
+      'https://www.wellnesspetfood.com/product-catalog/wellness-complete-health-grained-beef-barley',
+      'https://www.wellnesspetfood.com/product-catalog/wellness-complete-health-plus-whitefish-sweet-potato',
+      'https://www.wellnesspetfood.com/product-catalog/wellness-core-digestive-health-large-breed-chicken-brown-rice',
+      maker,
+    ], { knownBrand: 'Wellness', hint: { title: 'Wellness Healthy Indulgence Gravies with Chicken & Turkey in Gravy', brand: 'Wellness Natural Pet Food', category: '', source: 'UPCitemdb (barcode database)' } });
+    expect(fetched[0]).toBe(maker);
+  });
+  it('a split possessive in an address is the brand (Hill-s, hill-39-s), and a parent company’s brand does not sink the product’s own page', async () => {
+    const hills = await order('052742176205', [
+      'https://www.chewy.com/hills-science-diet-adult-perfect-weight/dp/1',
+      'https://www.walmart.com/ip/Hill-s-Science-Diet-Adult-Indoor-Chicken-Recipe-Dry-Cat-Food-15-5-lb-Bag/123456',
+      'https://www.target.com/p/hill-39-s-science-diet-adult-indoor-chicken-recipe-dry-cat-food-15-5lbs/-/A-12345',
+    ], { knownBrand: 'Hill’s Science Diet', knownName: 'Hill’s Science Diet Adult Indoor Chicken Recipe Dry Cat Food' });
+    expect(hills.slice(0, 2).map((u) => new URL(u).hostname).sort()).toEqual(['www.target.com', 'www.walmart.com']);
+    const purina = await order('050000008234', [
+      'https://www.chewy.com/purina-one-tender-selects-blend-chicken/dp/1',
+      'https://www.chewy.com/purina-pro-plan-complete-essentials-salmon/dp/2',
+      'https://www.chewy.com/fancy-feast-classic-pate-chicken-feast-canned/dp/3',
+    ], { knownBrand: 'Purina', knownName: 'Fancy Feast Classic Pate Chicken Feast' });
+    expect(purina[0]).toBe('https://www.chewy.com/fancy-feast-classic-pate-chicken-feast-canned/dp/3');
+  });
+  it('a shop item filed by its barcode (Rakuten) comes before product pages that do not carry it', async () => {
+    const rakuten = 'https://item.rakuten.co.jp/sundrug/4901133718939/';
+    const fetched = await order('4901133718939', [
+      'https://www.amazon.co.jp/dp/B000FQ9R4E',
+      'https://www.yodobashi.com/product/100000001001234567/',
+      rakuten,
+    ]);
+    expect(fetched[0]).toBe(rakuten.replace(/\/$/, ''));
+  });
+  it('a home page with a tracking or language key is still a home page; a listing ending in /products is no product page', async () => {
+    const fetched = await order('099482481087', ['https://pi.bigparadox.com/?srsltid=AfmBOoqXyz123', 'https://www.royalcanin.com/us/cats/products/', 'https://www.ebay.com/itm/317732737868']);
+    expect(fetched.map((u) => new URL(u).hostname)).not.toContain('pi.bigparadox.com');
+    expect(new URL(fetched[0]).hostname).toBe('www.ebay.com');
   });
 });

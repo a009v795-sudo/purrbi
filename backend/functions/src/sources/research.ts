@@ -17,9 +17,9 @@ import { httpBytes, httpJson, httpRequest, SourceError } from '../util/http';
 import type { BarcodeHint } from './barcodeLookup';
 import { altTextIngredientLists, documentFacts, markupGtins, nameOnPage, nameTokens, nutritionDocLinks, pageText, parseShopifyProduct, pdfSafety, productHeading, shopifyProductUrl, textGtins } from './pageEvidence';
 
-export const RESEARCH_VERSION = 'research-2.9.0'; // 2.9.0: result pages are checked in order of how likely their address is to be the product's page (the barcode in its path, the product's brand and name words, a product page's address form, opened by the model); home pages and tools, help, forum or category pages are not checked; twelve checks a run (was eight). 2.8.1: the trace names the result pages left out of the checks (documents and pages without a secure address by address, once a run; the rest by site, with the reason: eight a run, two per site in a search, or the run's checks or reads used), says a page that refuses automated readers apart from one that is gone, and says a page that shows only the barcode is tied by it only when it is; notes that only say what was searched, fetched or checked are never read as a rejected value. 2.8.0: pages a reasoning model opened (or searched for words) are checked for the barcode like its search results; its calls get 90 s; each run records its model, and another research model is a new method. 2.7.0: the barcode's 13-digit form is searched too; search words prefer a Latin-script name (an import listing's title in another script finds that language's pages). 2.6.0: the barcode's digits are searched alone first. 2.5.0: the search's result pages are checked site by site (each site's first result, then its second), after every search of the run, at most eight. 2.4.0: a page printing other barcodes besides this one is a listing, not the product's page; each analysis value must be printed after its nutrient's name; the manufacturer's page is sought by the answer's name when no other is known. Results of 2.3.0 are not used (one took another variant's analysis). 2.3.0: the search's own result pages are recorded and checked by Purrbi for the barcode; the first that shows it is read from Purrbi's copy. 2.2.0: the barcode is searched in the forms pages print it; a page tied to the barcode that shows nothing about the product (a price list) ends no search, and what such an answer named is searched for next; a barcode with other numbers beside it is still found. 2.1.0: a page tied to the product names it by its own heading; a web page's sentence that names no species, life stage or standard is not a feeding statement. 2.0.0: alt text, markup and Shopify barcodes, linked nutrition documents, a manufacturer follow-up, catalogue abbreviations, package sizes
+export const RESEARCH_VERSION = 'research-2.9.1'; // 2.9.1: the ranking's review fixes: each search's own pages with the run's remaining checks (no share per search); the brand counts in the address's host (the maker's own site) and in a split possessive (Hill-s); a parent company's brand does not sink a page carrying the product's name; the barcode in a shop's own address counts 3; a home page with a tracking or language key is still one; a listing ending in /products is no product page. 2.9.0: result pages are checked in order of how likely their address is to be the product's page (the barcode in its path, the product's brand and name words, a product page's address form, opened by the model); home pages and tools, help, forum or category pages are not checked; twelve checks a run (was eight). 2.8.1: the trace names the result pages left out of the checks (documents and pages without a secure address by address, once a run; the rest by site, with the reason: eight a run, two per site in a search, or the run's checks or reads used), says a page that refuses automated readers apart from one that is gone, and says a page that shows only the barcode is tied by it only when it is; notes that only say what was searched, fetched or checked are never read as a rejected value. 2.8.0: pages a reasoning model opened (or searched for words) are checked for the barcode like its search results; its calls get 90 s; each run records its model, and another research model is a new method. 2.7.0: the barcode's 13-digit form is searched too; search words prefer a Latin-script name (an import listing's title in another script finds that language's pages). 2.6.0: the barcode's digits are searched alone first. 2.5.0: the search's result pages are checked site by site (each site's first result, then its second), after every search of the run, at most eight. 2.4.0: a page printing other barcodes besides this one is a listing, not the product's page; each analysis value must be printed after its nutrient's name; the manufacturer's page is sought by the answer's name when no other is known. Results of 2.3.0 are not used (one took another variant's analysis). 2.3.0: the search's own result pages are recorded and checked by Purrbi for the barcode; the first that shows it is read from Purrbi's copy. 2.2.0: the barcode is searched in the forms pages print it; a page tied to the barcode that shows nothing about the product (a price list) ends no search, and what such an answer named is searched for next; a barcode with other numbers beside it is still found. 2.1.0: a page tied to the product names it by its own heading; a web page's sentence that names no species, life stage or standard is not a feeding statement. 2.0.0: alt text, markup and Shopify barcodes, linked nutrition documents, a manufacturer follow-up, catalogue abbreviations, package sizes
 /** Research results still used as they were saved (older ones are read again: they could take who a product is for from a retailer's title). */
-export const RESEARCH_RESULTS_IN_USE: ReadonlySet<string> = new Set([RESEARCH_VERSION, 'research-2.8.1', 'research-2.8.0', 'research-2.7.0', 'research-2.6.0', 'research-2.5.0', 'research-2.4.0', 'research-2.2.0', 'research-2.1.0', 'research-2.0.0']); // not 2.3.0
+export const RESEARCH_RESULTS_IN_USE: ReadonlySet<string> = new Set([RESEARCH_VERSION, 'research-2.9.0', 'research-2.8.1', 'research-2.8.0', 'research-2.7.0', 'research-2.6.0', 'research-2.5.0', 'research-2.4.0', 'research-2.2.0', 'research-2.1.0', 'research-2.0.0']); // not 2.3.0
 
 const nullableString = { type: ['string', 'null'] };
 const SCHEMA = {
@@ -369,13 +369,11 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
   let pageReads = 0;
   let lead: { name: string | null; brand: string | null } | null = null;
   const seenPages = new Set<string>();
-  // Result pages a search could not check within its share (offered again later), and the pages the model opened.
-  let later: string[] = [];
+  // The pages the model opened in this run.
   const openedPages = new Set<string>();
-  // Checks result pages (a search's, with those left from earlier) and reads the first that shows the barcode.
+  // Checks a search's result pages and reads the first that shows the barcode.
   const checkAndRead = async (label: string, results: string[], words: RankWords, limit: number): Promise<ResearchOutcome | null> => {
-    const checked = await pageShowingBarcode(opts, results, seenPages, limit, openedPages, words, later);
-    later = checked.later;
+    const checked = await pageShowingBarcode(opts, results, seenPages, limit, openedPages, words);
     pageChecks += checked.checked;
     timeLimited = timeLimited || checked.timeLimited;
     discarded.push(...checked.notes.map((n) => `${label}: ${n}`));
@@ -426,10 +424,10 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
       const { documents, insecure, pages } = sortResults(r.results, seenPages);
       discarded.push(...leftOutNotes({ documents, insecure, spent: pages }).map((n) => `${attempt.label}: ${n}`));
     }
-    if ((r.results?.length || later.length) && pageChecks < RUN_PAGE_CHECKS && pageReads < 2) {
+    if (r.results?.length && pageChecks < RUN_PAGE_CHECKS && pageReads < 2) {
       // Ranked by the product's brand and name, from the most trusted source (search words only).
       const words = rankWords([opts.knownBrand, opts.hint?.brand, r.lead?.brand, lead?.brand], [opts.knownName, r.pageTitle, opts.hint?.title, r.lead?.name, lead?.name]);
-      const read = await checkAndRead(attempt.label, r.results ?? [], words, Math.min(SEARCH_PAGE_CHECKS, RUN_PAGE_CHECKS - pageChecks));
+      const read = await checkAndRead(attempt.label, r.results, words, RUN_PAGE_CHECKS - pageChecks);
       if (read) {
         found = read;
         break;
@@ -469,12 +467,6 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
       });
     }
   }
-  // The pages earlier searches left are checked once no search is left, with the run's remaining checks.
-  if (!found?.facts && later.length && pageChecks < RUN_PAGE_CHECKS && pageReads < 2) {
-    const read = await checkAndRead('remaining result pages', [], rankWords([opts.knownBrand, opts.hint?.brand, lead?.brand], [opts.knownName, opts.hint?.title, lead?.name]), RUN_PAGE_CHECKS - pageChecks);
-    if (read) found = read;
-  }
-  if (later.length && !found?.facts) discarded.push(...leftOutNotes({ documents: [], insecure: [], spent: later }).map((n) => `remaining result pages: ${n}`));
   if (!found?.facts) return { facts: null, sources: [], discarded, model, fetchFailed, calls, timeLimited };
 
   // The manufacturer's own page for what the first page did not show (or when only a retailer's listing says who it is for).
@@ -751,13 +743,8 @@ export function describeSearches(log: WebSearchLog[]): string[] {
   ];
 }
 
-/**
- * Result pages Purrbi checks for the barcode in one research run (each a fetch, no model call; the time limit still
- * applies), and in one search: a search leaves part of the run's checks to the run's later searches (the barcode's
- * other form, the search by name), and the pages it could not check are offered again with theirs (test A, 2.8.1).
- */
+/** Result pages Purrbi checks for the barcode in one research run (each a fetch, no model call; the time limit still applies). */
 const RUN_PAGE_CHECKS = 12;
-const SEARCH_PAGE_CHECKS = 8;
 
 /** Words a result page's address is ranked by: the product's brand and name, from the most trusted source that has them. */
 interface RankWords {
@@ -781,8 +768,8 @@ function rankWords(brands: (string | null | undefined)[], names: (string | null 
   return { brand, name: name.slice(0, 8) };
 }
 
-// A product page's address (a shop's or marketplace's item page; a trailing "/p" too).
-const PRODUCT_ADDRESS = /\/(?:products?|p|dp|itm|items?|ip|goods|pd|prod|sku|product-catalog)\/|\/(?:gp|catalog)\/product\/|-p-\d+/;
+// A product page's address (a shop's or marketplace's item page; a trailing "/p" too, VTEX).
+const PRODUCT_ADDRESS = /\/(?:products?|p|dp|itm|items?|ip|goods|pd|prod|sku|product-catalog)\/|\/(?:gp|catalog)\/product\/|-p-\d+|\/p$/;
 // A product page addressed by its query at the site's root (/?pid=…, /?product=…).
 const PRODUCT_KEYS = /^(?:pid|product|product_id|productid|item|item_id|sku)$/i;
 // Not checked: sections that hold no product pages (on their own host too), and listings near the top. Test C,
@@ -800,9 +787,10 @@ const SEARCH_KEYS = /^(?:q|s|k|query|search|searchterm|term|keywords?|text|w|_nk
  * How likely a result page is to be this product's page, from its address alone (no fetch). Not checked (-3 or
  * lower): a home page, a help, tool, forum, encyclopedia, blog or news section, a listing near the top. A site's search
  * or listing page and a lookup page for the barcode: -1, after the product pages. Otherwise a product page's address
- * form (2), the barcode in a shop's own address (1), the product's brand (2; a worded product address without it, -2:
- * another brand's product), the share of its name words (up to 3, also the tie-breaker), opened by the model (1), a
- * review (-1). It only orders and skips checks: a page is used only when Purrbi finds the barcode on it.
+ * form (2), the barcode in a shop's own address (3: Rakuten, Yahoo and other shops file items by it), the product's
+ * brand in the address or its host (2; a worded product address with neither and few of the name's words, -2: another
+ * brand's product), the share of its name words (up to 3, also the tie-breaker), opened by the model (1), a review
+ * (-1). It only orders and skips checks: a page is used only when Purrbi finds the barcode on it.
  */
 function addressPromise(u: string, gtin14: string, words: RankWords, opened: boolean): { score: number; share: number } {
   let url: URL;
@@ -817,12 +805,14 @@ function addressPromise(u: string, gtin14: string, words: RankWords, opened: boo
   } catch {
     // keep the encoded path
   }
-  path = path.toLowerCase();
+  // A split possessive is rejoined, as the name's words drop the apostrophe (Hill-s, hill-39-s → hills).
+  path = path.toLowerCase().replace(/([a-z])-(?:39-)?s(?=[-_/.]|$)/g, '$1s');
   const host = url.hostname.toLowerCase().replace(/^www\./, '');
   const keys = [...url.searchParams.keys()];
-  const root = path === '/' || path === '';
-  const product = PRODUCT_ADDRESS.test(`${path}/`) || (root && keys.some((k) => PRODUCT_KEYS.test(k)));
-  if (!keys.length && (root || /^\/[a-z]{2}(?:-[a-z]{2})?\/?$/.test(path))) return { score: -4, share: 0 };
+  const root = path === '/' || path === '' || /^\/[a-z]{2}(?:-[a-z]{2})?\/?$/.test(path);
+  const product = PRODUCT_ADDRESS.test(path) || (root && keys.some((k) => PRODUCT_KEYS.test(k)));
+  // A home page (a locale's too), also with a tracking or language key (?srsltid=, ?lang=); not a page its query addresses.
+  if (root && !product && !keys.some((k) => SEARCH_KEYS.test(k)) && !queryCarries(u, gtin14)) return { score: -4, share: 0 };
   if (!product && (SECTION_HOSTS.test(host) || SECTION_ADDRESS.test(path) || LISTING_ADDRESS.test(path))) return { score: -3, share: 0 };
   const onlyBarcode = /^\/[\d -]+\/?$/.test(path) && textContainsGtin(path, gtin14);
   if (!product && (keys.some((k) => SEARCH_KEYS.test(k)) || queryCarries(u, gtin14) || SEARCH_ADDRESS.test(path) || onlyBarcode)) return { score: -1, share: 0 };
@@ -830,12 +820,15 @@ function addressPromise(u: string, gtin14: string, words: RankWords, opened: boo
   // The share of the name's words the address carries (all of them: four of five is another variant's page more often).
   const ratio = words.name.length ? words.name.filter((w) => pathWords.has(w)).length / words.name.length : 0;
   const share = Math.floor(3 * ratio);
-  const branded = words.brand.length > 0 && words.brand.every((w) => pathWords.has(w));
+  // The brand in the address, or in its host (the maker's own site: wellnesspetfood.com, openfarmpet.com).
+  const hostWords = host.replace(/[^a-z0-9]+/g, '');
+  const branded = words.brand.length > 0 && words.brand.every((w) => pathWords.has(w) || hostWords.includes(w));
   let score = share;
   if (product) score += 2;
-  if (product && textContainsGtin(path, gtin14)) score += 1;
+  if (textContainsGtin(path, gtin14)) score += 3;
   if (branded) score += 2;
-  else if (words.brand.length && product && pathWords.size >= 3) score -= 2;
+  // Another brand's product, unless the address carries most of the name (a parent company's brand: Purina, Fancy Feast).
+  else if (words.brand.length && product && pathWords.size >= 3 && ratio < 0.5) score -= 2;
   if (opened) score += 1;
   if (/review/.test(path)) score -= 1;
   return { score, share: ratio };
@@ -897,13 +890,10 @@ async function pageShowingBarcode(
   limit: number,
   opened: Set<string> = new Set(),
   words: RankWords = { brand: [], name: [] },
-  earlier: string[] = [],
-): Promise<{ page: FetchedPage | null; host: string; notes: string[]; checked: number; timeLimited: boolean; later: string[] }> {
+): Promise<{ page: FetchedPage | null; host: string; notes: string[]; checked: number; timeLimited: boolean }> {
   const { documents, insecure, pages } = sortResults(results, seen);
-  // This search's pages and those earlier searches left, ranked together: the most promising addresses first; a site's
-  // best two pages at most, its second counted 3 lower (sites take turns).
-  const pool = [...new Set([...pages, ...earlier.filter((u) => !seen.has(u))])];
-  const scored = pool.map((u, rank) => ({ u, rank, ...addressPromise(u, opts.gtin14, words, opened.has(u)) }));
+  // The most promising addresses first; a site's best two pages at most, its second counted 3 lower (sites take turns).
+  const scored = pages.map((u, rank) => ({ u, rank, ...addressPromise(u, opts.gtin14, words, opened.has(u)) }));
   const unlikely = scored.filter((x) => x.score <= -3).map((x) => x.u);
   const turn = new Map<string, number>();
   const ranked = scored
@@ -916,7 +906,6 @@ async function pageShowingBarcode(
     });
   const eligible = ranked.filter((x) => x.turn <= 2).sort((a, b) => b.score - 3 * (b.turn - 1) - (a.score - 3 * (a.turn - 1)) || b.share - a.share || a.rank - b.rank);
   const candidates = eligible.slice(0, Math.max(0, limit)).map((x) => x.u);
-  // Left for later: offered again with the next search's pages, or once no search is left.
   const pastLimit = eligible.slice(Math.max(0, limit)).map((x) => x.u);
   const perSite = ranked.filter((x) => x.turn > 2).map((x) => x.u);
   const without: string[] = [];
@@ -939,7 +928,6 @@ async function pageShowingBarcode(
           host: hostOf(url),
           checked,
           timeLimited: false,
-          later: [...candidates.slice(i + 1), ...pastLimit],
           notes: [...(without.length ? [`result pages without this barcode: ${without.join(', ')}`] : []), `${hostOf(url)} (${kind}) shows this barcode${page.barcode === 'text' ? '' : page.barcode === 'markup' ? ' in its page data' : ' in its product record'}, so Purrbi read it`, ...leftOutNotes({ documents, insecure, unlikely, perSite })],
         };
       }
@@ -953,8 +941,8 @@ async function pageShowingBarcode(
     ...(unread.length ? [`result pages that could not be read: ${unread.join(', ')}`] : []),
     ...(unchecked.length ? [`result pages not checked (the scan’s time limit): ${[...new Set(unchecked.map(hostOf))].join(', ')}`] : []),
   ];
-  const leftOut = leftOutNotes({ documents, insecure, unlikely, perSite });
-  return { page: null, host: '', checked, timeLimited: unchecked.length > 0, later: pastLimit, notes: candidates.length ? [...notes, ...leftOut] : ['no result page to check', ...leftOut] };
+  const leftOut = leftOutNotes({ documents, insecure, unlikely, pastLimit, perSite });
+  return { page: null, host: '', checked, timeLimited: unchecked.length > 0, notes: candidates.length ? [...notes, ...leftOut] : ['no result page to check', ...leftOut] };
 }
 
 const READ_SYSTEM = [
