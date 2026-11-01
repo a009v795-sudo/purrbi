@@ -1262,20 +1262,25 @@ describe('research 2.9.3 review fixes: pages held back for a later search', () =
     new Response(JSON.stringify({ output: [{ type: 'web_search_call', action: { type: 'search', queries, sources: urls.map((url) => ({ type: 'url', url })) } }, { type: 'message', content: [{ type: 'output_text', text: JSON.stringify(name ? modelAnswer({ product_name: name, brand: 'Whole Paws' }) : modelAnswer({ found: false })), annotations: [] }] }] }), { status: 200 });
   // searches: each research call's result pages and queries, in order (the last repeats); callMs and stepMs: how long
   // each research call and each fetch take (with a fake clock).
-  const run = async (searches: { urls: string[]; queries: string[]; name?: string }[], o: { deadlineMs?: number; stepMs?: number; callMs?: number } = {}) => {
+  // A distributor's price list that prints the barcode: its read finds no product.
+  const priceList = '<html><head><title>Price list</title></head><body><h1>PRICE LIST 2026</h1><table><tr><td>099482481087</td><td>4.99</td><td>case of 24</td></tr></table></body></html>';
+  const run = async (searches: { urls: string[]; queries: string[]; name?: string }[], o: { deadlineMs?: number; stepMs?: number; callMs?: number; pages?: Record<string, string> } = {}) => {
     let call = 0;
     const fetched: string[] = [];
-    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    const pages: Record<string, string> = o.pages ?? { [petshopUrl]: petshop, [docUrl]: petshop };
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: { body?: string }) => {
       if (url === 'https://api.openai.com/v1/responses') {
         const s = searches[Math.min(call++, searches.length - 1)];
         if (o.callMs) vi.setSystemTime(Date.now() + o.callMs);
         return respond(s.urls, s.queries, s.name);
       }
-      if (url.includes('chat/completions'))
-        return new Response(JSON.stringify({ model: 'gpt-5-mini', choices: [{ message: { content: JSON.stringify(modelAnswer({ product_name: 'Whole Paws Grain-Free Salmon Paté Loaf Cat Food, 5.5 oz', brand: 'Whole Paws', intended_for: 'cats', ingredients_verbatim: 'Salmon, Water Sufficient for Processing, Salmon Broth, Liver, Pea Protein, Natural Flavor, Guar Gum, Tricalcium Phosphate, Potassium Chloride, Salt' })) }, finish_reason: 'stop' }] }), { status: 200 });
-      if (!url.endsWith('.js')) fetched.push(new URL(url).hostname);
+      if (url.includes('chat/completions')) {
+        const answer = String(init?.body ?? '').includes('PRICE LIST') ? modelAnswer({ found: false }) : modelAnswer({ product_name: 'Whole Paws Grain-Free Salmon Paté Loaf Cat Food, 5.5 oz', brand: 'Whole Paws', intended_for: 'cats', ingredients_verbatim: 'Salmon, Water Sufficient for Processing, Salmon Broth, Liver, Pea Protein, Natural Flavor, Guar Gum, Tricalcium Phosphate, Potassium Chloride, Salt' });
+        return new Response(JSON.stringify({ model: 'gpt-5-mini', choices: [{ message: { content: JSON.stringify(answer) }, finish_reason: 'stop' }] }), { status: 200 });
+      }
+      if (!url.endsWith('.js')) fetched.push(url);
       if (o.stepMs) vi.setSystemTime(Date.now() + o.stepMs);
-      return new Response(url === petshopUrl || url === docUrl ? petshop : plain, { status: 200 });
+      return new Response(pages[url] ?? plain, { status: 200 });
     }));
     const r = await researchProduct({ apiKey: 'k', model: 'gpt-5-mini', gtin14: '00099482481087', barcode: '099482481087', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-11-01T00:30:00Z'), ...(o.deadlineMs !== undefined ? { deadline: Date.now() + o.deadlineMs } : {}) });
     return { r, fetched };
@@ -1287,7 +1292,7 @@ describe('research 2.9.3 review fixes: pages held back for a later search', () =
     expect(r.discarded).toContain('barcode search (13-digit form): searched “"0099482481087"” (0 results)');
     expect(r.discarded).toContain('barcode search: result pages held back (unlikely, and the run’s next search may need its last checks; checked after the searches if none finds the product): petshop.example');
     expect(r.discarded).toContain('pages held back for later: petshop.example (a search result) shows this barcode, so Purrbi read it');
-    expect(fetched.filter((h) => h === 'www.petshop.example')).toHaveLength(1);
+    expect(fetched.filter((u) => u === petshopUrl)).toHaveLength(1);
     expect(r.sources[0]).toMatchObject({ sourceName: 'petshop.example', matchConfidence: 'exact_barcode' });
     expect(r.facts?.ingredients?.value[0]).toBe('Salmon');
     expect(r.facts?.ingredients?.value).toHaveLength(10);
@@ -1312,7 +1317,7 @@ describe('research 2.9.3 review fixes: pages held back for a later search', () =
     // 130 s left: enough to hold the last checks; each fetch then takes 6 s, so the checks stop part-way.
     vi.useFakeTimers({ toFake: ['Date'] });
     const { r, fetched } = await run([{ urls: [...shops, petshopUrl], queries: ['"099482481087"'] }, { urls: [], queries: ['"0099482481087"'] }], { deadlineMs: 130000, stepMs: 6000 });
-    expect(fetched).not.toContain('www.petshop.example');
+    expect(fetched).not.toContain(petshopUrl);
     expect(r.discarded.find((d) => d.startsWith('barcode search: result pages not checked (the scan’s time limit): '))).toMatch(/shop7\.example, petshop\.example$/);
     expect(r.discarded.some((d) => d.includes('held back'))).toBe(false);
     expect(r.discarded).toContain('barcode search (13-digit form): not run (the scan’s time limit)');
@@ -1331,6 +1336,32 @@ describe('research 2.9.3 review fixes: pages held back for a later search', () =
     expect(r.discarded.filter((d) => d.includes('no result page to check'))).toEqual([]);
     expect(r.discarded).toContain('search by the answer’s name: searched “"Whole Paws" "Grain Free Salmon Pate" 099482481087” (0 results)');
     expect(r.discarded).toContain('pages held back for later: scribd.com (a search result) shows this barcode, so Purrbi read it');
+  });
+  it('a page showing the barcode whose read gives nothing leaves the pages after it and those held back to be checked later', async () => {
+    // shop3 is a price list that prints the barcode: its read finds no product. petshop (held back) is the product's page.
+    const { r, fetched } = await run([{ urls: [...shops, petshopUrl], queries: ['"099482481087"'] }, { urls: [], queries: ['"0099482481087"'] }], { pages: { [shops[3]]: priceList, [petshopUrl]: petshop } });
+    expect(r.discarded).toContain('barcode search: shop3.example (a search result) shows this barcode, so Purrbi read it');
+    expect(r.discarded).toContain('barcode search: result pages held back (unlikely, and the run’s next search may need its last checks; checked after the searches if none finds the product): petshop.example');
+    expect(r.discarded).toContain('pages held back for later: result pages without this barcode: shop4.example, shop5.example, shop6.example, shop7.example');
+    expect(r.discarded).toContain('pages held back for later: petshop.example (a search result) shows this barcode, so Purrbi read it');
+    expect(fetched.filter((u) => u === petshopUrl)).toHaveLength(1);
+    expect(r.sources[0]).toMatchObject({ sourceName: 'petshop.example' });
+  });
+  it('each search’s held pages are checked as that search’s, so its two-per-site cap does not drop another search’s pages', async () => {
+    // Two documents of one site held by each of two searches; the third shows the barcode.
+    const doc = (n: number) => `https://www.scribd.com/document/${n}/catalogue-${n}`;
+    const { r, fetched } = await run(
+      [
+        { urls: [...shops, doc(1), doc(2)], queries: ['"099482481087"'] },
+        { urls: [doc(3), doc(4)], queries: ['"0099482481087"'], name: 'Whole Paws Grain Free Salmon Pate' },
+        { urls: [], queries: ['"Whole Paws" "Grain Free Salmon Pate" 099482481087'] },
+      ],
+      { pages: { [doc(3)]: petshop } },
+    );
+    expect(r.discarded.filter((d) => d.includes('at most two per site'))).toEqual([]);
+    expect(fetched).toContain(doc(3));
+    expect(r.discarded).toContain('pages held back for later: scribd.com (a search result) shows this barcode, so Purrbi read it');
+    expect(r.facts?.ingredients?.value[0]).toBe('Salmon');
   });
 });
 

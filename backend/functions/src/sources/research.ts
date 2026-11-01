@@ -371,19 +371,17 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
   const seenPages = new Set<string>();
   // The pages the model opened in this run.
   const openedPages = new Set<string>();
-  // Unlikely result pages held back for a later search of the run (checked after the searches if none found the
-  // product), the words they were ranked by, and how long the run's last search call took (an estimate of the next).
-  const heldPages: string[] = [];
-  let heldWords: RankWords = { brand: [], name: [] };
+  // Result pages held back, by search, with the words they were ranked by: a search's unlikely pages kept for the run's
+  // next search, and the pages after one showing the barcode whose read gave nothing. They are checked after the
+  // searches if none found the product, each search's own pages together (its two-per-site cap stays per search).
+  // And how long the run's last search call took (an estimate of the next).
+  const heldGroups: { urls: string[]; words: RankWords }[] = [];
   let lastCallMs = 0;
   // Checks a search's result pages and reads the first that shows the barcode.
   const checkAndRead = async (label: string, results: string[], words: RankWords, limit: number, reserve = 0): Promise<ResearchOutcome | null> => {
     const checked = await pageShowingBarcode(opts, results, seenPages, limit, openedPages, words, reserve);
     pageChecks += checked.checked;
-    if (checked.kept.length) {
-      heldPages.push(...checked.kept);
-      heldWords = words;
-    }
+    if (checked.kept.length) heldGroups.push({ urls: checked.kept, words });
     timeLimited = timeLimited || checked.timeLimited;
     discarded.push(...checked.notes.map((n) => `${label}: ${n}`));
     if (checked.page && left(opts) >= modelCallMs(opts) + 15000) {
@@ -488,14 +486,17 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
       });
     }
   }
-  // Pages held back for a later search that did not check them (it found nothing, or other pages): checked now, with
-  // the run's checks and reads left (review of 2.9.3: a 13-digit search with no results left them unchecked).
-  const heldLeft = [...new Set(heldPages)].filter((u) => !seenPages.has(u));
-  if (!found && heldLeft.length) {
+  // Pages held back that no later search checked (it found nothing, or other pages): checked now, each search's in
+  // turn, with the run's checks and reads left (review of 2.9.3: a 13-digit search with no results left them
+  // unchecked). A group checked here can add the pages after a barcode page whose read gave nothing.
+  for (const group of heldGroups) {
+    if (found) break;
+    const urls = [...new Set(group.urls)].filter((u) => !seenPages.has(u));
+    if (!urls.length) continue;
     if (pageChecks < RUN_PAGE_CHECKS && pageReads < 2) {
-      const read = await checkAndRead('pages held back for later', heldLeft, heldWords, RUN_PAGE_CHECKS - pageChecks);
+      const read = await checkAndRead('pages held back for later', urls, group.words, RUN_PAGE_CHECKS - pageChecks);
       if (read) found = read;
-    } else discarded.push(...leftOutNotes({ documents: [], insecure: [], spent: heldLeft }).map((n) => `pages held back for later: ${n}`));
+    } else discarded.push(...leftOutNotes({ documents: [], insecure: [], spent: urls }).map((n) => `pages held back for later: ${n}`));
   }
   if (!found?.facts) return { facts: null, sources: [], discarded, model, fetchFailed, calls, timeLimited };
 
@@ -978,6 +979,7 @@ async function pageShowingBarcode(
   const unread: string[] = [];
   let checked = 0;
   let unchecked: string[] = [];
+  const heldNote = (urls: string[]) => `result pages held back (unlikely, and the run’s next search may need its last checks; checked after the searches if none finds the product): ${[...new Set(urls.map(hostOf))].slice(0, 6).join(', ')}`;
   for (const [i, url] of candidates.entries()) {
     if (left(opts) < modelCallMs(opts) + 15000) {
       unchecked = candidates.slice(i);
@@ -989,13 +991,14 @@ async function pageShowingBarcode(
       const page = await fetchOnce(url, opts);
       const kind = opened.has(url) ? 'a page the model opened' : 'a search result';
       if (page.barcode) {
+        // The pages after it and those held back stay held: if its read gives nothing, they are checked later (review of 2.9.3).
         return {
           page,
           host: hostOf(url),
           checked,
           timeLimited: false,
-          kept: [],
-          notes: [...(without.length ? [`result pages without this barcode: ${without.join(', ')}`] : []), `${hostOf(url)} (${kind}) shows this barcode${page.barcode === 'text' ? '' : page.barcode === 'markup' ? ' in its page data' : ' in its product record'}, so Purrbi read it`, ...leftOutNotes({ documents, insecure, unlikely, perSite })],
+          kept: [...candidates.slice(i + 1), ...kept],
+          notes: [...(without.length ? [`result pages without this barcode: ${without.join(', ')}`] : []), `${hostOf(url)} (${kind}) shows this barcode${page.barcode === 'text' ? '' : page.barcode === 'markup' ? ' in its page data' : ' in its product record'}, so Purrbi read it`, ...leftOutNotes({ documents, insecure, unlikely, perSite }), ...(kept.length ? [heldNote(kept)] : [])],
         };
       }
       without.push(page.searchPage ? `${hostOf(url)} (a search page: it repeats the barcode from its address)` : page.family ? `${hostOf(url)} (lists it among ${page.family} barcodes)` : hostOf(url));
@@ -1012,7 +1015,7 @@ async function pageShowingBarcode(
     ...(unread.length ? [`result pages that could not be read: ${unread.join(', ')}`] : []),
     ...(timeCut.length ? [`result pages not checked (the scan’s time limit): ${[...new Set(timeCut.map(hostOf))].join(', ')}`] : []),
   ];
-  const leftOut = [...leftOutNotes({ documents, insecure, unlikely, pastLimit, perSite }), ...(held.length ? [`result pages held back (unlikely, and the run’s next search may need its last checks; checked after the searches if none finds the product): ${[...new Set(held.map(hostOf))].slice(0, 6).join(', ')}`] : [])];
+  const leftOut = [...leftOutNotes({ documents, insecure, unlikely, pastLimit, perSite }), ...(held.length ? [heldNote(held)] : [])];
   return { page: null, host: '', checked, timeLimited: unchecked.length > 0, kept: held, notes: candidates.length || kept.length ? [...notes, ...leftOut] : ['no result page to check', ...leftOut] };
 }
 

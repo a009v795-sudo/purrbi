@@ -349,8 +349,10 @@ any photo is asked for:
   run's last four checks are not spent on a search's unlikely pages (address scoring 0 or less): they are held back and
   named, and checked after the searches when none of them found the product, with the checks and reads left (2.9.3, test A
   on 2.9.2: two document pages and a digits-of-pi search took the checks the search by name's marketplace pages needed;
-  review: a follow-up search with no results must not leave them unchecked). When the time limit ends a search's checks,
-  the pages held back are named under the time limit, since no later search can start either. The ranking only chooses which
+  review: a follow-up search with no results must not leave them unchecked). A search that stops at a page showing the
+  barcode holds its remaining pages too, so they are checked later if that page's read gives nothing (a price list).
+  Each search's held pages are checked as that search's, so its two-per-site cap stays per search. When the time limit
+  ends a search's checks, the pages held back are named under the time limit, since no later search can start either. The ranking only chooses which
   pages Purrbi fetches: a page is used only when Purrbi finds the barcode on it. (2.9.0 briefly gave each search a share
   of eight and carried the rest; review found it could drop carried pages and start a paid search before free checks,
   so 2.9.1 checks each search's own pages in order instead.)
