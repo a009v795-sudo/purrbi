@@ -10,82 +10,76 @@ export function hasOtherScriptLetters(text: string | null | undefined): boolean 
 }
 
 const OTHER = /(?=\p{L})[^\p{Script=Latin}\p{Script=Common}\p{Script=Inherited}]/u;
-const LATIN_OR_DIGIT = /[\p{Script=Latin}0-9]/u;
 
 /**
- * A text made comparable before any other change: apostrophe look-alikes become "'" ("Hill’s"), symbols and modifier
- * letters become spaces (™, ®, ᵀᴹ would otherwise turn into "TM" or "R": "IAMS™" stays "IAMS"), then full-width letters
- * and digits become plain ones (NFKC).
+ * A text made comparable before any other change: invisible format characters (soft hyphen, zero-width space) go,
+ * apostrophe look-alikes become "'" ("Hill’s"), symbols and modifier letters become spaces (™, ®, ᵀᴹ would otherwise
+ * turn into "TM" or "R": "IAMS™" stays "IAMS"), then full-width letters and digits become plain ones (NFKC).
  */
 function prepared(text: string): string {
   return text
-    .replace(/[‘’ʼʹʻ´`′]/g, "'")
+    .replace(/\p{Cf}/gu, '')
+    .replace(/[‘’‛ʼʹʻʽˈ´`′]/g, "'")
     .replace(/[\p{So}\p{Lm}]/gu, ' ')
     .normalize('NFKC');
 }
 
-/** The text's Latin letters, ASCII digits, spaces and & ' . -, tidied: a segment's search words. */
+/** The text's Latin letters, ASCII digits, spaces and & ' . -, tidied, without a trademark mark written as a word. */
 function latinWords(text: string): string {
   return text
     .replace(/[^\p{Script=Latin}0-9\s&'.-]/gu, ' ')
+    .replace(/(?<![\p{L}\p{N}])(?:TM|SM)(?![\p{L}\p{N}])/gu, ' ')
     .replace(/\s+/g, ' ')
     .replace(/^[\s&'.-]+|[\s&'.-]+$/g, '')
     .trim();
 }
 
-/** The brand's Latin-script characters as openFDA's search takes them (see `latinBrand` for which words are the brand). */
+/** The brand's Latin-script characters as openFDA's search takes them (see `latinBrand` for when they are its name). */
 export function searchableBrand(brand: string): string {
   return latinWords(prepared(brand));
 }
 
-/** A bracketed trademark mark written in letters: "(TM)", "(R)", "(SM)", "(C)". */
-const MARK = /^(?:tm|r|sm|c)$/i;
+/** A bracketed trademark mark written in letters: "(TM)", "(R)", "(SM)", "(C)", and the French "(MD)", "(MC)". */
+const MARK = /[(（［\[]\s*(?:tm|r|sm|c|md|mc)\s*[)）］\]]/giu;
+const OPEN = /[(（【\[「『〈《{［｛]/u;
+const CLOSE = /[)）】\]」』〉》}］｝]/u;
 
 /**
- * The brand's Latin-script name, from the parts of it that are written in Latin script alone; empty when it has none.
- * Brackets separate a name from its reading or gloss: "WELLNESS（ウェルネス）", "K9 Natural（K9ナチュラル）" and
- * "K9ナチュラル（K9 Natural）" give "WELLNESS" and "K9 Natural" (never "K9 Natural K9"), "Hill's（ヒルズ）Science Diet"
- * gives "Hill's Science Diet". Text outside brackets is used when all of it is Latin; otherwise a bracketed Latin part.
- * Without brackets, Latin words beside another script's name count only when no word mixes the two scripts and they
- * are at least three letters and half of the letters ("WELLNESS ウェルネス" gives "WELLNESS"; "ピュリナ ONE" and
- * "ロイヤルカナン JP" give nothing). openFDA's records are in English and it refuses another script's characters (test B,
- * 2026-11-01, HTTP 400 for "WELLNESS（ウェルネス）"); a wrong word would find nothing and say "none found".
+ * The brand's Latin-script name when it is unambiguous; empty otherwise. A brand written in Latin script alone is its own
+ * name ("Hill’s Science Diet", "IAMS™", "IAMS(TM)", "Café Nature"). A brand mixing scripts gives its name only in one
+ * form: the Latin name with its reading or gloss in one pair of brackets after it ("WELLNESS（ウェルネス）", "K9 Natural
+ * （K9ナチュラル）", "1st Choice（ファーストチョイス）"). Any other mix gives nothing ("ピュリナ ONE", "ウェルネス コア（CORE）",
+ * "シーバ（Sheba）（Mars Japan）"): picking Latin words out of it may search words that are not the brand's, which find
+ * nothing and say "none found" (review of research 2.9.4, 68 such strings). openFDA's records are in English and it
+ * refuses another script's characters (test B, 2026-11-01, HTTP 400 for "WELLNESS（ウェルネス）").
  */
 export function latinBrand(brand: string): string {
-  const text = prepared(brand);
-  // Outside text and bracketed parts, in order.
-  const outside: string[] = [];
-  const inside: string[] = [];
-  let depth = 0;
-  let current = '';
-  for (const ch of text) {
-    if (/[(（【\[「『〈《{［｛]/u.test(ch)) {
-      (depth === 0 ? outside : inside).push(current);
-      current = '';
-      depth++;
-    } else if (/[)）】\]」』〉》}］｝]/u.test(ch) && depth > 0) {
-      (depth === 1 ? inside : inside).push(current);
-      current = '';
-      depth--;
-    } else current += ch;
-  }
-  (depth === 0 ? outside : inside).push(current);
-  const kind = (s: string) => (OTHER.test(s) ? (LATIN_OR_DIGIT.test(s) ? 'mixed' : 'other') : LATIN_OR_DIGIT.test(s) ? 'latin' : 'empty');
-  const parts = (xs: string[]) => xs.map((s) => s.trim()).filter((s) => kind(s) !== 'empty' && !MARK.test(latinWords(s)));
-  const out = parts(outside);
-  const ins = parts(inside);
-  if (out.length && out.every((s) => kind(s) === 'latin')) return latinWords(out.join(' '));
-  const bracketed = ins.filter((s) => kind(s) === 'latin').map(latinWords).sort((a, b) => b.length - a.length);
-  if (bracketed.length && (out.length || ins.some((s) => kind(s) !== 'latin'))) return bracketed[0];
-  if (out.length + ins.length !== 1) return '';
-  // One part mixing scripts, with no brackets: its Latin words when they stand apart and are most of its letters.
-  const [only] = [...out, ...ins];
-  const words = only.split(/\s+/).filter(Boolean);
-  if (words.some((w) => OTHER.test(w) && LATIN_OR_DIGIT.test(w))) return '';
-  const latin = latinWords(words.filter((w) => !OTHER.test(w)).join(' '));
-  const letters = (t: string) => [...t].filter((c) => /\p{L}/u.test(c)).length;
-  const kept = letters(latin);
-  return kept >= 3 && kept * 2 >= letters(only) ? latin : '';
+  const text = prepared(brand).replace(MARK, ' ');
+  if (!OTHER.test(text)) return plainName(text);
+  // Mixed: exactly "<Latin name>（<reading>）".
+  const open = text.search(OPEN);
+  if (open < 0) return '';
+  const rest = text.slice(open + 1);
+  const close = rest.search(CLOSE);
+  if (close < 0) return '';
+  const name = text.slice(0, open);
+  const reading = rest.slice(0, close);
+  const after = rest.slice(close + 1);
+  if (OPEN.test(reading) || after.trim() || OTHER.test(name) || !OTHER.test(reading) || /[,;|/／・]/u.test(name)) return '';
+  return latinWords(name);
+}
+
+/**
+ * A brand written in Latin script alone, as one name: a "Brand:" label left out, only the first of several brands
+ * ("Purina, Nestlé", "Royal Canin | Mars"), and only the text outside brackets ("Pro Plan (Purina)", "Hill's Science Diet
+ * (Adult)"; the first bracketed part when nothing is outside them). A shorter phrase only finds more records, never fewer.
+ */
+function plainName(text: string): string {
+  const first = text.replace(/^\s*(?:brand|marque|marca|marke)\s*:\s*/i, '').split(/[,;|]/)[0];
+  const outside = first.replace(/[(（【\[「『〈《{［｛][^)）】\]」』〉》}］｝]*(?:[)）】\]」』〉》}］｝]|$)/gu, ' ');
+  if (/\p{L}/u.test(latinWords(outside))) return latinWords(outside);
+  const bracketed = /[(（【\[「『〈《{［｛]([^)）】\]」』〉》}］｝(（【\[「『〈《{［｛]*)/u.exec(first)?.[1] ?? '';
+  return /\p{L}/u.test(latinWords(bracketed)) ? latinWords(bracketed) : latinWords(first);
 }
 
 /** Words that only name a company around a brand ("Wellness Pet Company", "Hill's Pet Nutrition, Inc."). */

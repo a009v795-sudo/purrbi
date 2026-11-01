@@ -105,25 +105,29 @@ describe('Open*Facts lookups: a miss says where the record is filed', () => {
     expect(latinBrand('ロイヤルカナン JP')).toBe('');
     expect(latinBrand('Fancy Feast（ファンシーフィースト）')).toBe('Fancy Feast');
     expect(latinBrand('Go!')).toBe('Go');
-    // Re-review: a gloss's Latin letters are never added to the name, a long reading does not hide it, and a trademark
-    // written in letters is no word of it.
+    // Re-reviews: a brand mixing scripts gives its Latin name only as "<Latin name>（<reading>）", never Latin words picked
+    // out of another mix (they may not be the brand's: "ONE", "CORE", "Mars Japan" would find nothing and say "none found").
     expect(latinBrand('K9 Natural（K9ナチュラル）')).toBe('K9 Natural');
-    expect(latinBrand('K9ナチュラル（K9 Natural）')).toBe('K9 Natural');
     expect(latinBrand('Purina ONE（ピュリナONE）')).toBe('Purina ONE');
     expect(latinBrand('GO! SOLUTIONS（GO!ソリューションズ）')).toBe('GO SOLUTIONS');
-    expect(latinBrand("Dr.ハーヴィーズ（Dr. Harvey's）")).toBe("Dr. Harvey's");
     expect(latinBrand('9Lives（9ライブス）')).toBe('9Lives');
     expect(latinBrand('K9 Natural（ケーナインナチュラル）')).toBe('K9 Natural');
     expect(latinBrand('1st Choice（ファーストチョイス）')).toBe('1st Choice');
     expect(latinBrand('Cesar (Цезарь)')).toBe('Cesar');
-    expect(latinBrand("Hill’s（ヒルズ）Science Diet（サイエンス・ダイエット）")).toBe("Hill's Science Diet");
-    expect(latinBrand('【公式】Wellness')).toBe('Wellness');
-    expect(latinBrand('WELLNESS ウェルネス')).toBe('WELLNESS');
+    for (const mixed of ['K9ナチュラル（K9 Natural）', "Dr.ハーヴィーズ（Dr. Harvey's）", 'WELLNESS ウェルネス', 'K9ナチュラル Natural', '퓨리나 ONE', '普瑞纳 ONE', 'ヒルズ JAPAN', '로얄캐닌 Kitten', 'ウェルネス コア（CORE）', 'WELLNESS（ウェルネス）コア（CORE）', 'Purina（ピュリナ）ワン（ONE）', 'シーバ（Sheba）（Mars Japan）', '【SALE】アイムス（IAMS）', 'ロイヤルカナン ROYAL CANIN（FHN）', 'ロイヤルカナン（ROYAL CANIN / Mars）', 'Royal Canin（ロイヤルカナン）France（フランス）', 'ブルーBuffalo', 'ウェルネス'])
+      expect([mixed, latinBrand(mixed)]).toEqual([mixed, '']);
+    // A brand in Latin script alone: its own name, the first of several, outside brackets, without marks.
     expect(latinBrand('IAMS(TM)')).toBe('IAMS');
     expect(latinBrand('IAMSᵀᴹ')).toBe('IAMS');
+    expect(latinBrand('Purina(MD) ONE(MD)')).toBe('Purina ONE');
     expect(latinBrand('365')).toBe('365');
-    expect(latinBrand('ウェルネス')).toBe('');
-    expect(latinBrand('K9ナチュラル Natural')).toBe('');
+    expect(latinBrand('Pro Plan (Purina)')).toBe('Pro Plan');
+    expect(latinBrand("Hill's Science Diet (Adult)")).toBe("Hill's Science Diet");
+    expect(latinBrand('Purina, Nestlé')).toBe('Purina');
+    expect(latinBrand('Royal Canin | Mars')).toBe('Royal Canin');
+    expect(latinBrand('(Royal Canin) (Mars)')).toBe('Royal Canin');
+    expect(latinBrand('Roy\u00adal Canin')).toBe('Royal Canin');
+    expect(latinBrand('Hill‛s Science Diet')).toBe("Hill's Science Diet");
     const urls: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       urls.push(url);

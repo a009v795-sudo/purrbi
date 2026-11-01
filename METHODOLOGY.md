@@ -259,14 +259,15 @@ keeps when the check was made (a cached check shows its original date, never "ch
 enforcement reports by barcode, then brand and product name; FDA's recall page, manufacturers' notices and lot codes are not checked) and
 what a match rests on (`recallMatchBasis`). Recall checking is separate from nutrition completeness: it runs whenever the brand is known.
 openFDA's records are in English, and it refuses a search with another script's characters: the brand is searched by its
-Latin-script name (test B, 2026-11-01, HTTP 400 for "WELLNESS（ウェルネス）"). Brackets separate a name from its reading or
-gloss, and only parts written in Latin script alone are used: "WELLNESS（ウェルネス）", "K9 Natural（K9ナチュラル）",
-"K9ナチュラル（K9 Natural）" and "1st Choice（ファーストチョイス）" are searched as "WELLNESS", "K9 Natural" and "1st Choice",
-never with a gloss's letters added ("K9 Natural K9" would find nothing and say "none found"). Without brackets, Latin words
-beside another script count only when no word mixes the two and they are at least three letters and half of the letters
-("ピュリナ ONE" is not searched as "ONE"). Trademark signs and marks written in letters are dropped first ("IAMS™",
-"IAMS(TM)" stay "IAMS"), and typographic apostrophes stay apostrophes ("Hill’s"). A brand with no Latin name is "not
-checked", said as such. A check that cannot be made (not checked, or openFDA unavailable) never hides the last one's
+Latin-script name (test B, 2026-11-01, HTTP 400 for "WELLNESS（ウェルネス）"), and only when that name is unambiguous: a
+wrong word finds nothing and would say "none found". A brand in Latin script alone is searched by its first name, outside
+brackets ("Pro Plan (Purina)" as "Pro Plan", "Purina, Nestlé" as "Purina"; a shorter phrase only finds more records). A
+brand mixing scripts is searched only as "<Latin name>（<reading>）": "WELLNESS（ウェルネス）", "K9 Natural（K9ナチュラル）"
+and "1st Choice（ファーストチョイス）" as "WELLNESS", "K9 Natural" and "1st Choice". Any other mix is not searched, since
+its Latin words may not be the brand ("퓨리나 ONE", "ウェルネス コア（CORE）", "シーバ（Sheba）（Mars Japan）": reviews of 2.9.4
+found 68 such strings). Trademark signs and marks written in letters are dropped first ("IAMS™", "IAMS(TM)" stay "IAMS"),
+and typographic apostrophes stay apostrophes ("Hill’s"). A brand with no unambiguous Latin name is "not checked", said as
+such. A check that cannot be made (not checked, or openFDA unavailable) never hides the last one's
 result: the stored result is shown with its own date, and the evidence notes say why today's check was not made.
 
 ## 9. Evidence labels and label photos
