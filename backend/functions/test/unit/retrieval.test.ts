@@ -1391,3 +1391,41 @@ describe('research 2.9.3: the name a page listing several variants gives', () =>
   });
 });
 
+// Test A and B on research 2.9.3 (2026-11-01, traces f825750f-792 and 41766fa1-0fb): a shop's page was checked three times
+// under addresses that differ only in tracking keys; a Japanese shop's brand stayed beside the manufacturer's name.
+describe('research 2.9.3: one page under tracking keys, and the manufacturer’s brand with its name', () => {
+  const plain = '<html><head><title>Page</title></head><body><h1>Something else</h1></body></html>';
+  it('result addresses that differ only in tracking keys are one page, checked once; other keys stay', async () => {
+    const fetched: string[] = [];
+    const page = 'https://www.shop.example/whole-paws-salmon-pate';
+    const results = [`${page}?srsltid=AfmBOoq1`, `${page}?srsltid=AfmBOoq2&utm_source=x`, `${page}?gclid=abc`, page, 'https://www.other.example/item?id=5&utm_medium=y'];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url === 'https://api.openai.com/v1/responses')
+        return new Response(JSON.stringify({ output: [{ type: 'web_search_call', action: { type: 'search', queries: ['"099482481087"', '"0099482481087"'], sources: results.map((u) => ({ type: 'url', url: u })) } }, { type: 'message', content: [{ type: 'output_text', text: JSON.stringify(modelAnswer({ found: false })), annotations: [] }] }] }), { status: 200 });
+      if (!url.endsWith('.js')) fetched.push(url);
+      return new Response(plain, { status: 200 });
+    }));
+    await researchProduct({ apiKey: 'k', model: 'gpt-5-mini', gtin14: '00099482481087', barcode: '099482481087', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-11-01T00:00:00Z') });
+    expect(fetched.filter((u) => u.startsWith(page))).toEqual([page]);
+    expect(fetched).toContain('https://www.other.example/item?id=5');
+  });
+  it('the manufacturer’s brand in Latin script comes with its name, in place of a first page’s brand in another script', async () => {
+    const japanese = `<html><head><title>WELLNESS（ウェルネス） シグネチャーセレクト ツナ＆サーモン 79g</title></head><body><h1>WELLNESS（ウェルネス） シグネチャーセレクト ツナ＆サーモン 79g</h1>
+      <p>JAN 076344060048</p><p>原材料 Ingredients: ${WELLNESS_INGREDIENTS.replace('Choline Chloride, Minerals [', 'Choline Chloride], Minerals [')}</p></body></html>`;
+    const answers = [
+      modelAnswer({ product_name: 'WELLNESS（ウェルネス） シグネチャーセレクト ツナ＆サーモン 79g', brand: 'WELLNESS（ウェルネス）', ingredients_verbatim: WELLNESS_INGREDIENTS.replace('Choline Chloride, Minerals [', 'Choline Chloride], Minerals ['), source_urls: ['https://www.petshop.example.jp/g/076344060048'] }),
+      modelAnswer({ product_name: 'Wellness CORE Signature Selects Flaked Skipjack Tuna & Wild Salmon Entrée in Broth', brand: 'Wellness', intended_for: 'cats', source_urls: ['https://www.wellnesspetfood.com/product-catalog/wellness-core-signature-selects-flaked-skipjack-tuna-wild-salmon-in-broth/'] }),
+    ];
+    let call = 0;
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.startsWith('https://api.openai.com/')) return openAi(answers[Math.min(call++, answers.length - 1)]);
+      if (url.includes('petshop.example.jp')) return new Response(japanese, { status: 200 });
+      if (url.includes('nutrient-profile.pdf')) return new Response(pdfWith(NUTRIENT_PROFILE_LINES), { status: 200, headers: { 'content-type': 'application/pdf' } });
+      return new Response(MANUFACTURER_PAGE, { status: 200 });
+    }));
+    const r = await researchProduct({ apiKey: 'k', model: 'm', gtin14: '00076344060048', barcode: '076344060048', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-11-01T00:00:00Z') });
+    expect(r.facts?.productName).toMatchObject({ value: expect.stringMatching(/^Wellness CORE Signature Selects/), source: { sourceType: 'manufacturer' } });
+    expect(r.facts?.brand).toMatchObject({ value: 'Wellness', source: { sourceType: 'manufacturer' } });
+  });
+});
+

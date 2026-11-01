@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { normalizeBarcode } from '../../src/domain/barcode';
 import { classifyScope, feedMarkers } from '../../src/domain/scope';
 import { lookupOpenFacts, openFactsToFacts } from '../../src/sources/openFacts';
-import { checkRecalls } from '../../src/sources/openfda';
+import { checkRecalls, searchableBrand } from '../../src/sources/openfda';
 import { compareRecipes } from '../../src/sources/research';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -70,6 +70,23 @@ describe('Open*Facts lookups: a miss says where the record is filed', () => {
     await expect(lookupOpenFacts('opff', barcode, 'test', new Date('2026-10-29T00:00:00Z'))).rejects.toMatchObject({ kind: 'parse' });
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ hello: 'world' }), { status: 200 })));
     await expect(lookupOpenFacts('opff', barcode, 'test', new Date('2026-10-29T00:00:00Z'))).rejects.toMatchObject({ kind: 'parse' });
+  });
+  // Test B, 2026-11-01: openFDA refused the search for an import listing's brand ("Search not supported", HTTP 400).
+  it('searches recalls by the brand’s Latin-script words, and says so when it has none', async () => {
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      urls.push(url);
+      return new Response(JSON.stringify({ results: [] }), { status: 200 });
+    }));
+    const r = await checkRecalls({ brand: 'WELLNESS（ウェルネス）', productName: 'TEST FIXTURE', gtin14: '00076344886570' }, new Date('2026-11-01T00:00:00Z'));
+    expect(r.status).toBe('none_found');
+    expect(urls).toHaveLength(1);
+    expect(decodeURIComponent(new URL(urls[0]).searchParams.get('search') ?? '')).toBe('(recalling_firm:"WELLNESS" product_description:"WELLNESS")');
+    expect(searchableBrand("Hill's Science Diet® (US)")).toBe("Hill's Science Diet US");
+    expect(searchableBrand('Café Nature')).toBe('Café Nature');
+    const none = await checkRecalls({ brand: 'ウェルネス', productName: 'TEST FIXTURE', gtin14: '00076344886570' }, new Date('2026-11-01T00:00:00Z'));
+    expect(none).toMatchObject({ status: 'not_checked', summary: 'The brand is known only in another script, so FDA recall records (in English) could not be searched.' });
+    expect(urls).toHaveLength(1);
   });
   it('a recall check that got an empty answer failed; it is not "none found"', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 200 })));

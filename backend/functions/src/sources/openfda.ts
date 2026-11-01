@@ -22,6 +22,15 @@ interface EnforcementResult {
   recalling_firm?: string;
 }
 
+/**
+ * The brand as openFDA's search takes it: its Latin-script words (with digits and & ' . -). openFDA's records are in
+ * English, and a query with another script's characters is refused (test B, 2026-11-01: HTTP 400 "Search not supported"
+ * for "WELLNESS（ウェルネス）", an import listing's brand).
+ */
+export function searchableBrand(brand: string): string {
+  return brand.normalize('NFKC').replace(/[^\p{Script=Latin}\p{N}\s&'.-]/gu, ' ').replace(/\s+/g, ' ').trim();
+}
+
 function quote(term: string): string {
   return `"${term.replace(/["\\]/g, ' ').replace(/\s+/g, ' ').trim()}"`;
 }
@@ -47,7 +56,10 @@ export async function checkRecalls(
   if (!input.brand) {
     return { status: 'not_checked', summary: 'The brand is unknown, so FDA recall records could not be searched.', checkedAt, source: null, records: [] };
   }
-  const brand = input.brand.trim();
+  const brand = searchableBrand(input.brand);
+  if (!/\p{L}/u.test(brand)) {
+    return { status: 'not_checked', summary: 'The brand is known only in another script, so FDA recall records (in English) could not be searched.', checkedAt, source: null, records: [] };
+  }
   const search = `(recalling_firm:${quote(brand)}+product_description:${quote(brand)})`;
   const url = `${ENDPOINT}?search=${encodeURIComponent(search).replace(/%2B/g, '+')}&limit=100&sort=report_date:desc${apiKey ? `&api_key=${encodeURIComponent(apiKey)}` : ''}`;
   const source: SourceRef = {

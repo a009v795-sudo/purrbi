@@ -1,7 +1,7 @@
 # Purrbi assessment methodology
 
 Version: `assessment-3.0.0` overall, made of `purrbi-score-3.0.0` (score), `scope-3.0.0` (classification), `verdict-2.2.0` (verdict),
-`kb-2026-10-28-draft` (ingredient notes), `label-extract-2.3.0` (label reader), `research-2.9.3` (web research), `explain-2.0.0` (claim-checked explanations).
+`kb-2026-10-28-draft` (ingredient notes), `label-extract-2.3.0` (label reader), `research-2.9.4` (web research), `explain-2.0.0` (claim-checked explanations).
 A saved result records `assessmentVersion` and its parts (`scoreVersion`, `kbVersion`, `scopeVersion`); the shared product record its
 classification version; each fact read from a label, page or document its reader's version; each explanation its own. When the app opens
 a result saved under an older `assessmentVersion` it asks for a re-check (section 10), so a known bad classification is corrected without
@@ -258,6 +258,9 @@ brand history and "not checked" use neutral icons (no green badge): no match in 
 keeps when the check was made (a cached check shows its original date, never "checked" again), what was searched (`recallCoverage`: openFDA
 enforcement reports by barcode, then brand and product name; FDA's recall page, manufacturers' notices and lot codes are not checked) and
 what a match rests on (`recallMatchBasis`). Recall checking is separate from nutrition completeness: it runs whenever the brand is known.
+openFDA's records are in English, and it refuses a search with another script's characters: the brand is searched by its
+Latin-script words ("WELLNESS（ウェルネス）", an import listing's brand, as "WELLNESS"; test B, 2026-11-01, HTTP 400), and a brand
+written only in another script is "not checked", said as such.
 
 ## 9. Evidence labels and label photos
 
@@ -305,7 +308,7 @@ A result that uses the owner's photo before it is tied to the barcode says "Labe
 
 ## 10. Retrieval before photos, and keeping results current
 
-**Research `research-2.9.3`** (`sources/research.ts`, `pageEvidence.ts`). When the pet databases lack something, research looks for it before
+**Research `research-2.9.4`** (`sources/research.ts`, `pageEvidence.ts`). When the pet databases lack something, research looks for it before
 any photo is asked for:
 - The research model is a setting (`OPENAI_RESEARCH_MODEL`; development uses `gpt-5-mini` since 2026-10-31, `gpt-4.1-mini` before).
   Each run records the model it used, and another model is a new method: a product still missing information is searched again with
@@ -367,7 +370,10 @@ any photo is asked for:
   photo's or a manufacturer's name is never replaced; the brand gives way only when the name shown is then in Latin
   script too. A replacement is not a fill: the evidence note says which page's name and brand are shown instead of which
   page's, and the source list names that page. A manufacturer's page that lists several variants' barcodes never
-  renames a product in research either.
+  renames a product in research either. With the manufacturer's name, its brand in Latin script replaces a first page's
+  brand written with another script (2.9.4).
+- A result address that differs from another only by tracking keys (`?srsltid=`, `?gclid=`, `utm_…`) is the same page:
+  it is checked once (2.9.4, test A on 2.9.3: a shop's page was checked three times).
 - The trace names the result pages left out of the checks: documents and pages without a secure address with their
   addresses (once a run), the others by site with the reason (eight a run, two per site in a search, or the run's checks
   or reads already used).
