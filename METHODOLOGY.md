@@ -211,16 +211,20 @@ While the product is unresolved, only recall and documented-concern cautions are
   - uses any other number that is not stated in the score, its basis, the highlights or the unresolved items;
   - gives an unscored product a number out of 100;
   - omits the most serious caution;
-  - says the product lacks, has no, omits or does not show one of the items the assessment lists as missing, which Purrbi
-    has only not found (verdict 2.2.0, test B: "it lacks a nutritional adequacy statement"; also "without a feeding
-    statement", "there is no adequacy statement", "doesn't show calories", "isn't labeled complete and balanced"). Said
-    of Purrbi's own search it passes: "Purrbi has no feeding statement for it yet", "no adequacy statement was found",
-    "the retailer's listing has no adequacy statement";
+  - says the product lacks, has no, omits or does not show its feeding or adequacy statement, analysis, ingredient list,
+    calorie statement or nutrition information: Purrbi only knows what it has or has not found (verdict 2.2.0, test B: "it
+    lacks a nutritional adequacy statement"; also "without a feeding statement", "there is no adequacy statement",
+    "doesn't show calories"). This holds whatever the score still needs: a complete food's calories and a treat's
+    analysis can be "not found yet" (the score's basis says so) without being missing for the score. "Isn't labeled
+    complete and balanced" is refused only while the adequacy statement is not found (a treat labeled for intermittent
+    feeding truly isn't). Said of Purrbi's own search it passes: "Purrbi has no feeding statement for it yet", "no
+    adequacy statement was found", "the retailer's listing has no adequacy statement";
   - states who the product is for as fact when only a retailer's listing says so (the model is told whether the species
     is confirmed): made, formulated, designed or intended for cats (also "for adult cats", "for use in cats", "made for
-    your cat"), a food for cats, an unhedged "for cats", this cat food. A hedge or attribution passes ("a retailer lists it
-    for cats", "Purrbi couldn't confirm it is made for cats", "according to a retailer's listing"); the product's own name
-    is left out of the check (a retailer's title "… Cat Food" is the name, not Purrbi's claim).
+    your cat"), a food for cats, an unhedged "for cats", this cat food. A hedge or attribution passes only right in front
+    of the claim ("a retailer lists it for cats", "Purrbi couldn't confirm it is made for cats", "it may not be for dogs")
+    or right after it ("…, according to a retailer's listing"): "a retailer lists it, and it is made for cats" is refused.
+    The product's own name is left out of the check (a retailer's title "… Cat Food" is the name, not Purrbi's claim).
 - **Who it is for, unconfirmed.** When only a retailer's listing says who the product is for, the personal finding says
   "Listed for cats by a retailer’s listing; Purrbi couldn’t confirm it from the package or the maker." It is information,
   not a positive, so no "Made for cats" highlight is shown. (Results saved before this keep their wording until the product

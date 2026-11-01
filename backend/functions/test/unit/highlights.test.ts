@@ -216,4 +216,68 @@ describe('who the product is for and what is missing, said as Purrbi knows it (t
     // The rule-based verdict passes both checks.
     for (const input of [base, catFoodName, otherMissing]) expect(checkVerdict(ruleVerdict(input), input)).toBeNull();
   });
+  // Re-review: a hedge counts only right in front of the claim; what the basis says is not found yet counts as not found.
+  it('a hedge counts only right in front of the claim, and items the score’s basis has not found are checked too', () => {
+    const base = {
+      product: { name: 'TEST FIXTURE Gravies', brand: 'TESTBRAND', species: 'cat', category: 'complete_food', speciesConfirmed: false, speciesBasis: 'retailer listing' },
+      assessment: { score: null as number | null, provisional: false, label: 'Information incomplete', basis: '', withheldReason: '', missing: 'nutritional adequacy ("complete and balanced") statement' },
+      pet: { name: 'your cat', species: 'cat', fit: 'incomplete', headline: '' },
+      positives: [{ title: 'Main ingredients named by source', detail: 'The first 5 main ingredients each say which animal or plant they come from.', value: '' }],
+      cautions: [],
+      unresolved: [],
+    };
+    const dog = { ...base, pet: { name: 'your dog', species: 'dog', fit: 'incomplete', headline: '' } };
+    const scored = (basis: string, category = 'complete_food') => ({ ...base, product: { ...base.product, category, speciesConfirmed: true }, assessment: { ...base.assessment, score: 91, label: 'Strong', basis, missing: '' } });
+    const caloriesNotFound = scored('Scored on the parts found (90 of 100 points’ worth); calorie content statement, further guarantees not found yet.');
+    const treatAnalysisNotFound = scored('Scored on the parts found (70 of 100 points’ worth); feeding statement, guaranteed analysis (protein, fat, fiber) not found yet.', 'treat');
+    const everythingFound = scored('Scored on every part Purrbi uses for this product type.', 'treat');
+    const tail = ' Its main ingredients are named by source, and the details and their sources are listed below for you to check.';
+    const LACKS = 'says the product lacks what Purrbi has not found';
+    const SPECIES = 'states who it is for as confirmed when only a retailer lists it';
+    const table: [string | null, typeof base, string][] = [
+      // A hedge word earlier in the sentence does not make the claim a hedge.
+      [SPECIES, base, `A retailer lists it and it is made for cats.${tail}`],
+      [SPECIES, base, `It is listed by a retailer and is formulated for cats.${tail}`],
+      [SPECIES, base, `Purrbi checked the listing and says it is made for cats.${tail}`],
+      [SPECIES, base, `Your cat may enjoy it since it is made for cats.${tail}`],
+      [SPECIES, base, `It isn’t a treat but a food made for cats.${tail}`],
+      [SPECIES, base, `It is made for cats.${tail}`],
+      // Right in front of it, or an attribution right after it.
+      [null, base, `A retailer lists it for cats.${tail}`],
+      [null, base, `It is listed for cats by a retailer.${tail}`],
+      [null, base, `Only a retailer’s listing says it is for cats.${tail}`],
+      [null, base, `It is made for cats, according to a retailer’s listing.${tail}`],
+      [null, dog, `Purrbi couldn’t confirm whether it is also meant for dogs.${tail}`],
+      [null, dog, `It isn’t confirmed as made for dogs.${tail}`],
+      [null, dog, `It is not confirmed to be for dogs.${tail}`],
+      [null, dog, `It is unclear whether it is also for dogs.${tail}`],
+      [null, dog, `It may not be for dogs.${tail}`],
+      // A complete food's calories and a treat's analysis, not found yet though not missing for the score.
+      [LACKS, caloriesNotFound, 'Purrbi scores it 91/100 (strong), but it doesn’t list its calorie content, so check portions for your cat; its main ingredients are named by source.'],
+      [LACKS, caloriesNotFound, 'Purrbi scores it 91/100 (strong), but the package doesn’t list how many calories it has; its main ingredients are named by source for your cat.'],
+      [LACKS, caloriesNotFound, 'Purrbi scores it 91/100 (strong), but its calorie content is missing, so check portions carefully for your cat; its main ingredients are named by source, as listed below.'],
+      [null, caloriesNotFound, 'Purrbi scores it 91/100 (strong); Purrbi has not found its calorie content yet, so check portions for your cat. Its main ingredients are named by source.'],
+      [LACKS, treatAnalysisNotFound, 'Purrbi scores this treat 91/100 (strong), but it has no guaranteed analysis, so check it before feeding your cat; its main ingredients are named by source.'],
+      // A treat labeled for intermittent feeding truly isn't labeled complete and balanced.
+      [null, everythingFound, 'Purrbi scores this treat 91/100 (strong); it isn’t labeled complete and balanced, as it is for intermittent feeding, and its main ingredients are named by source.'],
+      [LACKS, base, `It lacks clear nutritional information, so it is not rated for your cat.${tail}`],
+      [LACKS, base, `Its nutritional adequacy statement is missing from the label, so it is not rated for your cat.${tail}`],
+    ];
+    for (const [expected, input, text] of table) expect([text, checkVerdict(text, input)]).toEqual([text, expected]);
+    // Through the pipeline: a dog and a product only a retailer lists for cats; the rule-based verdict passes the checks.
+    const f = facts();
+    const scope = { ...scopeOf(f), speciesEvidence: { set: ['cat' as const], confirmed: false, basis: 'retailer_listing' as const, disputed: false, note: '' } };
+    const general = assessGeneral(f, scope);
+    const rex = pet({ species: 'dog', name: 'Rex' });
+    const personal = personalize(rex, f, scope, general, noRecall, NOW);
+    const highlights = buildHighlights({ facts: f, scope, general, personal, recall: noRecall });
+    expect(highlights.cautions.some((h) => /couldn’t confirm whether it is also for dogs/.test(h.detail))).toBe(true);
+    const v = verdictInput({
+      productName: 'TEST FIXTURE Chicken Recipe', brand: 'TESTBRAND', species: scope.species, speciesConfirmed: false, speciesBasis: 'retailer listing', category: general.category,
+      score: general.score, provisional: general.scoreProvisional, scoreLabel: general.scoreLabel, scoreBasis: general.scoreBasis, withheldReason: general.scoreWithheldReason ?? '', missing: general.missingForScore,
+      coverage: general.scoreCoverage, low: general.scoreMinPossible ?? null, high: general.scoreMaxPossible, pet: { name: rex.name, species: rex.species, fit: personal.state, headline: personal.headline },
+      positives: highlights.positives, cautions: highlights.cautions, unresolved: personal.unresolved,
+    });
+    expect(checkVerdict(ruleVerdict(v), v)).toBeNull();
+  });
 });

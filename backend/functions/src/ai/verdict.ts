@@ -161,13 +161,23 @@ export function ruleVerdict(input: VerdictInput): string {
 const FORBIDDEN =
   /\b(safe|safer|safest|ideal|perfect|healthy|healthier|healthiest|nutritious|wholesome|great|excellent|outstanding|amazing|superb|superior|premium|top[- ]quality|high[- ]quality|quality food|best|recommended?|recommends|guarantee[sd]? (?:that|it|this|your|to|safe)|no concerns?|risk[- ]free|cures?|prevents?|treats? (?:allerg\w*|disease\w*|illness\w*)|heals?|vet[- ]approved|clinically)\b/i;
 
-// The words that name each missing item (the assessment's own list), as a sentence may refer to it.
-const MISSING_WORDS: [RegExp, string][] = [
-  [/adequacy|complete and balanced/i, '(?:nutritional\\s+)?adequacy(?:\\s+statement)?|complete[- ]and[- ]balanced(?:\\s+(?:statement|claim))?|feeding\\s+statement|aafco\\s+statement'],
-  [/analysis/i, '(?:guaranteed\\s+)?analysis'],
-  [/ingredient/i, 'ingredients?\\s+list|list\\s+of\\s+ingredients'],
-  [/calorie/i, 'calori\\w*(?:\\s+(?:content|statement|count))?'],
+// The items a sentence may wrongly say the product lacks. Purrbi never knows that a product has no feeding statement,
+// analysis, ingredient list or calorie statement: it has or has not found them. So these are always checked, whatever
+// the assessment lists as missing (a complete food's calories and a treat's analysis can be "not found yet" without being
+// missing for the score). "Complete and balanced" only while the adequacy statement is not found: a treat labeled for
+// intermittent feeding truly is not labeled complete and balanced (review of verdict 2.2.0).
+const LACKABLE = [
+  '(?:nutritional\\s+)?adequacy(?:\\s+statement)?',
+  'feeding\\s+statement',
+  'aafco\\s+statement',
+  '(?:guaranteed\\s+)?analysis',
+  '(?:further\\s+)?guarantees',
+  'ingredients?\\s+list',
+  'list\\s+of\\s+ingredients',
+  'calori\\w*(?:\\s+(?:content|statement|count))?',
+  'nutrition(?:al)?\\s+(?:information|details|facts|panel)',
 ];
+const COMPLETE_AND_BALANCED = 'complete[- ]and[- ]balanced(?:\\s+(?:statement|claim))?';
 
 // Where one clause of a sentence ends: a full stop (not a decimal point), semicolon, comma, colon, dash or bracket.
 const CLAUSE_END = /[;,:—–!?()]|\.(?!\d)/g;
@@ -192,24 +202,33 @@ const PURRBI_SIDE = /\b(?:purrbi(?:[’']s)?|records?|information|data|search(?:
 const PRODUCT_SIDE = /\b(?:package|packaging|packet|labels?|bags?|pouch(?:es)?|tins?|box(?:es)?|cans|product)\b|\bthe\s+can\b/i;
 
 /**
- * A sentence saying the product lacks, has no or omits one of the items the assessment lists as missing (which Purrbi
- * has only not found). The item must be what the wording refers to, and the statement must be about the product:
+ * A sentence saying the product lacks, has no, omits or does not show one of the label items (which Purrbi has only not
+ * found, or has found). The item must be what the wording refers to, and the statement must be about the product:
  * "Purrbi has no feeding statement for it yet", "the listing has no adequacy statement" and "no adequacy statement was
  * found" are about Purrbi's search and pass (test B; review of verdict 2.2.0).
  */
-function saysProductLacks(text: string, missing: string): boolean {
-  const terms = MISSING_WORDS.filter(([item]) => item.test(missing)).map(([, words]) => words);
-  if (!terms.length) return false;
-  const item = `(?:${terms.join('|')})`;
-  const lead = '(?:(?:a|an|the|its|any|clear|full|printed|nutritional|guaranteed)\\s+){0,3}';
+function saysProductLacks(text: string, assessment: { missing: string; basis: string }): boolean {
+  // What Purrbi has not found: the score's missing items and the parts its basis names as not found yet.
+  const notFound = `${assessment.missing} ${/;\s*([^.;]*?)\s+not found yet/.exec(assessment.basis ?? '')?.[1] ?? ''}`;
+  const adequacyNotFound = /adequacy|complete and balanced|feeding statement/i.test(notFound);
+  const item = `(?:${[...LACKABLE, ...(adequacyNotFound ? [COMPLETE_AND_BALANCED] : [])].join('|')})`;
+  const lead = '(?:(?:a|an|the|its|any|clear|full|printed|nutritional|guaranteed|complete)\\s+){0,3}';
   const negations = [
     `\\b(?:lacks?|lacking|without|omits?|omitting)\\s+${lead}${item}\\b`,
     `\\b(?:has|have|had|with|there(?:[’']s|\\s+is|\\s+are|\\s+was)|shows?|gives?|carries|lists)\\s+no\\s+${lead}${item}\\b`,
     `\\b(?:no|missing)\\s+${lead}${item}\\b`,
-    `\\b${item}\\s+(?:is|are)\\s+(?:missing|absent|not\\s+(?:given|listed|printed|stated|shown|included|provided))\\b`,
+    `\\b${item}\\s+(?:is|are)\\s+(?:missing|absent|lacking|not\\s+(?:given|listed|printed|stated|shown|included|provided))\\b`,
     `\\b(?:doesn[’']t|does\\s+not|don[’']t|do\\s+not|didn[’']t|did\\s+not)\\s+(?:have|include|carry|state|list|show|provide|give|mention|contain|print|bear)\\s+${lead}${item}\\b`,
-    /adequacy|complete and balanced/i.test(missing) ? `\\b(?:isn[’']t|is\\s+not)\\s+(?:labell?ed\\s+|stated\\s+as\\s+|described\\s+as\\s+|shown\\s+as\\s+)?complete[- ]and[- ]balanced\\b` : '',
+    adequacyNotFound ? `\\b(?:isn[’']t|is\\s+not)\\s+(?:labell?ed\\s+|stated\\s+as\\s+|described\\s+as\\s+|shown\\s+as\\s+)?complete[- ]and[- ]balanced\\b` : '',
   ].filter(Boolean);
+  // Looser wording, only for what Purrbi has not found: the item a few words on ("doesn't list how many calories it has").
+  const loose = [
+    adequacyNotFound ? 'adequacy|complete[- ]and[- ]balanced|feeding\\s+statement|aafco' : '',
+    /analysis|guarantee/i.test(notFound) ? 'analysis|guarantee\\w*' : '',
+    /ingredient/i.test(notFound) ? 'ingredients?' : '',
+    /calori/i.test(notFound) ? 'calori\\w*' : '',
+  ].filter(Boolean);
+  if (loose.length) negations.push(`\\b(?:lacks?|lacking|has\\s+no|have\\s+no|(?:doesn[’']t|does\\s+not|don[’']t|do\\s+not)\\s+(?:have|include|carry|state|list|show|provide|give|mention|print|say)|(?:is|are)\\s+missing|missing)\\b[^.;,:]{0,30}?\\b(?:${loose.join('|')})\\b`);
   for (const source of negations) {
     for (const m of text.matchAll(new RegExp(source, 'gi'))) {
       const at = m.index ?? 0;
@@ -217,8 +236,8 @@ function saysProductLacks(text: string, missing: string): boolean {
       const rest = clauseAfter(text, at + m[0].length);
       // About Purrbi's record or the pages it read, not the product.
       if (PURRBI_SIDE.test(subject) && !PRODUCT_SIDE.test(subject)) continue;
-      // "… was found", "… yet", "on the page Purrbi found": about the search.
-      if (/\b(?:found|find|yet|so\s+far|located|seen)\b/i.test(rest)) continue;
+      // "… was found", "… yet", "that Purrbi could check", "on the page Purrbi read": about the search.
+      if (/\b(?:found|find|yet|so\s+far|located|seen|purrbi)\b/i.test(rest)) continue;
       if (/^\s*(?:on|in|from)\s+(?:the|its|a|any|this|these)\s+(?:[\p{L}’']+\s+){0,2}(?:page|pages|listing|listings|record|source|sources)\b/iu.test(rest)) continue;
       return true;
     }
@@ -228,15 +247,32 @@ function saysProductLacks(text: string, missing: string): boolean {
 
 const SPECIES_NOUN = '(?:cats?|dogs?|kittens?|pupp(?:y|ies)|felines?|canines?)';
 const SPECIES_MODS = '(?:(?:all|adult|senior|indoor|outdoor|small|large|young|mature|older|growing|active|picky|fussy)\\s+){0,2}';
-// Who a claim leaves open or attributes: a retailer lists it, Purrbi couldn't confirm it, whether it is.
-const SPECIES_HEDGE = /\b(?:retailers?|listings?|lists?|listed|sellers?|shops?|stores?|confirm\w*|whether|not|unconfirmed|unclear|uncertain|may|might|could|possibly|probably|likely|appears?|seems?|says?|said|claims?|claimed|describe[sd]?)\b|n[’']t\b/i;
+const THIS_ONE = String.raw`(?:it|this(?:\s+[\p{L}-]+)?|the\s+product)`;
+/**
+ * A hedge or attribution directly in front of a claim about who the product is for: "a retailer lists it (as)", "a
+ * retailer's listing says it is", "listed (by a retailer) (as)", "Purrbi couldn't confirm (whether) it is (also)", "it
+ * isn't confirmed as", "unclear whether it is", "it may (not) be". Only right in front: "a retailer lists it and it is
+ * made for cats", "your cat may enjoy it since it is made for cats" state it (review of verdict 2.2.0).
+ */
+const SPECIES_HEDGE_BEFORE = new RegExp(
+  `(?:${[
+    String.raw`\b(?:retailers?|listings?|sellers?|shops?|stores?)(?:[’']s)?(?:\s+(?:own\s+)?listings?)?\s+(?:lists?|listed|says?|said|describes?|described|calls?|called|shows?|showed)(?:\s+(?:that\s+)?${THIS_ONE})?(?:\s+(?:is|as))?`,
+    String.raw`\blisted(?:\s+by\s+(?:a|the|one)\s+(?:[\p{L}-]+\s+)?(?:retailers?|sellers?|shops?|stores?))?(?:\s+as)?`,
+    String.raw`\b(?:couldn[’']t|could\s+not|cannot|can[’']t|can\s+not|isn[’']t|is\s+not|aren[’']t|are\s+not|not|unable\s+to|hasn[’']t|has\s+not|haven[’']t|have\s+not)(?:\s+yet)?(?:\s+been)?(?:\s+able\s+to)?\s+confirm(?:ed)?(?:\s+(?:whether|that|if))?(?:\s+${THIS_ONE})?(?:\s+(?:is|as|to\s+be))?(?:\s+(?:also|really|actually))?`,
+    String.raw`\b(?:unclear|uncertain|unconfirmed|unknown|not\s+known|not\s+clear)\s+(?:whether|if)\s+${THIS_ONE}\s+is(?:\s+also)?`,
+    String.raw`\b(?:may|might)(?:\s+not)?(?:\s+also)?\s+be`,
+  ].join('|')})\\s+$`,
+  'iu',
+);
+// An attribution right after it: "made for cats, according to a retailer's listing".
+const SPECIES_HEDGE_AFTER = /^\s*,?\s*(?:according\s+to|as\s+(?:listed|stated|described)\s+by|per)\s+(?:(?:a|an|the|its|one)\s+)?(?:[\p{L}’'-]+\s+){0,2}?(?:retailers?|listings?|sellers?|shops?|stores?)(?:[’']s)?\b/iu;
 
 /**
  * A sentence stating who the product is for as fact: made, formulated, designed, intended or meant for cats (adjectives
- * and "for use in" allowed), made for your cat, a food for cats, unhedged "for cats", this cat food. A claim with a hedge
- * or attribution in the few words before it, or "according to a retailer" after it, passes. The product's own name and
- * brand are left out of the check (a retailer's title such as "… Cat Food" is the name, not Purrbi's claim), and the bare
- * "cat food" form is allowed when the name itself names the species.
+ * and "for use in" allowed), made for your cat, a food for cats, unhedged "for cats", this cat food; unless a hedge or
+ * attribution is directly in front of it, or an attribution directly after. The product's own name and brand are left
+ * out of the check (a retailer's title such as "… Cat Food" is the name, not Purrbi's claim), and the bare "cat food"
+ * form is allowed when the name itself names the species.
  */
 function assertsSpecies(text: string, product: { name?: string | null; brand?: string | null }): boolean {
   let checked = text;
@@ -248,12 +284,17 @@ function assertsSpecies(text: string, product: { name?: string | null; brand?: s
     `\\bfor\\s+(?:a|an)\\s+${SPECIES_MODS}(?:cat|dog|kitten|puppy)\\b(?![’'])`,
     nameNamesSpecies ? '' : `\\b(?:cat|dog|kitten|puppy|feline|canine)\\s+(?:food|treat|diet|snack|meal|pate|pâté|formula|recipe|kibble|topper|dinner|entr[eé]e|product)s?\\b`,
   ].filter(Boolean);
+  // A shorter claim inside a hedged one ("for cats" in "a retailer lists it as made for cats") is that claim.
+  const hedged: [number, number][] = [];
   for (const source of claims) {
     for (const m of checked.matchAll(new RegExp(source, 'giu'))) {
       const at = m.index ?? 0;
-      if (SPECIES_HEDGE.test(lastWords(clauseBefore(checked, at), 6))) continue;
-      const sentenceRest = checked.slice(at + m[0].length).split(/[.;!?](?!\d)/)[0];
-      if (/\b(?:according\s+to|as\s+(?:listed|stated|described)\s+by|per)\b[^.;]{0,40}\b(?:retailers?|listings?|sellers?|shops?|stores?)\b/i.test(sentenceRest)) continue;
+      const end = at + m[0].length;
+      if (hedged.some(([a, b]) => at >= a && at < b)) continue;
+      if (SPECIES_HEDGE_BEFORE.test(checked.slice(Math.max(0, at - 120), at)) || SPECIES_HEDGE_AFTER.test(checked.slice(end))) {
+        hedged.push([at, end]);
+        continue;
+      }
       return true;
     }
   }
@@ -268,7 +309,7 @@ export function checkVerdict(text: string, input: VerdictInput): string | null {
   if (/not enough information to score|label score is not|preventing a full assessment|scoring engine|partial assessment|between \d+ and \d+/i.test(text)) return 'repeats the missing-information message instead of interpreting the findings';
   if (/…|\.\.\./.test(text)) return 'trailing ellipsis';
   // What Purrbi has not found is not missing from the product (test B: "it lacks a nutritional adequacy statement").
-  if (saysProductLacks(text, input.assessment.missing)) return 'says the product lacks what Purrbi has not found';
+  if (saysProductLacks(text, input.assessment)) return 'says the product lacks what Purrbi has not found';
   // Who it is for is stated only as confirmed as it is: a retailer's listing is not the package (test B).
   if (input.product.speciesConfirmed === false && assertsSpecies(text, input.product)) return 'states who it is for as confirmed when only a retailer lists it';
   // A product's own name ("Perfect Portions", "Healthy Kitten") is not a claim Purrbi makes.
