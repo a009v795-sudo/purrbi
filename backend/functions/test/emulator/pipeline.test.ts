@@ -52,6 +52,9 @@ let researchCut: 'none' | 'not_started' | 'cut' = 'none'; // the scan's time lim
 let refusingPages = false; // the pages research names for BC.unknown turn automated readers away (and one is gone), with a long trace
 let latinPage = false; // research finds a US shop's page showing BC.unknown's barcode: its English name, who it is for, ingredients
 let makerName = false; // with latinPage: the name comes from the manufacturer's page (matched by brand and name), the brand from the shop's
+let nameTies: { identity?: 'barcode' | 'recipe' | 'family' | 'name'; nameIdentity?: 'barcode' | 'recipe' | 'family' | 'name' } = {}; // with latinPage: how research says the pages were tied
+let latinNoSpecies = false; // with latinPage: the page says nothing about who the product is for
+let sameSite = false; // with latinPage: the English page is on the Japanese listing's site (same source id), read 13 h later
 let researchOpts: { knownName?: string; knownBrand?: string; model?: string }[] = [];
 let verdictInputs: string[] = [];
 
@@ -146,10 +149,13 @@ const sources: Sources = {
     calls.research = (calls.research ?? 0) + 1;
     researchOpts.push({ knownName: o.knownName, knownBrand: o.knownBrand, model: o.model });
     if (latinPage && o.barcode === BC.unknown) {
-      const page = { sourceId: `web:shop.example.us:${o.gtin14}`, sourceType: 'retailer_or_web' as const, sourceName: 'shop.example.us', url: 'https://shop.example.us/products/gravies', retrievedAt: NOW.toISOString(), matchConfidence: 'exact_barcode' as const, readerVersion: RESEARCH_VERSION };
+      const page = sameSite
+        ? { sourceId: `web:shop.example.jp:${o.gtin14}`, sourceType: 'retailer_or_web' as const, sourceName: 'shop.example.jp', url: 'https://shop.example.jp/en/c0012.html', retrievedAt: new Date(NOW.getTime() + 13 * 3600 * 1000).toISOString(), matchConfidence: 'exact_barcode' as const, readerVersion: RESEARCH_VERSION }
+        : { sourceId: `web:shop.example.us:${o.gtin14}`, sourceType: 'retailer_or_web' as const, sourceName: 'shop.example.us', url: 'https://shop.example.us/products/gravies', retrievedAt: NOW.toISOString(), matchConfidence: 'exact_barcode' as const, readerVersion: RESEARCH_VERSION };
       const maker = { sourceId: `web:testbrand.example:${o.gtin14}`, sourceType: 'manufacturer' as const, sourceName: 'testbrand.example', url: 'https://testbrand.example/gravies-chicken-turkey', retrievedAt: NOW.toISOString(), matchConfidence: 'brand_and_product' as const, readerVersion: RESEARCH_VERSION };
       const name = makerName ? { value: 'TEST FIXTURE Gravies Chicken & Turkey Dinner in Gravy', source: maker } : { value: 'TEST FIXTURE Wellness Gravies Chicken & Turkey', source: page };
-      return { facts: { productName: name, brand: { value: 'TESTBRAND', source: page }, classificationSignals: [{ text: 'intended for cats', source: page.sourceId, kind: 'research' as const }] }, sources: makerName ? [page, maker] : [page], discarded: [], model: 'mock' };
+      const signals = latinNoSpecies ? [] : [{ text: 'intended for cats', source: page.sourceId, kind: 'research' as const }];
+      return { facts: { productName: name, brand: { value: 'TESTBRAND', source: page }, classificationSignals: signals }, sources: makerName ? [page, maker] : [page], discarded: [], model: 'mock', ...(makerName ? { identity: 'barcode' as const, nameIdentity: 'name' as const } : {}), ...nameTies };
     }
     if (partialPage && o.barcode === BC.unknown) {
       const page = { sourceId: `web:shop.example.jp:${o.gtin14}`, sourceType: 'retailer_or_web' as const, sourceName: 'shop.example.jp', url: 'https://shop.example.jp/c0012.html', retrievedAt: NOW.toISOString(), matchConfidence: 'exact_barcode' as const, readerVersion: RESEARCH_VERSION };
@@ -314,6 +320,9 @@ beforeEach(async () => {
   refusingPages = false;
   latinPage = false;
   makerName = false;
+  nameTies = {};
+  latinNoSpecies = false;
+  sameSite = false;
   researchOpts = [];
   await fetch(`http://${process.env.FIRESTORE_EMULATOR_HOST}/emulator/v1/projects/demo-purrbi/databases/(default)/documents`, { method: 'DELETE' });
   await db.doc('users/u1/pets/cat1').set({ name: 'Miso', species: 'cat', birthDate: Timestamp.fromDate(new Date('2022-01-01')), allergiesStatus: 'reported', allergies: ['chicken'], profileVersion: 2 });
@@ -1260,6 +1269,52 @@ describe('fallbacks before asking the owner for photos', () => {
     expect(s.productName).toBe('TEST FIXTURE Gravies Chicken & Turkey Dinner in Gravy');
     expect(s.brand).toBe('TESTBRAND');
     expect(s.evidenceNotes).toContain('Shown by the product name on testbrand.example (the manufacturer’s page) and the brand on shop.example.us (it shows this barcode), instead of the product name and brand in another script from shop.example.jp.');
+  });
+  // Second review of research 2.9.3: a name from a page listing several variants' barcodes, or from the manufacturer's page
+  // matched by such a name, may be another variant's: it never replaces one (nor the brand, since the name stays).
+  const japaneseThenLatin = async () => {
+    partialPage = true;
+    hintDown = true;
+    const first = await newScan('u1', BC.unknown);
+    await processScan(deps({ researchEnabled: true }), 'u1', first.id);
+    const gtin = (await read(first)).gtin;
+    await db.doc(`products/${gtin}`).update({ 'facts.brand.value': 'TESTBRAND（テストブランド）' });
+    partialPage = false;
+    hintDown = false;
+    latinPage = true;
+    const later = await newScan('u1', BC.unknown);
+    await processScan({ ...deps({ researchEnabled: true }), now: () => new Date(NOW.getTime() + 13 * 3600 * 1000) }, 'u1', later.id);
+    return { s: await read(later), gtin };
+  };
+  it.each([
+    ['a manufacturer’s page listing several variants', { identity: 'barcode' as const, nameIdentity: 'family' as const }],
+    ['the manufacturer’s page matched by a name from a page listing several variants', { identity: 'family' as const, nameIdentity: 'name' as const }],
+  ])('a name from %s never replaces one', async (_, ties) => {
+    makerName = true;
+    nameTies = ties;
+    const { s, gtin } = await japaneseThenLatin();
+    expect(s.productName).toBe('TEST FIXTURE ウェルネス グレービー 85g');
+    expect(s.brand).toBe('TESTBRAND（テストブランド）');
+    expect(s.evidenceNotes.join(' ')).not.toMatch(/Shown by|instead of/);
+    expect((await db.doc(`products/${gtin}`).get()).data()!.facts.productName.value).toBe('TEST FIXTURE ウェルネス グレービー 85g');
+  });
+  it('a page that only replaces the name and brand does not also say it added nothing', async () => {
+    latinNoSpecies = true;
+    const { s } = await japaneseThenLatin();
+    expect(s.productName).toBe('TEST FIXTURE Wellness Gravies Chicken & Turkey');
+    expect(s.evidenceNotes.join(' ')).not.toMatch(/nothing was added|shows nothing its record lacks/);
+    expect(s.evidenceNotes).toContain('Shown by the product name and brand on shop.example.us (it shows this barcode), instead of the product name and brand in another script from shop.example.jp.');
+  });
+  it('a replacing page on the old page’s site is the one the source list and evidence name', async () => {
+    sameSite = true;
+    const { s, gtin } = await japaneseThenLatin();
+    expect(s.productName).toBe('TEST FIXTURE Wellness Gravies Chicken & Turkey');
+    const record = (await db.doc(`products/${gtin}`).get()).data()!;
+    const entry = record.facts.sources.find((x: { sourceId: string }) => x.sourceId === `web:shop.example.jp:${gtin}`);
+    expect(entry.url).toBe('https://shop.example.jp/en/c0012.html');
+    const evidence = (await db.doc(`products/${gtin}/evidence/web_shop.example.jp_${gtin}`).get()).data()!;
+    expect(evidence.url).toBe('https://shop.example.jp/en/c0012.html');
+    expect(evidence.fieldsSupported).toEqual(expect.arrayContaining(['productName', 'brand']));
   });
   it('the barcode database is not asked while today’s AI budget is used up (review of research 2.7.0)', async () => {
     await db.doc(`system/aiUsage_${NOW.toISOString().slice(0, 10).replace(/-/g, '')}`).set({ calls: 100000 });

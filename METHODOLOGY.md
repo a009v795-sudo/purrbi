@@ -361,10 +361,13 @@ any photo is asked for:
   of eight and carried the rest; review found it could drop carried pages and start a paid search before free checks,
   so 2.9.1 checks each search's own pages in order instead.)
 - A product name or brand in another script that an earlier research page gave (a Japanese import listing's) gives way to
-  one in Latin script from a page that also shows the barcode or from the manufacturer's own page (test B:
-  petfood.express), so the product is shown by its own name. A database's, an owner's label photo's or a manufacturer's
-  name is never replaced; the brand gives way only when the name shown is then in Latin script too. A replacement is not
-  a fill: the evidence note says which page's name and brand are shown instead of which page's.
+  one in Latin script from a page that shows the barcode or the same recipe, or from the manufacturer's page matched by a
+  name such a page gave (test B: petfood.express), so the product is shown by its own name. Never a name from a page
+  that lists several variants' barcodes (its heading may be another variant's), and a database's, an owner's label
+  photo's or a manufacturer's name is never replaced; the brand gives way only when the name shown is then in Latin
+  script too. A replacement is not a fill: the evidence note says which page's name and brand are shown instead of which
+  page's, and the source list names that page. A manufacturer's page that lists several variants' barcodes never
+  renames a product in research either.
 - The trace names the result pages left out of the checks: documents and pages without a secure address with their
   addresses (once a run), the others by site with the reason (eight a run, two per site in a search, or the run's checks
   or reads already used).

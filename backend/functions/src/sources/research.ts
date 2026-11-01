@@ -176,6 +176,12 @@ export interface ResearchOutcome {
    * (family), or only its brand and name match (name).
    */
   identity?: 'barcode' | 'recipe' | 'family' | 'name';
+  /**
+   * How the page whose product name the facts give was shown to be this product (as `identity`): the first page's, or
+   * the manufacturer's page's when its name is used. A name from a page listing several variants (family) may be
+   * another variant's.
+   */
+  nameIdentity?: 'barcode' | 'recipe' | 'family' | 'name';
   /** The heading (h1) of the page tied to this barcode: what the manufacturer's page is searched for and must match when no name was verified. */
   pageTitle?: string;
   /** The brand and name an answer gave, unverified: only words for another search, never a fact. */
@@ -499,6 +505,7 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
     } else discarded.push(...leftOutNotes({ documents: [], insecure: [], spent: urls }).map((n) => `pages held back for later: ${n}`));
   }
   if (!found?.facts) return { facts: null, sources: [], discarded, model, fetchFailed, calls, timeLimited };
+  let nameIdentity = found.facts.productName ? found.identity : undefined;
 
   // The manufacturer's own page for what the first page did not show (or when only a retailer's listing says who it is for).
   const retailerOnly = found.sources.every((x) => x.sourceType !== 'manufacturer');
@@ -539,12 +546,15 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
           if (!sameSource) {
             // The manufacturer's own product name (as its page's heading prints it) replaces a retailer's
             // catalogue title ("Dog Trt Frz Dr …") on screen; the retailer's title stays among the product's statements.
-            const makerName = r2.sources[0]?.sourceType === 'manufacturer' ? r2.facts.productName : undefined;
+            // Not from a page listing several variants' barcodes: its heading may be another variant's (review of 2.9.3).
+            const makerName = r2.sources[0]?.sourceType === 'manufacturer' && r2.identity !== 'family' ? r2.facts.productName : undefined;
             const strong = r2.identity === 'barcode' || r2.identity === 'recipe';
             const notes: string[] = [];
+            const merged = mergeResearch(found.facts, r2.facts, strong, notes);
+            if (makerName || (!found.facts.productName && merged.productName)) nameIdentity = r2.identity;
             found = {
               ...found,
-              facts: { ...mergeResearch(found.facts, r2.facts, strong, notes), ...(makerName ? { productName: makerName } : {}) },
+              facts: { ...merged, ...(makerName ? { productName: makerName } : {}) },
               sources: [...found.sources, ...r2.sources.filter((x) => !found!.sources.some((y) => y.sourceId === x.sourceId))],
               verified: [...(found.verified ?? []), ...(r2.verified ?? [])],
               analysisNote: found.analysisNote ?? r2.analysisNote,
@@ -560,7 +570,7 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
       }
     }
   }
-  return { ...found, discarded, model, fetchFailed, calls, timeLimited };
+  return { ...found, ...(nameIdentity ? { nameIdentity } : {}), discarded, model, fetchFailed, calls, timeLimited };
 }
 
 /** The product's name as the page's own main heading prints it (its first h1). */

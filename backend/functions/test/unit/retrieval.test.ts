@@ -1365,3 +1365,29 @@ describe('research 2.9.3 review fixes: pages held back for a later search', () =
   });
 });
 
+// Review of 2.9.3 (name): a manufacturer page that lists this barcode among other variants' barcodes may be headed by
+// another variant's name; it never renames a product a page showing its barcode named.
+describe('research 2.9.3: the name a page listing several variants gives', () => {
+  it('a manufacturer page listing several variants’ barcodes does not rename the product, and the name’s tie is reported', async () => {
+    const familyPage = `<html><head><title>Signature Selects Chunky Chicken &amp; Turkey Entree in Gravy</title></head><body>
+      <h1>Wellness CORE Signature Selects Chunky Chicken &amp; Turkey Entree in Gravy</h1><p>Grain-free wet cat food. UPC 076344060048, 076344060055, 076344060062.</p></body></html>`;
+    const answers = [
+      modelAnswer({ product_name: 'Wellness CORE Signature Selects Flaked Skipjack Tuna & Wild Salmon Entree in Broth', brand: 'Wellness', intended_for: 'cats', ingredients_verbatim: WELLNESS_INGREDIENTS.replace('Choline Chloride, Minerals [', 'Choline Chloride], Minerals ['), source_urls: ['https://www.companionpetfoodsupply.com/shop/wellness-tuna-salmon-28oz.htm'] }),
+      modelAnswer({ product_name: 'Wellness CORE Signature Selects Chunky Chicken & Turkey Entree in Gravy', brand: 'Wellness', intended_for: 'cats', source_urls: ['https://www.wellnesspetfood.com/product-catalog/signature-selects-range/'] }),
+    ];
+    let call = 0;
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.startsWith('https://api.openai.com/')) return openAi(answers[Math.min(call++, answers.length - 1)]);
+      if (url.includes('companionpetfoodsupply')) return new Response(RETAILER_PAGE, { status: 200 });
+      return new Response(familyPage, { status: 200 });
+    }));
+    // Who it is for is known (a database category), so the variants' page is used for what does not vary.
+    const r = await researchProduct({ apiKey: 'k', model: 'm', gtin14: '00076344060048', barcode: '076344060048', knownSpecies: 'cat', userAgent: 'test', now: new Date('2026-11-01T00:00:00Z') });
+    expect(r.sources.map((x) => `${x.sourceName} ${x.sourceType}`)).toContain('wellnesspetfood.com manufacturer');
+    expect(r.verified).toContain('wellnesspetfood.com lists this barcode among 3 barcodes (sizes, variants or other products), not as the one shown.');
+    expect(r.facts?.productName?.source.sourceName).toBe('companionpetfoodsupply.com');
+    expect(r.facts?.productName?.value).not.toMatch(/Chicken/);
+    expect(r).toMatchObject({ identity: 'barcode', nameIdentity: 'barcode' });
+  });
+});
+

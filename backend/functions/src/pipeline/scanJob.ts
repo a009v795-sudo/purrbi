@@ -620,21 +620,32 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
         facts = merged.facts;
         filled = merged.filled;
         // A name or brand in another script that an earlier research page gave (a Japanese import listing's) gives way to
-        // one in Latin script from a page that shows the barcode or from the manufacturer's own page (test B, 2026-10-31:
-        // petfood.express): the product is shown by its own name. A database's, an owner's label photo's or a
-        // manufacturer's name is never replaced (review of research 2.9.3). The brand gives way only when the name shown
-        // is then in Latin script too, so the two are of one listing. A replacement is not a fill: it has its own note.
+        // one in Latin script from a page that shows the barcode or the same recipe, or from the manufacturer's page
+        // matched by a name such a page gave (test B, 2026-10-31: petfood.express): the product is shown by its own name.
+        // Never a name from a page listing several variants' barcodes (it may be another variant's), and never over a
+        // database's, an owner's label photo's or a manufacturer's name (review of research 2.9.3). The brand gives way
+        // only when the name shown is then in Latin script too, so the two are of one listing. A replacement is not a
+        // fill: it has its own note, and the source list names the page it came from.
         const tied = (f?: { source?: SourceRef }) => f?.source?.matchConfidence === 'exact_barcode' || f?.source?.sourceType === 'manufacturer';
+        const nameTie = r.nameIdentity ?? (found.productName?.source.matchConfidence === 'exact_barcode' ? 'barcode' : undefined);
+        const provenName = nameTie === 'barcode' || nameTie === 'recipe' || (nameTie === 'name' && found.productName?.source.sourceType === 'manufacturer' && (r.identity === 'barcode' || r.identity === 'recipe'));
         const nonLatin = (t: string) => /(?=\p{L})\P{Script=Latin}/u.test(t);
         const fromResearchPage = (f?: { source?: SourceRef }) => f?.source?.sourceType === 'retailer_or_web';
         const before = { productName: facts.productName, brand: facts.brand };
-        if (found.productName && tied(found.productName) && !nonLatin(found.productName.value) && facts.productName && fromResearchPage(facts.productName) && otherScript(facts.productName.value)) {
+        if (found.productName && provenName && !nonLatin(found.productName.value) && facts.productName && fromResearchPage(facts.productName) && otherScript(facts.productName.value)) {
           facts = { ...facts, productName: found.productName };
           replaced.push('productName');
         }
         if (found.brand && tied(found.brand) && !nonLatin(found.brand.value) && facts.brand && fromResearchPage(facts.brand) && nonLatin(facts.brand.value) && facts.productName && !otherScript(facts.productName.value)) {
           facts = { ...facts, brand: found.brand };
           replaced.push('brand');
+        }
+        // The source list names the page a replaced value came from (a newer read of the same site's page replaces the older).
+        for (const k of replaced) {
+          const source = facts[k]!.source;
+          const i = facts.sources.findIndex((x) => x.sourceId === source.sourceId);
+          if (i < 0) facts = { ...facts, sources: [...facts.sources, source] };
+          else if (source.retrievedAt > facts.sources[i].retrievedAt) facts = { ...facts, sources: facts.sources.map((x, j) => (j === i ? source : x)) };
         }
         if (replaced.length) {
           const bySource = new Map<string, { source: SourceRef; fields: string[] }>();
@@ -683,7 +694,8 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       // What stopped a search that took nothing from a page is said as such, not as "found nothing" (test A, 2026-10-31).
       const shown = barcodeHosts(r.discarded);
       const refusing = refusingHosts(r.discarded);
-      job.evidenceNotes.push(
+      // (An empty note, where the outcome is said elsewhere, is left out.)
+      job.evidenceNotes.push(...[
         filled.length && src
           ? `Filled ${[...bySource].map(([where, ks]) => `${ks.join(', ')} from ${where}`).join('; ')}, each checked against its page.`
           : confirmed
@@ -698,6 +710,8 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
                   ? (searchStop('time_limited', r.discarded) ?? '')
                 : timeCut
                   ? 'A page showing this barcode was found, but it doesn’t say who the product is for; the search ran out of the scan’s time, so Purrbi searches again later.'
+                : r.facts && src && replaced.length
+                  ? '' // what it changed is said by the replacement's own note
                 : r.facts && src
                   ? // A page tied to the product was checked, but holds nothing the record lacks (trace 99877a3e-234).
                     `${src.sourceName} matches this product (checked on the page) but shows nothing its record lacks, so nothing was added.`
@@ -706,7 +720,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
                     : refusing.length
                       ? `${refusalOf(refusing).said}, so nothing could be checked on ${refusalOf(refusing).it} or added.`
                       : 'Searched the manufacturer’s and retailers’ pages; nothing could be verified against a page, so nothing was added.',
-      );
+      ].filter(Boolean));
       if (replacedNote) job.evidenceNotes.push(replacedNote);
       // Every step's outcome up to twenty (the trace of trace 11f7cc1e-842 stopped before the page that mattered; test A on
       // gpt-5-mini, trace 345c0a6b-6b8, before its last searches' checks).
