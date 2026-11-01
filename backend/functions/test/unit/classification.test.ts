@@ -86,7 +86,7 @@ describe('Open*Facts lookups: a miss says where the record is filed', () => {
     expect(searchableBrand("Hill's Science Diet® (US)")).toBe("Hill's Science Diet US");
     expect(searchableBrand('Café Nature')).toBe('Café Nature');
     const none = await checkRecalls({ brand: 'ウェルネス', productName: 'TEST FIXTURE', gtin14: '00076344886570' }, new Date('2026-11-01T00:00:00Z'));
-    expect(none).toMatchObject({ status: 'not_checked', summary: 'The brand is known only in another script, so FDA recall records (in English) could not be searched.' });
+    expect(none).toMatchObject({ status: 'not_checked', summary: 'The brand isn’t written in Latin script on its own, so FDA recall records (in English) could not be searched.' });
     expect(urls).toHaveLength(1);
   });
   // Review of research 2.9.4: a trademark sign must not become letters ("IAMSTM"), a typographic apostrophe not a space,
@@ -105,6 +105,25 @@ describe('Open*Facts lookups: a miss says where the record is filed', () => {
     expect(latinBrand('ロイヤルカナン JP')).toBe('');
     expect(latinBrand('Fancy Feast（ファンシーフィースト）')).toBe('Fancy Feast');
     expect(latinBrand('Go!')).toBe('Go');
+    // Re-review: a gloss's Latin letters are never added to the name, a long reading does not hide it, and a trademark
+    // written in letters is no word of it.
+    expect(latinBrand('K9 Natural（K9ナチュラル）')).toBe('K9 Natural');
+    expect(latinBrand('K9ナチュラル（K9 Natural）')).toBe('K9 Natural');
+    expect(latinBrand('Purina ONE（ピュリナONE）')).toBe('Purina ONE');
+    expect(latinBrand('GO! SOLUTIONS（GO!ソリューションズ）')).toBe('GO SOLUTIONS');
+    expect(latinBrand("Dr.ハーヴィーズ（Dr. Harvey's）")).toBe("Dr. Harvey's");
+    expect(latinBrand('9Lives（9ライブス）')).toBe('9Lives');
+    expect(latinBrand('K9 Natural（ケーナインナチュラル）')).toBe('K9 Natural');
+    expect(latinBrand('1st Choice（ファーストチョイス）')).toBe('1st Choice');
+    expect(latinBrand('Cesar (Цезарь)')).toBe('Cesar');
+    expect(latinBrand("Hill’s（ヒルズ）Science Diet（サイエンス・ダイエット）")).toBe("Hill's Science Diet");
+    expect(latinBrand('【公式】Wellness')).toBe('Wellness');
+    expect(latinBrand('WELLNESS ウェルネス')).toBe('WELLNESS');
+    expect(latinBrand('IAMS(TM)')).toBe('IAMS');
+    expect(latinBrand('IAMSᵀᴹ')).toBe('IAMS');
+    expect(latinBrand('365')).toBe('365');
+    expect(latinBrand('ウェルネス')).toBe('');
+    expect(latinBrand('K9ナチュラル Natural')).toBe('');
     const urls: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       urls.push(url);
@@ -117,6 +136,7 @@ describe('Open*Facts lookups: a miss says where the record is filed', () => {
     expect(await searched('IAMS™')).toEqual({ status: 'none_found', search: '(recalling_firm:"IAMS" product_description:"IAMS")' });
     expect(await searched('Hill’s Science Diet')).toEqual({ status: 'none_found', search: `(recalling_firm:"Hill's Science Diet" product_description:"Hill's Science Diet")` });
     expect(await searched('ピュリナ ONE')).toEqual({ status: 'not_checked', search: null });
+    expect(await searched('K9 Natural（K9ナチュラル）')).toEqual({ status: 'none_found', search: '(recalling_firm:"K9 Natural" product_description:"K9 Natural")' });
   });
   it('a recall check that got an empty answer failed; it is not "none found"', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 200 })));

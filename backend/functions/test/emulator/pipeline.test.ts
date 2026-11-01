@@ -56,6 +56,7 @@ let nameTies: { identity?: 'barcode' | 'recipe' | 'family' | 'name'; nameIdentit
 let latinNoSpecies = false; // with latinPage: the page says nothing about who the product is for
 let sameSite = false; // with latinPage: the English page is on the Japanese listing's site (same source id), read 13 h later
 let latinBrandValue = 'TESTBRAND'; // with latinPage: the brand the page gives
+let recallResult: RecallCheck | null = null; // what the FDA recall check answers (default: none found)
 let researchOpts: { knownName?: string; knownBrand?: string; model?: string }[] = [];
 let verdictInputs: string[] = [];
 
@@ -139,7 +140,7 @@ const sources: Sources = {
   },
   async checkRecalls(): Promise<RecallCheck> {
     calls.recall = (calls.recall ?? 0) + 1;
-    return { status: 'none_found', summary: 'No FDA enforcement record found (mocked).', checkedAt: NOW.toISOString(), source: null, records: [] };
+    return recallResult ?? { status: 'none_found', summary: 'No FDA enforcement record found (mocked).', checkedAt: NOW.toISOString(), source: null, records: [] };
   },
   async barcodeHint() {
     calls.hint = (calls.hint ?? 0) + 1;
@@ -325,6 +326,7 @@ beforeEach(async () => {
   latinNoSpecies = false;
   sameSite = false;
   latinBrandValue = 'TESTBRAND';
+  recallResult = null;
   researchOpts = [];
   await fetch(`http://${process.env.FIRESTORE_EMULATOR_HOST}/emulator/v1/projects/demo-purrbi/databases/(default)/documents`, { method: 'DELETE' });
   await db.doc('users/u1/pets/cat1').set({ name: 'Miso', species: 'cat', birthDate: Timestamp.fromDate(new Date('2022-01-01')), allergiesStatus: 'reported', allergies: ['chicken'], profileVersion: 2 });
@@ -348,6 +350,24 @@ describe('path A: enough information', () => {
     const product = (await db.doc(`products/${s.gtin}`).get()).data()!;
     expect(product.factsVersion).toBe(1);
     expect((await db.collection(`products/${s.gtin}/evidence`).get()).size).toBeGreaterThan(0);
+  });
+  // Review of research 2.9.4: a check that could not be made today never hides the last one's result.
+  it('a stored recall match stays shown, with its date, when today’s recall check cannot be made', async () => {
+    recallResult = {
+      status: 'exact_active', summary: 'An active FDA recall lists this barcode (mocked).', checkedAt: NOW.toISOString(), source: null,
+      records: [{ recallNumber: 'F-0001-2026', status: 'Ongoing', classification: 'Class II', reason: 'TEST FIXTURE reason', reportDate: '2026-10-20', productDescription: 'TEST FIXTURE treat', recallingFirm: 'TESTBRAND', match: 'exact_barcode' }],
+    };
+    const a = await newScan('u1', BC.treat);
+    await processScan(deps(), 'u1', a.id);
+    expect((await read(a)).recallStatus).toBe('exact_active');
+    for (const status of ['unavailable', 'not_checked'] as const) {
+      recallResult = { status, summary: status === 'unavailable' ? 'The FDA recall check couldn’t be completed right now (http). Try again later.' : 'The brand isn’t written in Latin script on its own, so FDA recall records (in English) could not be searched.', checkedAt: new Date(NOW.getTime() + 13 * 3600 * 1000).toISOString(), source: null, records: [] };
+      const b = await newScan('u1', BC.treat);
+      await processScan({ ...deps(), now: () => new Date(NOW.getTime() + 13 * 3600 * 1000) }, 'u1', b.id);
+      const s = await read(b);
+      expect(s.recallStatus).toBe('exact_active');
+      expect(s.evidenceNotes.join(' ')).toMatch(new RegExp(`Today’s FDA recall check couldn’t be made \\(.+\\), so the last check’s result, from ${NOW.toISOString().slice(0, 10)}, is shown\\.`));
+    }
   });
   it('reuses cached product data on a rescan', async () => {
     const a = await newScan('u1', BC.treat);
@@ -1334,6 +1354,22 @@ describe('fallbacks before asking the owner for photos', () => {
     expect(s.productName).toBe('TEST FIXTURE Wellness Gravies Chicken グレービー 85g');
     expect(s.brand).toBe('TESTBRAND（テストブランド）');
     expect(s.evidenceNotes.join(' ')).not.toMatch(/Shown by|instead of/);
+  });
+  it('a brand written only in another script gives way to the brand of a page that shows the barcode', async () => {
+    partialPage = true;
+    hintDown = true;
+    const first = await newScan('u1', BC.unknown);
+    await processScan(deps({ researchEnabled: true }), 'u1', first.id);
+    const gtin = (await read(first)).gtin;
+    await db.doc(`products/${gtin}`).update({ 'facts.brand.value': 'テストブランド' });
+    partialPage = false;
+    hintDown = false;
+    latinPage = true;
+    const later = await newScan('u1', BC.unknown);
+    await processScan({ ...deps({ researchEnabled: true }), now: () => new Date(NOW.getTime() + 13 * 3600 * 1000) }, 'u1', later.id);
+    const s = await read(later);
+    expect(s.productName).toBe('TEST FIXTURE Wellness Gravies Chicken & Turkey');
+    expect(s.brand).toBe('TESTBRAND');
   });
   it('a replacing page on the old page’s site is the one the source list and evidence name', async () => {
     sameSite = true;

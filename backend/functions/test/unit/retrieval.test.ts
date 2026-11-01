@@ -1454,6 +1454,13 @@ describe('research 2.9.3: one page under tracking keys, and the manufacturer’s
     expect(brandCovers('Purina Pro Plan（ピュリナ プロプラン）', 'Purina')).toBe(false);
     expect(brandCovers('WELLNESS（ウェルネス）', 'Wellness CORE')).toBe(true);
     expect(brandCovers('ウェルネス', 'Wellness')).toBe(false);
+    // Re-review: the same brand spelled another way covers it; a company name around the brand does not.
+    expect(brandCovers('Hill’s（ヒルズ）', 'Hills')).toBe(true);
+    expect(brandCovers('ZIWI Peak（ジウィピーク）', 'ZiwiPeak')).toBe(true);
+    expect(brandCovers('Stella & Chewy’s（ステラ＆チューイーズ）', "Stella and Chewy's")).toBe(true);
+    expect(brandCovers('K9 Natural（ケーナインナチュラル）', 'K9 Natural')).toBe(true);
+    expect(brandCovers('WELLNESS（ウェルネス）', 'Wellness Pet Company')).toBe(false);
+    expect(brandCovers('Hill’s（ヒルズ）', "Hill's Pet Nutrition")).toBe(false);
     expect(hasOtherScriptLetters('Hillʼs Science Diet')).toBe(false);
     expect(hasOtherScriptLetters('Hawaiʻi µPet')).toBe(false);
     expect(hasOtherScriptLetters('WELLNESS（ウェルネス）')).toBe(true);

@@ -11,7 +11,7 @@ import type { Firestore } from 'firebase-admin/firestore';
 import { extractLabel as extractLabelImpl, LABEL_EXTRACTION_VERSION, LABEL_READINGS_IN_USE, readingInUse, type ValidatedLabel } from '../ai/labelExtract';
 import { checkVerdict, ruleVerdict, verdictInput, verdictKey, withPetName, writeVerdict as verdictImpl } from '../ai/verdict';
 import { parseAdequacyStatement } from '../domain/adequacy';
-import { brandCovers, hasOtherScriptLetters } from '../domain/script';
+import { brandCovers, hasOtherScriptLetters, latinBrand } from '../domain/script';
 import { normalizeBarcode, type NormalizedBarcode } from '../domain/barcode';
 import { buildHighlights } from '../domain/highlights';
 import { normalizeRole } from '../domain/roles';
@@ -637,9 +637,12 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
           facts = { ...facts, productName: found.productName };
           replaced.push('productName');
         }
-        // The brand: the same brand in Latin script (never a parent company's or another brand's), and only beside a name
-        // replaced now or written in Latin script alone, so the two are of one listing (review of research 2.9.4).
-        if (found.brand && tied(found.brand) && !nonLatin(found.brand.value) && facts.brand && fromResearchPage(facts.brand) && nonLatin(facts.brand.value) && brandCovers(facts.brand.value, found.brand.value) && facts.productName && (replaced.includes('productName') || !nonLatin(facts.productName.value))) {
+        // The brand: the same brand in Latin script (never a parent company's or another brand's); a brand with no Latin
+        // name to compare ("ウェルネス") only from a page that shows this barcode. Only beside a name replaced now or
+        // written in Latin script alone, so the two are of one listing (review of research 2.9.4).
+        const sameBrand = (from: { value: string; source: SourceRef }, to: { value: string; source: SourceRef }) =>
+          latinBrand(from.value) ? brandCovers(from.value, to.value) : to.source.matchConfidence === 'exact_barcode';
+        if (found.brand && tied(found.brand) && !nonLatin(found.brand.value) && facts.brand && fromResearchPage(facts.brand) && nonLatin(facts.brand.value) && sameBrand(facts.brand, found.brand) && facts.productName && (replaced.includes('productName') || !nonLatin(facts.productName.value))) {
           facts = { ...facts, brand: found.brand };
           replaced.push('brand');
         }
@@ -810,6 +813,12 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       await setStatus(deps, o.uid, o.scanId, SCAN_STATUS.checkingAlerts, 'Checking FDA recall records', 60);
       recall = await deps.sources.checkRecalls({ brand: facts.brand?.value, productName: facts.productName?.value, gtin14: gtin }, now);
       if (recall.status !== 'unavailable' && recall.status !== 'not_checked' && facts.sources.length) await writeRecall(db, gtin, recall, now);
+      else if (stored?.recall && stored.recall.status !== 'unavailable' && stored.recall.status !== 'not_checked') {
+        // A check that could not be made today never hides the last one's result (an active recall above all): it is
+        // shown with its own date (review of research 2.9.4).
+        job.evidenceNotes.push(`Today’s FDA recall check couldn’t be made (${recall.summary.replace(/\.$/, '')}), so the last check’s result, from ${stored.recall.checkedAt.slice(0, 10)}, is shown.`);
+        recall = stored.recall;
+      }
     }
   }
 

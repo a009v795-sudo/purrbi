@@ -259,11 +259,15 @@ keeps when the check was made (a cached check shows its original date, never "ch
 enforcement reports by barcode, then brand and product name; FDA's recall page, manufacturers' notices and lot codes are not checked) and
 what a match rests on (`recallMatchBasis`). Recall checking is separate from nutrition completeness: it runs whenever the brand is known.
 openFDA's records are in English, and it refuses a search with another script's characters: the brand is searched by its
-Latin-script words ("WELLNESS（ウェルネス）", an import listing's brand, as "WELLNESS"; test B, 2026-11-01, HTTP 400).
-Trademark signs are dropped first, so they never become letters ("IAMS™" stays "IAMS", not "IAMSTM"); typographic
-apostrophes are kept as apostrophes ("Hill’s"). Latin letters beside a name in another script count only when they are at
-least three and at least half of its letters ("ピュリナ ONE" is not searched as "ONE"). A brand with no such words is "not
-checked", said as such.
+Latin-script name (test B, 2026-11-01, HTTP 400 for "WELLNESS（ウェルネス）"). Brackets separate a name from its reading or
+gloss, and only parts written in Latin script alone are used: "WELLNESS（ウェルネス）", "K9 Natural（K9ナチュラル）",
+"K9ナチュラル（K9 Natural）" and "1st Choice（ファーストチョイス）" are searched as "WELLNESS", "K9 Natural" and "1st Choice",
+never with a gloss's letters added ("K9 Natural K9" would find nothing and say "none found"). Without brackets, Latin words
+beside another script count only when no word mixes the two and they are at least three letters and half of the letters
+("ピュリナ ONE" is not searched as "ONE"). Trademark signs and marks written in letters are dropped first ("IAMS™",
+"IAMS(TM)" stay "IAMS"), and typographic apostrophes stay apostrophes ("Hill’s"). A brand with no Latin name is "not
+checked", said as such. A check that cannot be made (not checked, or openFDA unavailable) never hides the last one's
+result: the stored result is shown with its own date, and the evidence notes say why today's check was not made.
 
 ## 9. Evidence labels and label photos
 
@@ -374,10 +378,12 @@ any photo is asked for:
   script too. A replacement is not a fill: the evidence note says which page's name and brand are shown instead of which
   page's, and the source list names that page. A manufacturer's page that lists several variants' barcodes never
   renames a product in research either. With the manufacturer's name, its brand in Latin script replaces a first page's
-  brand written with another script when it is the same brand: the first brand's Latin words are among its own
-  ("WELLNESS（ウェルネス）" → "Wellness"), never a parent company or another brand ("Fancy Feast（…）" → "Purina"). On the
-  record, the brand gives way the same way, and only beside a name replaced in the same run or written in Latin script
-  alone. Letters shared by scripts (the modifier apostrophe in "Hillʼs", µ) are not another script (2.9.4).
+  brand written with another script when it is the same brand: the first brand's Latin words are among its own, spelled
+  alike or not ("WELLNESS（ウェルネス）" → "Wellness"; "Hill’s" → "Hills"; "ZIWI Peak" → "ZiwiPeak"), never a parent company,
+  another brand or a company name around the brand ("Fancy Feast（…）" → "Purina"; "Wellness Pet Company"). On the record,
+  the brand gives way the same way; a brand with no Latin name to compare ("ウェルネス") only to one from a page showing the
+  barcode; and only beside a name replaced in the same run or written in Latin script alone. Letters shared by scripts
+  (the modifier apostrophe in "Hillʼs", µ) are not another script (2.9.4).
 - A result address that differs from another only by tracking keys (`?srsltid=`, `?gclid=` with Google Ads' `gad_source`,
   `gad_campaignid` and `gclsrc`, `utm_…`) or by trailing slashes is the same page: it is checked once (2.9.4, test A on
   2.9.3: a shop's page was checked three times).

@@ -52,7 +52,7 @@ export async function checkRecalls(
   // Its Latin-script words: openFDA's records are in English and it refuses another script's characters (test B).
   const brand = latinBrand(input.brand);
   if (!brand) {
-    return { status: 'not_checked', summary: 'The brand is known only in another script, so FDA recall records (in English) could not be searched.', checkedAt, source: null, records: [] };
+    return { status: 'not_checked', summary: 'The brand isn’t written in Latin script on its own, so FDA recall records (in English) could not be searched.', checkedAt, source: null, records: [] };
   }
   const search = `(recalling_firm:${quote(brand)}+product_description:${quote(brand)})`;
   const url = `${ENDPOINT}?search=${encodeURIComponent(search).replace(/%2B/g, '+')}&limit=100&sort=report_date:desc${apiKey ? `&api_key=${encodeURIComponent(apiKey)}` : ''}`;
