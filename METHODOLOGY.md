@@ -1,7 +1,7 @@
 # Purrbi assessment methodology
 
-Version: `assessment-3.0.0` overall, made of `purrbi-score-3.0.0` (score), `scope-3.0.0` (classification), `verdict-2.1.0` (verdict),
-`kb-2026-10-28-draft` (ingredient notes), `label-extract-2.3.0` (label reader), `research-2.9.2` (web research), `explain-2.0.0` (claim-checked explanations).
+Version: `assessment-3.0.0` overall, made of `purrbi-score-3.0.0` (score), `scope-3.0.0` (classification), `verdict-2.2.0` (verdict),
+`kb-2026-10-28-draft` (ingredient notes), `label-extract-2.3.0` (label reader), `research-2.9.3` (web research), `explain-2.0.0` (claim-checked explanations).
 A saved result records `assessmentVersion` and its parts (`scoreVersion`, `kbVersion`, `scopeVersion`); the shared product record its
 classification version; each fact read from a label, page or document its reader's version; each explanation its own. When the app opens
 a result saved under an older `assessmentVersion` it asks for a re-check (section 10), so a known bad classification is corrected without
@@ -210,7 +210,15 @@ While the product is unresolved, only recall and documented-concern cautions are
   - gives a score ("N/100", "N out of 100") other than the assessment's score;
   - uses any other number that is not stated in the score, its basis, the highlights or the unresolved items;
   - gives an unscored product a number out of 100;
-  - omits the most serious caution.
+  - omits the most serious caution;
+  - says the product lacks, has no or is missing information Purrbi has only not found (verdict 2.2.0, test B: "it lacks a
+    nutritional adequacy statement");
+  - says the product is made, formulated or intended for a species when only a retailer's listing says who it is for (the
+    model is told whether the species is confirmed).
+- **Who it is for, unconfirmed.** When only a retailer's listing says who the product is for, the personal finding says
+  "Listed for cats by a retailer’s listing; Purrbi couldn’t confirm it from the package or the maker." It is information,
+  not a positive, so no "Made for cats" highlight is shown. (Results saved before this keep their wording until the product
+  is scanned again: the app compares assessment versions itself.)
 - **Fallback.** The rule-based sentence is built from whole sentences, 25–40 words, with the most serious caution first, then what the findings mean; an unscored product gets one short clause on what a rating still needs. It passes the same checks.
 - **Fixed sentences.** Out-of-scope and unresolved products get a fixed sentence.
 - **Caching.**
@@ -283,7 +291,7 @@ A result that uses the owner's photo before it is tied to the barcode says "Labe
 
 ## 10. Retrieval before photos, and keeping results current
 
-**Research `research-2.9.2`** (`sources/research.ts`, `pageEvidence.ts`). When the pet databases lack something, research looks for it before
+**Research `research-2.9.3`** (`sources/research.ts`, `pageEvidence.ts`). When the pet databases lack something, research looks for it before
 any photo is asked for:
 - The research model is a setting (`OPENAI_RESEARCH_MODEL`; development uses `gpt-5-mini` since 2026-10-31, `gpt-4.1-mini` before).
   Each run records the model it used, and another model is a new method: a product still missing information is searched again with
@@ -326,10 +334,15 @@ any photo is asked for:
     the species has them: it breaks ties (a kitten recipe's page before the adult one's) and lowers an address for the
     other species (a dog food's page for a cat food).
   Sites take turns (a site's second page counts lower, a third is not checked). A run checks at most twelve pages (was
-  eight), a search's pages with the checks the run has left, within the same time limit. The ranking only chooses which
+  eight), a search's pages with the checks the run has left, within the same time limit. While another search of the run
+  follows and can still start (the barcode's other form, the search by the answer's name), the run's last four checks are
+  not spent on a search's unlikely pages (address scoring 0 or less); they are named (2.9.3, test A on 2.9.2: two document
+  pages and a digits-of-pi search took the checks the search by name's marketplace pages needed). The ranking only chooses which
   pages Purrbi fetches: a page is used only when Purrbi finds the barcode on it. (2.9.0 briefly gave each search a share
   of eight and carried the rest; review found it could drop carried pages and start a paid search before free checks,
   so 2.9.1 checks each search's own pages in order instead.)
+- A product name or brand in another script (a Japanese import listing's) gives way to one in Latin script from a page
+  that also shows the barcode (test B: petfood.express), so the product is shown by its own name.
 - The trace names the result pages left out of the checks: documents and pages without a secure address with their
   addresses (once a run), the others by site with the reason (eight a run, two per site in a search, or the run's checks
   or reads already used).

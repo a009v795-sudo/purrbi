@@ -84,6 +84,10 @@ export function personalize(
       state = worse(state, 'review');
       add('review', `Only ${basisText} says who it is for (${productSpecies}s); Purrbi couldn’t confirm whether it is also for ${pet.species}s.`, 'Retailer listing', 'P-SPECIES');
     }
+  } else if (!confirmed) {
+    // Only a retailer's listing says who it is for: said as such, never as a positive "Made for cats" (test B,
+    // 2026-10-31: the header said "not confirmed" while the highlight and the verdict said "made for cats").
+    add('info', `Listed for ${productSpecies === 'cat_and_dog' ? 'cats and dogs' : `${productSpecies}s`} by ${basisText}; Purrbi couldn’t confirm it from the package or the maker.`, basisLabel, 'P-SPECIES');
   } else {
     add('positive', productSpecies === 'cat_and_dog' ? `Made for cats and dogs (${basisText}).` : `Made for ${pet.species}s.`, basisLabel, 'P-SPECIES');
   }

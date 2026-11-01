@@ -970,7 +970,7 @@ describe('research 2.8.1 review fixes', () => {
         call++;
         const sources =
           call === 1
-            ? ['https://www.chewy.com/p/1', 'https://www.chewy.com/p/2', 'https://www.chewy.com/p/3', 'https://www.chewy.com/p/4', 'https://beda.cz/files/cenik-2026.pdf', ...Array.from({ length: 10 }, (_, i) => `https://shop${i}.example/p`)]
+            ? ['https://www.chewy.com/p/1', 'https://www.chewy.com/p/2', 'https://www.chewy.com/p/3', 'https://www.chewy.com/p/4', 'https://beda.cz/files/cenik-2026.pdf', ...Array.from({ length: 12 }, (_, i) => `https://shop${i}.example/p`)]
             : ['https://beda.cz/files/cenik-2026.pdf', 'https://later.example/p/1'];
         return new Response(JSON.stringify({ output: [{ type: 'web_search_call', action: { type: 'search', queries: [call === 1 ? '"099482517243"' : '"0099482517243"'], sources: sources.map((u) => ({ type: 'url', url: u })) } }, { type: 'message', content: [{ type: 'output_text', text: JSON.stringify({ ...modelAnswer({}), found: false }), annotations: [] }] }] }), { status: 200 });
       }
@@ -1203,5 +1203,43 @@ describe('research 2.9.2: root addresses, lookups and who the product is for', (
     expect(kitten.fetched[0]).toBe('https://www.chewy.com/purina-pro-plan-kitten-chicken-rice/dp/2');
     const cat = await order(['https://www.wellnesspetfood.com/product-catalog/core-salmon-dog-food', 'https://www.wellnesspetfood.com/product-catalog/core-salmon-cat-food'], { knownBrand: 'Wellness', knownName: 'Wellness CORE Salmon Cat Food' });
     expect(cat.fetched[0]).toBe('https://www.wellnesspetfood.com/product-catalog/core-salmon-cat-food');
+  });
+});
+
+// Test A on research 2.9.2 (2026-10-31, trace 6426c942-1aa): the barcode search's own pages took all 12 checks, two
+// document pages and a digits-of-pi search page among them, so the search by name's marketplace pages got none.
+describe('research 2.9.3: the run’s last checks are kept for its next search', () => {
+  const plain = '<html><head><title>Page</title></head><body><h1>Something else</h1></body></html>';
+  const answer = (found: boolean) => ({ ...modelAnswer({ product_name: found ? 'Whole Paws Premium Cat Food Grain Free Salmon Paté' : null, brand: found ? 'Whole Paws' : null }), found });
+  const respond = (urls: string[], ans: unknown) =>
+    new Response(JSON.stringify({ output: [{ type: 'web_search_call', action: { type: 'search', queries: ['"099482481087"', '"0099482481087"'], sources: urls.map((url) => ({ type: 'url', url })) } }, { type: 'message', content: [{ type: 'output_text', text: JSON.stringify(ans), annotations: [] }] }] }), { status: 200 });
+  const desertcart = `<html><head><title>Whole Paws Grain-Free Salmon Pate 5.5 oz</title></head><body><h1>Whole Paws Grain-Free Salmon Paté Loaf Cat Food, 5.5 oz</h1>
+    <p>Ingredients: Salmon, Water Sufficient for Processing, Salmon Broth, Liver, Pea Protein, Natural Flavor, Guar Gum, Tricalcium Phosphate, Potassium Chloride, Salt</p><table><tr><td>UPC</td><td>099482481087</td></tr></table></body></html>`;
+  const run = async () => {
+    let call = 0;
+    const fetched: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url === 'https://api.openai.com/v1/responses') {
+        call++;
+        // Search 1: nine product pages of the brand without the barcode, then two document pages and a site search (unlikely).
+        return call === 1
+          ? respond([...Array.from({ length: 9 }, (_, i) => `https://shop${i}.example/products/whole-paws-salmon-pate-${i}`), 'https://www.scribd.com/document/1/BROS-150', 'https://www.scribd.com/document/2/Million-Random-Digits', 'https://pi.bigparadox.com/?q=099482481087'], answer(true))
+          : respond(['https://www.desertcart.in/products/12345-whole-paws-grain-free-salmon-pate-5-5-oz', 'https://www.cats.com/whole-paws-cat-food-review'], answer(false));
+      }
+      if (url.includes('chat/completions'))
+        return new Response(JSON.stringify({ model: 'gpt-5-mini', choices: [{ message: { content: JSON.stringify(modelAnswer({ product_name: 'Whole Paws Grain-Free Salmon Paté Loaf Cat Food, 5.5 oz', brand: 'Whole Paws', intended_for: 'cats', ingredients_verbatim: 'Salmon, Water Sufficient for Processing, Salmon Broth, Liver, Pea Protein, Natural Flavor, Guar Gum, Tricalcium Phosphate, Potassium Chloride, Salt' })) }, finish_reason: 'stop' }] }), { status: 200 });
+      if (!url.endsWith('.js')) fetched.push(new URL(url).hostname);
+      return new Response(url.includes('desertcart') ? desertcart : plain, { status: 200 });
+    }));
+    const r = await researchProduct({ apiKey: 'k', model: 'gpt-5-mini', gtin14: '00099482481087', barcode: '099482481087', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-11-01T00:30:00Z') });
+    return { r, fetched };
+  };
+  it('a search followed by the search by name keeps its unlikely pages from the last checks, so the next search’s product page is checked and read', async () => {
+    const { r, fetched } = await run();
+    expect(fetched).not.toContain('www.scribd.com');
+    expect(fetched).not.toContain('pi.bigparadox.com');
+    expect(r.discarded).toContain('barcode search: result pages not checked (unlikely, and the run’s last checks are kept for its next search): scribd.com, pi.bigparadox.com');
+    expect(r.discarded).toContain('search by the answer’s name: desertcart.in (a search result) shows this barcode, so Purrbi read it');
+    expect(r.sources[0]).toMatchObject({ sourceName: 'desertcart.in', matchConfidence: 'exact_barcode' });
   });
 });

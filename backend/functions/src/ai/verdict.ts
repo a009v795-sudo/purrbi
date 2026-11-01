@@ -12,10 +12,11 @@ import type { Highlight } from '../domain/highlights';
 import { SourceError } from '../util/http';
 import { chatJson } from './openai';
 
-export const VERDICT_VERSION = 'verdict-2.1.0'; // 2.1.0: the most serious caution is named by what it is; the pet's name is replaced before any text is cut; product names are not claims
+export const VERDICT_VERSION = 'verdict-2.2.0'; // 2.2.0: who the product is for is stated only as confirmed as it is (a retailer's listing is not the package); what Purrbi has not found is never said to be missing from the product. 2.1.0: the most serious caution is named by what it is; the pet's name is replaced before any text is cut; product names are not claims
 
 export interface VerdictInput {
-  product: { name: string; brand: string; species: string; category: string };
+  /** speciesConfirmed: false when only a retailer's listing says who it is for (speciesBasis says what does). */
+  product: { name: string; brand: string; species: string; category: string; speciesConfirmed?: boolean; speciesBasis?: string };
   assessment: { score: number | null; provisional: boolean; label: string; basis: string; withheldReason: string; missing: string; coverage?: number | null; low?: number | null; high?: number | null; concerns?: string[] };
   pet: { name: string; species: string; fit: string; headline: string } | null;
   positives: { title: string; detail: string; value: string }[];
@@ -27,6 +28,10 @@ export function verdictInput(args: {
   productName: string;
   brand: string;
   species: string;
+  /** Whether the product's own evidence (package, feeding statement, maker, pet database) says who it is for. */
+  speciesConfirmed?: boolean;
+  /** What says who it is for, in words ("a retailer’s listing"). */
+  speciesBasis?: string;
   category: string;
   score: number | null;
   provisional: boolean;
@@ -45,7 +50,7 @@ export function verdictInput(args: {
   unresolved: string[];
 }): VerdictInput {
   const full: VerdictInput = {
-    product: { name: args.productName || 'This product', brand: args.brand, species: args.species, category: args.category },
+    product: { name: args.productName || 'This product', brand: args.brand, species: args.species, category: args.category, speciesConfirmed: args.speciesConfirmed ?? true, ...(args.speciesBasis ? { speciesBasis: args.speciesBasis } : {}) },
     assessment: { score: args.score, provisional: args.provisional, label: args.scoreLabel, basis: args.scoreBasis, withheldReason: args.withheldReason, missing: (args.missing ?? []).join(' and the '), coverage: args.coverage ?? null, low: args.low ?? null, high: args.high ?? null, concerns: args.concerns ?? [] },
     pet: args.pet ? { name: petPlaceholder(args.pet.species), species: args.pet.species, fit: args.pet.fit, headline: args.pet.headline } : null,
     positives: args.positives.map((h) => ({ title: h.title, detail: h.full ?? h.detail, value: h.value })),
@@ -163,6 +168,10 @@ export function checkVerdict(text: string, input: VerdictInput): string | null {
   // It must interpret the findings, not restate the score's missing-information message.
   if (/not enough information to score|label score is not|preventing a full assessment|scoring engine|partial assessment|between \d+ and \d+/i.test(text)) return 'repeats the missing-information message instead of interpreting the findings';
   if (/…|\.\.\./.test(text)) return 'trailing ellipsis';
+  // What Purrbi has not found is not missing from the product (test B: "it lacks a nutritional adequacy statement").
+  if (/\b(?:lacks?|lacking|has no|have no|doesn[’']t (?:have|include|carry|state|list)|does not (?:have|include|carry|state|list)|is missing|are missing|missing)\b[^.;]{0,40}\b(?:adequacy|complete and balanced|feeding|statement|analysis|ingredients? list|list of ingredients|calori\w*|label|information|nutrition\w*)/i.test(text)) return 'says the product lacks what Purrbi has not found';
+  // Who it is for is stated only as confirmed as it is: a retailer's listing is not the package (test B).
+  if (input.product.speciesConfirmed === false && /\b(?:made|formulated|designed|intended|meant|specifically)\s+(?:specifically\s+|only\s+|especially\s+)?for\s+(?:cats|dogs|kittens|puppies|felines|canines)\b|\b(?:a|this)\s+(?:cat|dog)\s+food\s+(?:is\s+)?made\b/i.test(text)) return 'states who it is for as confirmed when only a retailer lists it'
   // A product's own name ("Perfect Portions", "Healthy Kitten") is not a claim Purrbi makes.
   const claims = [input.product.name, input.product.brand].filter((x) => x && x.length > 2).reduce((t, x) => t.replace(new RegExp(escapeRe(x), 'gi'), ' '), text);
   if (FORBIDDEN.test(claims)) return `claim Purrbi does not make (“${FORBIDDEN.exec(claims)![0]}”)`;
@@ -214,6 +223,8 @@ const SYSTEM = [
   'If there is a caution with severity "alert" (a recall match, a product made for another species, an ingredient in the pet’s allergy profile), start with it.',
   'Interpret the positives and cautions: say what they mean for this pet. Do not restate missing-information messages; the screen shows them. If there is a score, call it the Purrbi score and give it as “N/100” with its label in lower case. If there is no score, you may say in a few words that it is not rated yet; never give a number out of 100.',
   'If there is no pet, speak about the product in general.',
+  'If product.speciesConfirmed is false, only a retailer’s listing says who the product is for: never say it is made, formulated or intended for that species; you may say a retailer lists it for them.',
+  'The assessment’s missing items are what Purrbi has not found yet, not something the product lacks: never say the product lacks, has no or is missing them.',
   'Never praise or judge the product beyond the findings: never say safe, ideal, perfect, healthy, nutritious, great, excellent, premium, high-quality, best, recommended, guaranteed or “no concerns”, and never make health or treatment claims. Do not give veterinary advice. Write numbers only as they appear in the input, and the score only as given.',
 ].join(' ');
 

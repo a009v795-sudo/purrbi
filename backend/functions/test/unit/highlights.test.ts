@@ -130,3 +130,42 @@ describe('recall statuses', () => {
     expect(recallDisplay(null).recallStatusLabel).toBe('Not checked');
   });
 });
+
+// Test B on research 2.9.2 (2026-10-31, trace ffb9aa4a-0ba): the header said "Listed for cats by a retailer’s listing (not
+// confirmed)" while the highlight said "Made for cats" and the AI verdict "This cat food is made specifically for cats …
+// but it lacks a nutritional adequacy statement".
+describe('who the product is for and what is missing, said as Purrbi knows it (test B)', () => {
+  const unconfirmed = (f: ProductFacts) => {
+    const scope = scopeOf(f);
+    return { ...scope, speciesEvidence: { set: ['cat' as const], confirmed: false, basis: 'retailer_listing' as const, disputed: false, note: '' } };
+  };
+  it('a species only a retailer lists is information, not a positive “Made for cats”', () => {
+    const f = facts();
+    const scope = unconfirmed(f);
+    const general = assessGeneral(f, scope);
+    const personal = personalize(pet(), f, scope, general, noRecall, NOW);
+    expect(personal.findings.some((x) => x.rule === 'P-SPECIES' && x.kind === 'positive')).toBe(false);
+    expect(personal.findings.find((x) => x.rule === 'P-SPECIES')?.text).toBe('Listed for cats by a retailer’s listing; Purrbi couldn’t confirm it from the package or the maker.');
+    const highlights = buildHighlights({ facts: f, scope, general, personal, recall: noRecall });
+    expect(highlights.positives.map((h) => h.title)).not.toContain('Made for cats');
+  });
+  it('the verdict check refuses “made for cats” when only a retailer lists it, and a missing statement said as the product lacking it', () => {
+    const base = {
+      product: { name: 'TEST FIXTURE Gravies', brand: 'TESTBRAND', species: 'cat', category: 'complete_food', speciesConfirmed: false, speciesBasis: 'retailer listing' },
+      assessment: { score: null, provisional: false, label: 'Information incomplete', basis: '', withheldReason: 'Purrbi needs the nutritional adequacy statement.', missing: 'nutritional adequacy ("complete and balanced") statement' },
+      pet: { name: 'your cat', species: 'cat', fit: 'incomplete', headline: '' },
+      positives: [{ title: 'Main ingredients named by source', detail: 'The first 5 main ingredients each say which animal or plant they come from.', value: '' }],
+      cautions: [],
+      unresolved: [],
+    };
+    const asSeen = 'This cat food is made specifically for cats and lists the main ingredients by source, but it lacks a nutritional adequacy statement, so its suitability for your cat cannot be fully assessed yet.';
+    expect(checkVerdict(asSeen, base)).toBe('says the product lacks what Purrbi has not found');
+    const madeFor = 'This cat food is made specifically for cats and lists the main ingredients by source; Purrbi has not found its complete and balanced statement yet, so it is not rated for your cat.';
+    expect(checkVerdict(madeFor, base)).toBe('states who it is for as confirmed when only a retailer lists it');
+    expect(checkVerdict(madeFor, { ...base, product: { ...base.product, speciesConfirmed: true } })).toBeNull();
+    const listed = 'A retailer lists this food for cats, and its main ingredients are named by source; Purrbi has not found its complete and balanced statement yet, so it is not rated for your cat.';
+    expect(checkVerdict(listed, base)).toBeNull();
+    // A finding that only says the product has no listed concern is not refused as missing information.
+    expect(checkVerdict('Its main ingredients are named by source and it has no ingredient on Purrbi’s concern list for your cat; it is not rated yet, as Purrbi has not found its complete and balanced statement.', base)).toBeNull();
+  });
+});

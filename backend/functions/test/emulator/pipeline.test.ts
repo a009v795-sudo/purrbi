@@ -50,6 +50,7 @@ let identityPage = false; // research finds a retailer page showing BC.unknown's
 let partialPage = false; // research finds a page showing BC.unknown's barcode with its name and brand, not who it is for
 let researchCut: 'none' | 'not_started' | 'cut' = 'none'; // the scan's time limit stops research before its first search, or cuts it short
 let refusingPages = false; // the pages research names for BC.unknown turn automated readers away (and one is gone), with a long trace
+let latinPage = false; // research finds a US shop's page showing BC.unknown's barcode: its English name, who it is for, ingredients
 let researchOpts: { knownName?: string; knownBrand?: string; model?: string }[] = [];
 let verdictInputs: string[] = [];
 
@@ -143,6 +144,10 @@ const sources: Sources = {
   async research(o) {
     calls.research = (calls.research ?? 0) + 1;
     researchOpts.push({ knownName: o.knownName, knownBrand: o.knownBrand, model: o.model });
+    if (latinPage && o.barcode === BC.unknown) {
+      const page = { sourceId: `web:shop.example.us:${o.gtin14}`, sourceType: 'retailer_or_web' as const, sourceName: 'shop.example.us', url: 'https://shop.example.us/products/gravies', retrievedAt: NOW.toISOString(), matchConfidence: 'exact_barcode' as const, readerVersion: RESEARCH_VERSION };
+      return { facts: { productName: { value: 'TEST FIXTURE Wellness Gravies Chicken & Turkey', source: page }, brand: { value: 'TESTBRAND', source: page }, classificationSignals: [{ text: 'intended for cats', source: page.sourceId, kind: 'research' as const }] }, sources: [page], discarded: [], model: 'mock' };
+    }
     if (partialPage && o.barcode === BC.unknown) {
       const page = { sourceId: `web:shop.example.jp:${o.gtin14}`, sourceType: 'retailer_or_web' as const, sourceName: 'shop.example.jp', url: 'https://shop.example.jp/c0012.html', retrievedAt: NOW.toISOString(), matchConfidence: 'exact_barcode' as const, readerVersion: RESEARCH_VERSION };
       return { facts: { productName: { value: 'TEST FIXTURE ウェルネス グレービー 85g', source: page }, brand: { value: 'TESTBRAND', source: page }, classificationSignals: [] }, sources: [page], discarded: [], model: 'mock' };
@@ -304,6 +309,7 @@ beforeEach(async () => {
   partialPage = false;
   researchCut = 'none';
   refusingPages = false;
+  latinPage = false;
   researchOpts = [];
   await fetch(`http://${process.env.FIRESTORE_EMULATOR_HOST}/emulator/v1/projects/demo-purrbi/databases/(default)/documents`, { method: 'DELETE' });
   await db.doc('users/u1/pets/cat1').set({ name: 'Miso', species: 'cat', birthDate: Timestamp.fromDate(new Date('2022-01-01')), allergiesStatus: 'reported', allergies: ['chicken'], profileVersion: 2 });
@@ -1189,6 +1195,27 @@ describe('fallbacks before asking the owner for photos', () => {
     await processScan(deps({ researchEnabled: true }), 'u1', named.id);
     expect(calls.research).toBe(1);
     expect(calls.hint ?? 0).toBe(0);
+  });
+  it('a name in another script gives way to a Latin-script name from a page that also shows the barcode; the brand too (test B, 2026-10-31)', async () => {
+    partialPage = true;
+    hintDown = true;
+    const first = await newScan('u1', BC.unknown);
+    await processScan(deps({ researchEnabled: true }), 'u1', first.id);
+    expect((await read(first)).productName).toBe('TEST FIXTURE ウェルネス グレービー 85g');
+    // A brand written in both scripts, as the Japanese listing gives it.
+    const gtin = (await read(first)).gtin;
+    const product = (await db.doc(`products/${gtin}`).get()).data()!;
+    await db.doc(`products/${gtin}`).update({ 'facts.brand.value': 'TESTBRAND（テストブランド）' });
+    expect(product.facts.productName.source.matchConfidence).toBe('exact_barcode');
+    partialPage = false;
+    hintDown = false;
+    latinPage = true;
+    const later = await newScan('u1', BC.unknown);
+    await processScan({ ...deps({ researchEnabled: true }), now: () => new Date(NOW.getTime() + 13 * 3600 * 1000) }, 'u1', later.id);
+    const s = await read(later);
+    expect(s.productName).toBe('TEST FIXTURE Wellness Gravies Chicken & Turkey');
+    expect(s.brand).toBe('TESTBRAND');
+    expect(s.evidenceNotes.join(' ')).toMatch(/product name, brand.* from shop\.example\.us/);
   });
   it('the barcode database is not asked while today’s AI budget is used up (review of research 2.7.0)', async () => {
     await db.doc(`system/aiUsage_${NOW.toISOString().slice(0, 10).replace(/-/g, '')}`).set({ calls: 100000 });

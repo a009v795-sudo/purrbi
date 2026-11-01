@@ -616,6 +616,18 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
         const merged = fillMissing(facts, { ...found, sources: r.sources });
         facts = merged.facts;
         filled = merged.filled;
+        // A name or brand in another script (a Japanese import listing's) gives way to one in Latin script from a page
+        // that also shows the barcode (test B, 2026-10-31: petfood.express): the product is shown by its own name.
+        const tied = (f?: { source?: SourceRef }) => f?.source?.matchConfidence === 'exact_barcode';
+        const nonLatin = (t: string) => /(?=\p{L})\P{Script=Latin}/u.test(t);
+        if (found.productName && tied(found.productName) && !nonLatin(found.productName.value) && facts.productName && otherScript(facts.productName.value)) {
+          facts = { ...facts, productName: found.productName };
+          filled = [...filled, 'productName'];
+        }
+        if (found.brand && tied(found.brand) && !nonLatin(found.brand.value) && facts.brand && nonLatin(facts.brand.value)) {
+          facts = { ...facts, brand: found.brand };
+          filled = [...filled, 'brand'];
+        }
         fetchedPublic = fetchedPublic || filled.length > 0;
         if (origin === 'label' && filled.length) origin = 'web';
       }
@@ -803,6 +815,8 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
     productName: facts.productName?.value ?? '',
     brand: facts.brand?.value ?? '',
     species: scope.species,
+    speciesConfirmed: scope.speciesEvidence ? scope.speciesEvidence.confirmed : scope.species !== 'unknown',
+    speciesBasis: scope.speciesEvidence?.basis?.replace(/_/g, ' '),
     category: general.category,
     score: general.score,
     provisional: general.scoreProvisional,
