@@ -55,6 +55,12 @@ by. The unit-tested hint path then finds the Wellness page, whose markup carries
 under 2.6.0, though, so another research method version is needed before it is searched again. That path is
 unit-tested, not live-tested.
 
+**Latest live results (backend `28005a9`, 2026-11-01, see the last section):**
+- **A:** still unscored. The pages that show its barcode refuse automated readers (HTTP 403).
+- **B:** now **scored 75/100 "Good"**, confirmed for cats by its feeding statement. The score comes from the
+  manufacturer's page, which lists the same recipe, and that page's nutrition PDF.
+- **C:** still unscored. No page on the web shows its barcode.
+
 ## All attempts
 
 | # | Time (UTC) | App / backend | Barcode | Scan / trace | Lookup type | Outcome |
@@ -452,3 +458,84 @@ Unit tests 491/491, emulator tests 95/95, CI green. The results of A, B and C ab
     cats by a retailer’s listing (not confirmed)".
   - The verdict says the food "lacks a nutritional adequacy statement" when Purrbi only did not find one.
   - The product keeps the Japanese listing's name, though an English shop page now ties the barcode.
+
+## Research 2.9.3 and verdict 2.2.0: the three issues from the 2.9.2 reruns (2026-11-01)
+
+**What changed** (commits `9077494`, `6b20223`, `7b4c4bb`, `b55b23f`, `3c8136b`, `28005a9`; reviews `wf_3ab74dc5-94d` and
+`wf_f6844c51-a48`, whose 8 + 11 confirmed findings were all fixed, each with a test that fails on the code before it):
+- **A, check budget.** While another search of the run follows and its own page checks could still run after its call,
+  the run's last four checks are not spent on a search's unlikely pages. They are held back, named in the trace, and
+  checked after the searches if none found the product, each search's pages as that search's. A search that stops at a
+  page showing the barcode holds its remaining pages too, in case that page's read gives nothing. When the time limit ends
+  the checks, held pages are named under it.
+- **B, wording.** A species only a retailer lists is information, not the "Made for cats" positive. The model is told
+  whether the species is confirmed, and its verdict is refused, and replaced by the rule-based one, when it:
+  - states who the product is for as fact. Hedges count only right in front of the claim. The product's name and
+    Purrbi's own finding words don't count;
+  - says the product lacks a label item. Its subject decides: "Purrbi has no feeding statement yet" and "the retailer's
+    listing has no adequacy statement" pass. Items the score's basis lists as "not found yet" count too.
+  - The rule-based verdict passes these checks for all 33,600 pipeline inputs of the reviewer's sweep.
+- **B, name.** A name in another script that an earlier research page gave gives way to a Latin-script one in these cases:
+  - **Sources accepted:** a page showing the barcode or the same recipe, or the manufacturer's page matched by such a
+    page's name.
+  - **Never replaced:** a database's, an owner's label photo's or a manufacturer's name.
+  - **Never used:** a page that lists several variants' barcodes. Such a page also no longer renames a product in
+    research.
+  - **Brand:** it follows only when the name is then in Latin script.
+  - **Records:** the replacement has its own evidence note and is written to the shared record.
+
+**Reruns on backend `28005a9`** (2026-11-01, 02:23–02:26 UTC, account `accept`, typed entry in the release web build):
+
+| Test | Scan / trace | What happened | Outcome |
+|---|---|---|---|
+| A `099482481087` | `p4-c12-099482481087` / `f825750f-792` | Two calls. The barcode search checked its likely pages (Whole Foods, Health First Market, Instacart, pawdiet, instagrid): none shows the barcode. Ubuy, desertcart.in and eBay refuse readers (403). scribd and the digits-of-pi page were held back as designed. The search by the answer's name had two checks left: happypetco (another flavour), Ubuy Liberia (403). The same Whole Foods page was checked three times under different tracking keys. | Unscored, "Not yet confirmed for cats or dogs". Card: "A page found for this barcode (on ubuy.com.lb) turns automated readers away, so nothing could be checked on it or added." |
+| B `076344886570` | `p4-c12-076344886570` / `41766fa1-0fb` | petexjapan.com shows the barcode; the manufacturer's page lists the **same recipe** (10 of 10 ingredients), and its nutrition PDF gives "FELINE MAINTENANCE AAFCO NUTRIENT PROFILE CLAIM SUBSTANTIATION". The name is replaced by the manufacturer's: "Shown by the product name on wellnesspetfood.com (the manufacturer’s page), instead of the product name in another script from store.shopping.yahoo.co.jp." | **Scored 75/100 "Good"**, "For cats (feeding statement)", complete; positives: matches the known life stage, main ingredients named by source. Verdict: "… fits your adult cat’s profile and is labeled for adult maintenance …" (no "lacks", no unconfirmed species). The brand stays "WELLNESS（ウェルネス）", and the **recall check failed**: openFDA refused that brand (HTTP 400). |
+| C `099482517243` | `p4-c12-099482517243` / `740aa28e-b34` | No page shows the barcode (scribd, business directories; 5 pages refuse readers). | Unscored. Card: "No manufacturer or retailer page could be matched to this barcode." |
+
+**Issues seen, fixed in research 2.9.4** (commits `ec028a3`, `4549779`, `4661827`, `c2cfa76`; reviews `wf_87525600-74d`
+and `wf_ebc39dfd-c6b`, then an adversarial check of 366 brand strings. All confirmed findings were fixed, each with a test
+that fails on the code before it):
+- **A.** Result addresses that differ only by tracking keys (`srsltid`, `gclid`, `utm_…`) are one page, checked once.
+- **B, brand.** With the manufacturer's name, its Latin-script brand replaces a first page's brand written with another
+  script.
+- **B, recall check.** The FDA recall search uses the brand's Latin-script words ("WELLNESS"). A brand with none is "not
+  checked", said as such.
+- B's own record keeps "WELLNESS（ウェルネス）". It is complete now, so research does not run for it again.
+- Review fixes to the recall search:
+  - Trademark signs never become letters ("IAMS™" was "IAMSTM").
+  - Typographic apostrophes stay apostrophes.
+  - A brand mixing scripts is searched only as "<Latin name>（<reading>）". Picking Latin words out of other mixes gave
+    wrong words in 68 of 366 test strings ("퓨리나 ONE" → "ONE"). Any of them would have found nothing and said "none found".
+  - A plain brand is searched by its first name, outside brackets.
+  - A check that cannot be made never hides the stored result: it is shown with its date.
+- Review fixes to the brand comparison:
+  - The maker's or a page's brand must be the same brand, whatever the spelling ("Hill’s"/"Hills"). Never a parent company
+    or a company name around the brand.
+  - A brand with no Latin name gives way only to the brand of a page showing the barcode.
+
+**Reruns on backend `c2cfa76`** (2026-11-01, 05:14–05:16 UTC, account `accept`):
+
+| Test | Scan / trace | What happened | Outcome |
+|---|---|---|---|
+| A `099482481087` | `p4-c13-099482481087` / `91f59997-c1a` | **Research not run:** OpenAI answered HTTP 401, "Your API key has expired". | Unscored, "Not yet confirmed for cats or dogs" (as before). Not a test of 2.9.4. |
+| B `076344886570` | `p4-c13-076344886570` / `5b73c6e3-8be` | Saved record reused; research not due (complete). The **recall check now works**: openFDA answered 200 for "WELLNESS". | 75/100 "Good", complete. Recall: "No current matching notice (older notices exist for this brand)", "WELLNESS has 1 pet-product enforcement record (2021–2021)". On `28005a9` it was "The recall check failed; try again later" (HTTP 400). The saved verdict was reused. |
+| C `099482517243` | `p4-c13-099482517243` / `3bcd9476-97c` | **Research not run:** the same HTTP 401. | Unscored (as before). Not a test of 2.9.4. |
+
+**Live-verified:**
+- On `28005a9`:
+  - A held back its unlikely pages.
+  - B's name was replaced by the manufacturer's.
+  - B was scored from the manufacturer's page (same recipe) and its PDF.
+  - B's verdict says neither "lacks" nor an unconfirmed species.
+- On `c2cfa76`: B's recall search by "WELLNESS".
+
+**Not live-verified (unit and emulator tests only):**
+- Checking held pages after the searches.
+- One page under tracking keys.
+- The manufacturer's brand.
+- The verdict checks on an unconfirmed species. B's species is confirmed now, so no live scan used them.
+- The stored-recall fallback.
+
+**Blocked:** the backend's OpenAI key expired (2026-11-01). New research, AI verdicts, explanations and label-photo
+reading fail until a new key version is saved in Secret Manager (`OPENAI_API_KEY`) and the backend is deployed again.
+
