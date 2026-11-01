@@ -3,6 +3,8 @@
 // animal-product notice, so "none found" is not proof that no recall exists.
 import { textContainsGtin } from '../domain/barcode';
 import { normalizeIngredientName } from '../domain/ingredients';
+import { latinBrand } from '../domain/script';
+export { searchableBrand } from '../domain/script';
 import type { RecallCheck, RecallRecord, SourceRef } from '../domain/types';
 import { httpJson, SourceError } from '../util/http';
 
@@ -20,15 +22,6 @@ interface EnforcementResult {
   product_description?: string;
   code_info?: string;
   recalling_firm?: string;
-}
-
-/**
- * The brand as openFDA's search takes it: its Latin-script words (with digits and & ' . -). openFDA's records are in
- * English, and a query with another script's characters is refused (test B, 2026-11-01: HTTP 400 "Search not supported"
- * for "WELLNESS（ウェルネス）", an import listing's brand).
- */
-export function searchableBrand(brand: string): string {
-  return brand.normalize('NFKC').replace(/[^\p{Script=Latin}\p{N}\s&'.-]/gu, ' ').replace(/\s+/g, ' ').trim();
 }
 
 function quote(term: string): string {
@@ -56,8 +49,9 @@ export async function checkRecalls(
   if (!input.brand) {
     return { status: 'not_checked', summary: 'The brand is unknown, so FDA recall records could not be searched.', checkedAt, source: null, records: [] };
   }
-  const brand = searchableBrand(input.brand);
-  if (!/\p{L}/u.test(brand)) {
+  // Its Latin-script words: openFDA's records are in English and it refuses another script's characters (test B).
+  const brand = latinBrand(input.brand);
+  if (!brand) {
     return { status: 'not_checked', summary: 'The brand is known only in another script, so FDA recall records (in English) could not be searched.', checkedAt, source: null, records: [] };
   }
   const search = `(recalling_firm:${quote(brand)}+product_description:${quote(brand)})`;

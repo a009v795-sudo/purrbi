@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { normalizeBarcode } from '../../src/domain/barcode';
 import { classifyScope, feedMarkers } from '../../src/domain/scope';
 import { lookupOpenFacts, openFactsToFacts } from '../../src/sources/openFacts';
+import { latinBrand } from '../../src/domain/script';
 import { checkRecalls, searchableBrand } from '../../src/sources/openfda';
 import { compareRecipes } from '../../src/sources/research';
 
@@ -87,6 +88,35 @@ describe('Open*Facts lookups: a miss says where the record is filed', () => {
     const none = await checkRecalls({ brand: 'ウェルネス', productName: 'TEST FIXTURE', gtin14: '00076344886570' }, new Date('2026-11-01T00:00:00Z'));
     expect(none).toMatchObject({ status: 'not_checked', summary: 'The brand is known only in another script, so FDA recall records (in English) could not be searched.' });
     expect(urls).toHaveLength(1);
+  });
+  // Review of research 2.9.4: a trademark sign must not become letters ("IAMSTM"), a typographic apostrophe not a space,
+  // and stray Latin letters beside another script's name are not the brand.
+  it('the recall search keeps the brand’s own words: trademark signs, apostrophes, full-width letters, stray letters', async () => {
+    expect(searchableBrand('IAMS™')).toBe('IAMS');
+    expect(searchableBrand('Blue Buffalo™')).toBe('Blue Buffalo');
+    expect(searchableBrand('Whiskas℠')).toBe('Whiskas');
+    expect(searchableBrand('PurinaⓇ ONE')).toBe('Purina ONE');
+    expect(searchableBrand('Purina® Pro Plan™')).toBe('Purina Pro Plan');
+    expect(searchableBrand('Hill’s Science Diet')).toBe("Hill's Science Diet");
+    expect(searchableBrand('Stella & Chewy’s')).toBe("Stella & Chewy's");
+    expect(searchableBrand('ＷＥＬＬＮＥＳＳ')).toBe('WELLNESS');
+    expect(searchableBrand('Brand ٣')).toBe('Brand');
+    expect(latinBrand('ピュリナ ONE')).toBe('');
+    expect(latinBrand('ロイヤルカナン JP')).toBe('');
+    expect(latinBrand('Fancy Feast（ファンシーフィースト）')).toBe('Fancy Feast');
+    expect(latinBrand('Go!')).toBe('Go');
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      urls.push(url);
+      return new Response(JSON.stringify({ results: [] }), { status: 200 });
+    }));
+    const searched = async (brand: string) => {
+      const r = await checkRecalls({ brand, productName: 'TEST FIXTURE', gtin14: '00076344886570' }, new Date('2026-11-01T00:00:00Z'));
+      return { status: r.status, search: urls.length ? decodeURIComponent(new URL(urls.splice(0)[0]).searchParams.get('search') ?? '') : null };
+    };
+    expect(await searched('IAMS™')).toEqual({ status: 'none_found', search: '(recalling_firm:"IAMS" product_description:"IAMS")' });
+    expect(await searched('Hill’s Science Diet')).toEqual({ status: 'none_found', search: `(recalling_firm:"Hill's Science Diet" product_description:"Hill's Science Diet")` });
+    expect(await searched('ピュリナ ONE')).toEqual({ status: 'not_checked', search: null });
   });
   it('a recall check that got an empty answer failed; it is not "none found"', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 200 })));

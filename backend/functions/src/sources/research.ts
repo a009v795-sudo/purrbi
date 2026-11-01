@@ -11,6 +11,7 @@ import { detectSpecies, parseAdequacyStatement } from '../domain/adequacy';
 import { printedForms, textContainsGtin } from '../domain/barcode';
 import { normalizeIngredientName, parseIngredientList, type ParsedIngredient } from '../domain/ingredients';
 import { CORE_GA, hasCoreGuaranteedAnalysis, normalizeUnit, nutrientKeyFromLabel, parseCalorieText, parsePackageSize, qualifierFrom, validateGuaranteedAnalysis } from '../domain/nutrition';
+import { brandCovers, hasOtherScriptLetters } from '../domain/script';
 import { parseActiveIngredients } from '../domain/supplements';
 import type { GuaranteedAnalysisEntry, PackageSize, ProductFacts, ProductSpecies, SourceRef } from '../domain/types';
 import { httpBytes, httpJson, httpRequest, SourceError } from '../util/http';
@@ -92,12 +93,12 @@ const numberOnPage = (raw: string, n: number) => {
 
 // Query keys that only track where a visit came from: the same page with any of them is one page (test A, 2026-11-01:
 // a shop's page was checked three times, with and without Google's srsltid).
-const TRACKING_PARAM = /^(?:utm_\w*|srsltid|gclid|gbraid|wbraid|dclid|fbclid|msclkid|yclid|twclid|ttclid|igshid|mc_cid|mc_eid|_ga|_gl)$/i;
+const TRACKING_PARAM = /^(?:utm_\w*|srsltid|gclid|gclsrc|gad_source|gad_campaignid|gbraid|wbraid|dclid|fbclid|msclkid|yclid|twclid|ttclid|igshid|mc_cid|mc_eid|_ga|_gl)$/i;
 /** A result address without its fragment, its tracking keys and (with no query left) a trailing slash. */
 const canonical = (u: string) => {
   const noHash = u.replace(/#.*$/, '');
   const q = noHash.indexOf('?');
-  if (q < 0) return noHash.replace(/\/$/, '');
+  if (q < 0) return noHash.replace(/\/+$/, '');
   const key = (p: string) => {
     try {
       return decodeURIComponent(p.split('=')[0]);
@@ -106,7 +107,7 @@ const canonical = (u: string) => {
     }
   };
   const kept = noHash.slice(q + 1).split('&').filter((p) => p && !TRACKING_PARAM.test(key(p)));
-  return kept.length ? `${noHash.slice(0, q)}?${kept.join('&')}` : noHash.slice(0, q).replace(/\/$/, '');
+  return kept.length ? `${noHash.slice(0, q)}?${kept.join('&')}` : noHash.slice(0, q).replace(/\/+$/, '');
 };
 
 const PAGE_ANALYSIS_HEADING = /(?:guaranteed analysis|typical analysis|analytical constituents|constituants analytiques|composants analytiques|analytische bestandteile|componentes anal[ií]ticos|componenti analitici|analytische bestanddelen|constituintes anal[ií]ticos)/giu;
@@ -570,9 +571,12 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
             const merged = mergeResearch(found.facts, r2.facts, strong, notes);
             if (makerName || (!found.facts.productName && merged.productName)) nameIdentity = r2.identity;
             // With its name, the manufacturer's brand in Latin script replaces a first page's brand written with another
-            // script (test B, 2026-11-01: "WELLNESS（ウェルネス）" from a Japanese shop stayed beside the maker's name).
-            const otherScriptLetters = (t?: string) => !!t && /(?=\p{L})\P{Script=Latin}/u.test(t);
-            const makerBrand = makerName && r2.facts.brand && !otherScriptLetters(r2.facts.brand.value) && otherScriptLetters(found.facts.brand?.value) ? r2.facts.brand : undefined;
+            // script (test B, 2026-11-01: "WELLNESS（ウェルネス）" from a Japanese shop stayed beside the maker's name),
+            // when it is the same brand: never a parent company or another brand ("Fancy Feast（…）" → "Purina").
+            const makerBrand =
+              makerName && r2.facts.brand && !hasOtherScriptLetters(r2.facts.brand.value) && hasOtherScriptLetters(found.facts.brand?.value) && brandCovers(found.facts.brand?.value, r2.facts.brand.value)
+                ? r2.facts.brand
+                : undefined;
             found = {
               ...found,
               facts: { ...merged, ...(makerName ? { productName: makerName } : {}), ...(makerBrand ? { brand: makerBrand } : {}) },
@@ -848,7 +852,7 @@ const PRODUCT_ADDRESS = /\/(?:products?|p|dp|itm|items?|ip|goods|pd|prod|sku|pro
 const PRODUCT_KEYS = /^(?:pid|product|products?_id|productid|item|item_id|itemid|goods_?id|sku)$/i;
 const PRODUCT_ROUTE = /^(?:product\/product|product_info|product_detail|productdetail)$/i;
 // Keys that say where a visit came from or how a page is shown, not which page it is.
-const TRACKING_KEYS = /^(?:srsltid|gclid|gbraid|wbraid|fbclid|msclkid|igshid|ref|ref_|referrer|source|lang|hl|locale|currency|country|region|mc_cid|mc_eid|_ga|_gl|spm|si)$/i;
+const TRACKING_KEYS = /^(?:srsltid|gclid|gclsrc|gad_source|gad_campaignid|gbraid|wbraid|fbclid|msclkid|igshid|ref|ref_|referrer|source|lang|hl|locale|currency|country|region|mc_cid|mc_eid|_ga|_gl|spm|si)$/i;
 // Not checked: sections that hold no product pages (on their own host too), and listings near the top. Test C,
 // 2026-10-31: the checks went to GS1 help pages and lookup tools' home pages; test A: to a home page.
 const SECTION_HOSTS = /^(?:help|support|forums?|community|wiki|docs|blog|news)\./;

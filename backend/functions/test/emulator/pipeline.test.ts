@@ -55,6 +55,7 @@ let makerName = false; // with latinPage: the name comes from the manufacturer's
 let nameTies: { identity?: 'barcode' | 'recipe' | 'family' | 'name'; nameIdentity?: 'barcode' | 'recipe' | 'family' | 'name' } = {}; // with latinPage: how research says the pages were tied
 let latinNoSpecies = false; // with latinPage: the page says nothing about who the product is for
 let sameSite = false; // with latinPage: the English page is on the Japanese listing's site (same source id), read 13 h later
+let latinBrandValue = 'TESTBRAND'; // with latinPage: the brand the page gives
 let researchOpts: { knownName?: string; knownBrand?: string; model?: string }[] = [];
 let verdictInputs: string[] = [];
 
@@ -155,7 +156,7 @@ const sources: Sources = {
       const maker = { sourceId: `web:testbrand.example:${o.gtin14}`, sourceType: 'manufacturer' as const, sourceName: 'testbrand.example', url: 'https://testbrand.example/gravies-chicken-turkey', retrievedAt: NOW.toISOString(), matchConfidence: 'brand_and_product' as const, readerVersion: RESEARCH_VERSION };
       const name = makerName ? { value: 'TEST FIXTURE Gravies Chicken & Turkey Dinner in Gravy', source: maker } : { value: 'TEST FIXTURE Wellness Gravies Chicken & Turkey', source: page };
       const signals = latinNoSpecies ? [] : [{ text: 'intended for cats', source: page.sourceId, kind: 'research' as const }];
-      return { facts: { productName: name, brand: { value: 'TESTBRAND', source: page }, classificationSignals: signals }, sources: makerName ? [page, maker] : [page], discarded: [], model: 'mock', ...(makerName ? { identity: 'barcode' as const, nameIdentity: 'name' as const } : {}), ...nameTies };
+      return { facts: { productName: name, brand: { value: latinBrandValue, source: page }, classificationSignals: signals }, sources: makerName ? [page, maker] : [page], discarded: [], model: 'mock', ...(makerName ? { identity: 'barcode' as const, nameIdentity: 'name' as const } : {}), ...nameTies };
     }
     if (partialPage && o.barcode === BC.unknown) {
       const page = { sourceId: `web:shop.example.jp:${o.gtin14}`, sourceType: 'retailer_or_web' as const, sourceName: 'shop.example.jp', url: 'https://shop.example.jp/c0012.html', retrievedAt: NOW.toISOString(), matchConfidence: 'exact_barcode' as const, readerVersion: RESEARCH_VERSION };
@@ -323,6 +324,7 @@ beforeEach(async () => {
   nameTies = {};
   latinNoSpecies = false;
   sameSite = false;
+  latinBrandValue = 'TESTBRAND';
   researchOpts = [];
   await fetch(`http://${process.env.FIRESTORE_EMULATOR_HOST}/emulator/v1/projects/demo-purrbi/databases/(default)/documents`, { method: 'DELETE' });
   await db.doc('users/u1/pets/cat1').set({ name: 'Miso', species: 'cat', birthDate: Timestamp.fromDate(new Date('2022-01-01')), allergiesStatus: 'reported', allergies: ['chicken'], profileVersion: 2 });
@@ -1304,6 +1306,34 @@ describe('fallbacks before asking the owner for photos', () => {
     expect(s.productName).toBe('TEST FIXTURE Wellness Gravies Chicken & Turkey');
     expect(s.evidenceNotes.join(' ')).not.toMatch(/nothing was added|shows nothing its record lacks/);
     expect(s.evidenceNotes).toContain('Shown by the product name and brand on shop.example.us (it shows this barcode), instead of the product name and brand in another script from shop.example.jp.');
+  });
+  // Review of research 2.9.4: the brand gives way only to the same brand, and only beside a name in Latin script alone
+  // or replaced now.
+  it('another brand’s name (a parent company’s) never replaces the record’s brand, though the name gives way', async () => {
+    latinBrandValue = 'OTHERCO';
+    const { s, gtin } = await japaneseThenLatin();
+    expect(s.productName).toBe('TEST FIXTURE Wellness Gravies Chicken & Turkey');
+    expect(s.brand).toBe('TESTBRAND（テストブランド）');
+    expect(s.evidenceNotes).toContain('Shown by the product name on shop.example.us (it shows this barcode), instead of the product name in another script from shop.example.jp.');
+    expect((await db.doc(`products/${gtin}`).get()).data()!.facts.brand.value).toBe('TESTBRAND（テストブランド）');
+  });
+  it('the brand does not give way while the name keeps a gloss in another script', async () => {
+    partialPage = true;
+    hintDown = true;
+    const first = await newScan('u1', BC.unknown);
+    await processScan(deps({ researchEnabled: true }), 'u1', first.id);
+    const gtin = (await read(first)).gtin;
+    // Mostly Latin, with the listing's katakana: not a name in another script, so it stays, and so does the brand.
+    await db.doc(`products/${gtin}`).update({ 'facts.productName.value': 'TEST FIXTURE Wellness Gravies Chicken グレービー 85g', 'facts.brand.value': 'TESTBRAND（テストブランド）' });
+    partialPage = false;
+    hintDown = false;
+    latinPage = true;
+    const later = await newScan('u1', BC.unknown);
+    await processScan({ ...deps({ researchEnabled: true }), now: () => new Date(NOW.getTime() + 13 * 3600 * 1000) }, 'u1', later.id);
+    const s = await read(later);
+    expect(s.productName).toBe('TEST FIXTURE Wellness Gravies Chicken グレービー 85g');
+    expect(s.brand).toBe('TESTBRAND（テストブランド）');
+    expect(s.evidenceNotes.join(' ')).not.toMatch(/Shown by|instead of/);
   });
   it('a replacing page on the old page’s site is the one the source list and evidence name', async () => {
     sameSite = true;

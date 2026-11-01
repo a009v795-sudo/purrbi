@@ -11,6 +11,7 @@ import type { Firestore } from 'firebase-admin/firestore';
 import { extractLabel as extractLabelImpl, LABEL_EXTRACTION_VERSION, LABEL_READINGS_IN_USE, readingInUse, type ValidatedLabel } from '../ai/labelExtract';
 import { checkVerdict, ruleVerdict, verdictInput, verdictKey, withPetName, writeVerdict as verdictImpl } from '../ai/verdict';
 import { parseAdequacyStatement } from '../domain/adequacy';
+import { brandCovers, hasOtherScriptLetters } from '../domain/script';
 import { normalizeBarcode, type NormalizedBarcode } from '../domain/barcode';
 import { buildHighlights } from '../domain/highlights';
 import { normalizeRole } from '../domain/roles';
@@ -629,14 +630,16 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
         const tied = (f?: { source?: SourceRef }) => f?.source?.matchConfidence === 'exact_barcode' || f?.source?.sourceType === 'manufacturer';
         const nameTie = r.nameIdentity ?? (found.productName?.source.matchConfidence === 'exact_barcode' ? 'barcode' : undefined);
         const provenName = nameTie === 'barcode' || nameTie === 'recipe' || (nameTie === 'name' && found.productName?.source.sourceType === 'manufacturer' && (r.identity === 'barcode' || r.identity === 'recipe'));
-        const nonLatin = (t: string) => /(?=\p{L})\P{Script=Latin}/u.test(t);
+        const nonLatin = (t: string) => hasOtherScriptLetters(t);
         const fromResearchPage = (f?: { source?: SourceRef }) => f?.source?.sourceType === 'retailer_or_web';
         const before = { productName: facts.productName, brand: facts.brand };
         if (found.productName && provenName && !nonLatin(found.productName.value) && facts.productName && fromResearchPage(facts.productName) && otherScript(facts.productName.value)) {
           facts = { ...facts, productName: found.productName };
           replaced.push('productName');
         }
-        if (found.brand && tied(found.brand) && !nonLatin(found.brand.value) && facts.brand && fromResearchPage(facts.brand) && nonLatin(facts.brand.value) && facts.productName && !otherScript(facts.productName.value)) {
+        // The brand: the same brand in Latin script (never a parent company's or another brand's), and only beside a name
+        // replaced now or written in Latin script alone, so the two are of one listing (review of research 2.9.4).
+        if (found.brand && tied(found.brand) && !nonLatin(found.brand.value) && facts.brand && fromResearchPage(facts.brand) && nonLatin(facts.brand.value) && brandCovers(facts.brand.value, found.brand.value) && facts.productName && (replaced.includes('productName') || !nonLatin(facts.productName.value))) {
           facts = { ...facts, brand: found.brand };
           replaced.push('brand');
         }

@@ -3,6 +3,7 @@
 // 850063633017 A Better Treat salmon treat. Page HTML here is synthetic test markup built around the text the
 // real pages print (read from GitHub's network on 2026-10-30 with the live-probe workflow); no page is fetched.
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { brandCovers, hasOtherScriptLetters } from '../../src/domain/script';
 import { parseAdequacyStatement } from '../../src/domain/adequacy';
 import { caloriesForPackage, describeCalories, parseCalorieText, parsePackageSize } from '../../src/domain/nutrition';
 import { classifyScope, speciesEvidence } from '../../src/domain/scope';
@@ -1426,6 +1427,50 @@ describe('research 2.9.3: one page under tracking keys, and the manufacturer’s
     const r = await researchProduct({ apiKey: 'k', model: 'm', gtin14: '00076344060048', barcode: '076344060048', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-11-01T00:00:00Z') });
     expect(r.facts?.productName).toMatchObject({ value: expect.stringMatching(/^Wellness CORE Signature Selects/), source: { sourceType: 'manufacturer' } });
     expect(r.facts?.brand).toMatchObject({ value: 'Wellness', source: { sourceType: 'manufacturer' } });
+  });
+  // Review of 2.9.4: the maker's brand only when it is the same brand; a letter shared by scripts is no other script; the
+  // keys Google Ads adds beside gclid; a path ending in "//".
+  it('a parent company’s or another brand’s name does not replace the first page’s brand', async () => {
+    // A Japanese shop's page for a Fancy Feast can (barcode shown), then the product's page on purina.com, whose
+    // answer gives the parent company as the brand ("Purina", in the page's footer; Purina owns purina.com).
+    const japanese = `<html><head><title>Fancy Feast（ファンシーフィースト） グレービー ツナ 85g</title></head><body><h1>Fancy Feast（ファンシーフィースト） グレービー ツナ 85g</h1>
+      <p>JAN 076344060048</p><p>原材料 Ingredients: ${WELLNESS_INGREDIENTS.replace('Choline Chloride, Minerals [', 'Choline Chloride], Minerals [')}</p></body></html>`;
+    const makerPage = MANUFACTURER_PAGE.replace(/Wellness CORE Signature Selects/g, 'Fancy Feast Gems').replace('</body>', '<footer>© Purina</footer></body>');
+    const answers = [
+      modelAnswer({ product_name: 'Fancy Feast（ファンシーフィースト） グレービー ツナ 85g', brand: 'Fancy Feast（ファンシーフィースト）', ingredients_verbatim: WELLNESS_INGREDIENTS.replace('Choline Chloride, Minerals [', 'Choline Chloride], Minerals ['), source_urls: ['https://www.petshop.example.jp/g/076344060048'] }),
+      modelAnswer({ product_name: 'Fancy Feast Gems Flaked Skipjack Tuna & Wild Salmon Entrée in Broth', brand: 'Purina', intended_for: 'cats', source_urls: ['https://www.purina.com/cats/cat-food/fancy-feast-gems-tuna-salmon'] }),
+    ];
+    let call = 0;
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.startsWith('https://api.openai.com/')) return openAi(answers[Math.min(call++, answers.length - 1)]);
+      if (url.includes('petshop.example.jp')) return new Response(japanese, { status: 200 });
+      if (url.includes('nutrient-profile.pdf')) return new Response(pdfWith(NUTRIENT_PROFILE_LINES), { status: 200, headers: { 'content-type': 'application/pdf' } });
+      return new Response(makerPage, { status: 200 });
+    }));
+    const r = await researchProduct({ apiKey: 'k', model: 'm', gtin14: '00076344060048', barcode: '076344060048', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-11-01T00:00:00Z') });
+    expect(r.facts?.productName).toMatchObject({ value: expect.stringMatching(/^Fancy Feast Gems/), source: { sourceType: 'manufacturer', sourceName: 'purina.com' } });
+    expect(r.facts?.brand?.value).toBe('Fancy Feast（ファンシーフィースト）');
+    expect(brandCovers('Fancy Feast（ファンシーフィースト）', 'Purina')).toBe(false);
+    expect(brandCovers('Purina Pro Plan（ピュリナ プロプラン）', 'Purina')).toBe(false);
+    expect(brandCovers('WELLNESS（ウェルネス）', 'Wellness CORE')).toBe(true);
+    expect(brandCovers('ウェルネス', 'Wellness')).toBe(false);
+    expect(hasOtherScriptLetters('Hillʼs Science Diet')).toBe(false);
+    expect(hasOtherScriptLetters('Hawaiʻi µPet')).toBe(false);
+    expect(hasOtherScriptLetters('WELLNESS（ウェルネス）')).toBe(true);
+  });
+  it('the keys Google Ads adds beside gclid, and a path ending in "//", leave one page', async () => {
+    const fetched: string[] = [];
+    const page = 'https://www.shop.example/products/whole-paws-salmon-pate';
+    const results = [`${page}?gad_source=1&gclid=abc`, `${page}?gad_source=1&gad_campaignid=2160&gclid=abc`, `${page}?gclid=abc&gclsrc=aw.ds`, `${page}//?srsltid=a`, page];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url === 'https://api.openai.com/v1/responses')
+        return new Response(JSON.stringify({ output: [{ type: 'web_search_call', action: { type: 'search', queries: ['"099482481087"', '"0099482481087"'], sources: results.map((u) => ({ type: 'url', url: u })) } }, { type: 'message', content: [{ type: 'output_text', text: JSON.stringify(modelAnswer({ found: false })), annotations: [] }] }] }), { status: 200 });
+      if (!url.endsWith('.js')) fetched.push(url);
+      return new Response(plain, { status: 200 });
+    }));
+    const r = await researchProduct({ apiKey: 'k', model: 'gpt-5-mini', gtin14: '00099482481087', barcode: '099482481087', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-11-01T00:00:00Z') });
+    expect(fetched.filter((u) => u.startsWith(page))).toEqual([page]);
+    expect(r.discarded).toContain('barcode search: result pages without this barcode: shop.example');
   });
 });
 
