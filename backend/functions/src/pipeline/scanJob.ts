@@ -610,26 +610,46 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       // Pages that could not be reached, or a search cut short by the time limit, are no answer.
       researchReturned = !!r.facts || (r.fetchFailed !== true && r.timeLimited !== true);
       let filled: string[] = [];
+      // A name or brand in another script replaced by the page's (not a fill), and the note that says so.
+      const replaced: ('productName' | 'brand')[] = [];
+      let replacedNote = '';
       if (r.facts) {
         // "Active ingredients" are a supplement's; a food page's additive list is not used as such.
         const found = scope.category === 'supplement' ? r.facts : { ...r.facts, activeIngredients: undefined };
         const merged = fillMissing(facts, { ...found, sources: r.sources });
         facts = merged.facts;
         filled = merged.filled;
-        // A name or brand in another script (a Japanese import listing's) gives way to one in Latin script from a page
-        // that also shows the barcode (test B, 2026-10-31: petfood.express): the product is shown by its own name.
-        const tied = (f?: { source?: SourceRef }) => f?.source?.matchConfidence === 'exact_barcode';
+        // A name or brand in another script that an earlier research page gave (a Japanese import listing's) gives way to
+        // one in Latin script from a page that shows the barcode or from the manufacturer's own page (test B, 2026-10-31:
+        // petfood.express): the product is shown by its own name. A database's, an owner's label photo's or a
+        // manufacturer's name is never replaced (review of research 2.9.3). The brand gives way only when the name shown
+        // is then in Latin script too, so the two are of one listing. A replacement is not a fill: it has its own note.
+        const tied = (f?: { source?: SourceRef }) => f?.source?.matchConfidence === 'exact_barcode' || f?.source?.sourceType === 'manufacturer';
         const nonLatin = (t: string) => /(?=\p{L})\P{Script=Latin}/u.test(t);
-        if (found.productName && tied(found.productName) && !nonLatin(found.productName.value) && facts.productName && otherScript(facts.productName.value)) {
+        const fromResearchPage = (f?: { source?: SourceRef }) => f?.source?.sourceType === 'retailer_or_web';
+        const before = { productName: facts.productName, brand: facts.brand };
+        if (found.productName && tied(found.productName) && !nonLatin(found.productName.value) && facts.productName && fromResearchPage(facts.productName) && otherScript(facts.productName.value)) {
           facts = { ...facts, productName: found.productName };
-          filled = [...filled, 'productName'];
+          replaced.push('productName');
         }
-        if (found.brand && tied(found.brand) && !nonLatin(found.brand.value) && facts.brand && nonLatin(facts.brand.value)) {
+        if (found.brand && tied(found.brand) && !nonLatin(found.brand.value) && facts.brand && fromResearchPage(facts.brand) && nonLatin(facts.brand.value) && facts.productName && !otherScript(facts.productName.value)) {
           facts = { ...facts, brand: found.brand };
-          filled = [...filled, 'brand'];
+          replaced.push('brand');
         }
-        fetchedPublic = fetchedPublic || filled.length > 0;
-        if (origin === 'label' && filled.length) origin = 'web';
+        if (replaced.length) {
+          const bySource = new Map<string, { source: SourceRef; fields: string[] }>();
+          for (const k of replaced) {
+            const source = facts[k]!.source;
+            const e = bySource.get(source.sourceId) ?? { source, fields: [] };
+            e.fields.push(fieldLabel(k));
+            bySource.set(source.sourceId, e);
+          }
+          const shownBy = [...bySource.values()].map(({ source, fields }) => `the ${fields.join(' and ')} on ${source.sourceName} (${source.sourceType === 'manufacturer' ? 'the manufacturer’s page' : 'it shows this barcode'})`).join(' and ');
+          const was = [...new Set(replaced.map((k) => before[k]?.source.sourceName).filter(Boolean))].join(' and ');
+          replacedNote = `Shown by ${shownBy}, instead of the ${replaced.map(fieldLabel).join(' and ')} in another script from ${was}.`;
+        }
+        fetchedPublic = fetchedPublic || filled.length > 0 || replaced.length > 0;
+        if (origin === 'label' && (filled.length || replaced.length)) origin = 'web';
       }
       const src = r.sources[0];
       meta.enrichment.researchAt = now;
@@ -687,6 +707,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
                       ? `${refusalOf(refusing).said}, so nothing could be checked on ${refusalOf(refusing).it} or added.`
                       : 'Searched the manufacturer’s and retailers’ pages; nothing could be verified against a page, so nothing was added.',
       );
+      if (replacedNote) job.evidenceNotes.push(replacedNote);
       // Every step's outcome up to twenty (the trace of trace 11f7cc1e-842 stopped before the page that mattered; test A on
       // gpt-5-mini, trace 345c0a6b-6b8, before its last searches' checks).
       job.diagnosticNotes.push(...r.discarded.slice(0, 20).map((d) => `Research (${r.model}): ${d}`));

@@ -168,4 +168,52 @@ describe('who the product is for and what is missing, said as Purrbi knows it (t
     // A finding that only says the product has no listed concern is not refused as missing information.
     expect(checkVerdict('Its main ingredients are named by source and it has no ingredient on Purrbi’s concern list for your cat; it is not rated yet, as Purrbi has not found its complete and balanced statement.', base)).toBeNull();
   });
+  // Review of verdict 2.2.0: the checks catch the usual synonyms and adjectives, and let through what is said as Purrbi
+  // knows it (its own search, a retailer's listing, a hedge or an attribution).
+  it('the checks catch synonyms and adjectives, and pass wording about Purrbi’s search, hedges and attributions', () => {
+    const base = {
+      product: { name: 'TEST FIXTURE Gravies', brand: 'TESTBRAND', species: 'cat', category: 'complete_food', speciesConfirmed: false, speciesBasis: 'retailer listing' },
+      assessment: { score: null, provisional: false, label: 'Information incomplete', basis: '', withheldReason: 'Purrbi needs the nutritional adequacy statement.', missing: 'nutritional adequacy ("complete and balanced") statement' },
+      pet: { name: 'your cat', species: 'cat', fit: 'incomplete', headline: '' },
+      positives: [{ title: 'Main ingredients named by source', detail: 'The first 5 main ingredients each say which animal or plant they come from.', value: '' }],
+      cautions: [],
+      unresolved: [],
+    };
+    const confirmed = { ...base, product: { ...base.product, speciesConfirmed: true } };
+    const otherMissing = { ...confirmed, assessment: { ...confirmed.assessment, missing: 'guaranteed analysis and the calorie content' } };
+    const nothingMissing = { ...confirmed, assessment: { ...confirmed.assessment, missing: '' } };
+    const catFoodName = { ...base, product: { ...base.product, name: 'TEST FIXTURE Gravies Cat Food Chicken' } };
+    const LACKS = 'says the product lacks what Purrbi has not found';
+    const SPECIES = 'states who it is for as confirmed when only a retailer lists it';
+    const table: [string | null, typeof base, string][] = [
+      [LACKS, confirmed, 'Its main ingredients are named by source, but without a feeding statement on its package it may not be a complete diet, so it is not rated for your cat.'],
+      [LACKS, confirmed, 'Its main ingredients are named by source, but there is no adequacy statement on the package, so it may not be a complete diet and is not rated for your cat.'],
+      [LACKS, confirmed, 'Its main ingredients are named by source, but its package and listing don’t include a feeding statement, so it is not rated for your cat and may not be a complete diet.'],
+      [LACKS, confirmed, 'Its main ingredients are named by source, but it isn’t labeled complete and balanced, so it may not suit your cat as an only food and is not rated.'],
+      [LACKS, otherMissing, 'Its main ingredients are named by source, but with no guaranteed analysis on the package its protein and fat are unknown, so it is not rated for your cat.'],
+      [LACKS, otherMissing, 'Its main ingredients are named by source, but the package doesn’t show calories, which makes portions harder to judge, and it is not rated for your cat.'],
+      [LACKS, otherMissing, 'Its main ingredients are named by source, but the maker does not provide calorie content, which makes portions harder to judge, and it is not rated for your cat.'],
+      [null, confirmed, 'Its main ingredients are named by source; Purrbi has no feeding statement for it yet, so it is not rated for your cat, and the details are listed below.'],
+      [null, confirmed, 'No adequacy statement was found yet, so it is not rated for your cat; its main ingredients are named by source, and the details and sources are listed below.'],
+      [null, confirmed, 'The retailer’s listing has no adequacy statement, so Purrbi cannot rate it for your cat yet; its main ingredients are named by source and listed below.'],
+      [null, confirmed, 'There is no adequacy statement on the page Purrbi found, so it is not rated for your cat yet; its main ingredients are named by source, as listed below.'],
+      // Nothing missing: a caution about an unclear feeding statement is not "lacking" anything.
+      [null, nothingMissing, 'Its main ingredients are named by source, but its feeding statement doesn’t state what it is complete and balanced for, so check the package before it is your cat’s only food.'],
+      [SPECIES, base, 'This food is made specifically for adult cats and its main ingredients are named by source; Purrbi has not found its complete and balanced statement yet, so it is not rated for your cat.'],
+      [SPECIES, base, 'It is formulated for adult cats and its main ingredients are named by source; Purrbi has not found its complete and balanced statement yet, so it is not rated for your cat.'],
+      [SPECIES, base, 'It is a food for cats whose main ingredients are named by source; Purrbi has not found its complete and balanced statement yet, so it is not rated for your cat.'],
+      [SPECIES, base, 'This cat food has its main ingredients named by source; Purrbi has not found its complete and balanced statement yet, so it is not rated for your cat, as listed below.'],
+      [SPECIES, base, 'It is intended for use in cats and its main ingredients are named by source; Purrbi has not found its complete and balanced statement yet, so it is not rated for your cat.'],
+      [SPECIES, base, 'It is made for your cat’s species and its main ingredients are named by source; Purrbi has not found its complete and balanced statement yet, so it is not rated for your cat.'],
+      [SPECIES, base, 'TEST FIXTURE Gravies for cats has its main ingredients named by source; Purrbi has not found its complete and balanced statement yet, so it is not rated for your cat.'],
+      [null, base, 'A retailer lists it as made for cats, and its main ingredients are named by source; Purrbi has not found its complete and balanced statement yet, so it is not rated for your cat.'],
+      [null, base, 'Purrbi couldn’t confirm it is made for cats, but its main ingredients are named by source; it is not rated for your cat until Purrbi finds its complete and balanced statement.'],
+      [null, base, 'It is made for cats, according to a retailer’s listing, and its main ingredients are named by source; it is not rated for your cat until Purrbi finds its feeding statement.'],
+      // The retailer's own title says "Cat Food": repeating the name is not Purrbi's claim.
+      [null, catFoodName, 'This TEST FIXTURE Gravies cat food has its main ingredients named by source; it is not rated for your cat yet, as Purrbi has not found its complete and balanced statement.'],
+    ];
+    for (const [expected, input, text] of table) expect([text, checkVerdict(text, input)]).toEqual([text, expected]);
+    // The rule-based verdict passes both checks.
+    for (const input of [base, catFoodName, otherMissing]) expect(checkVerdict(ruleVerdict(input), input)).toBeNull();
+  });
 });

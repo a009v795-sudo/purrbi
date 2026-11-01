@@ -371,10 +371,19 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
   const seenPages = new Set<string>();
   // The pages the model opened in this run.
   const openedPages = new Set<string>();
+  // Unlikely result pages held back for a later search of the run (checked after the searches if none found the
+  // product), the words they were ranked by, and how long the run's last search call took (an estimate of the next).
+  const heldPages: string[] = [];
+  let heldWords: RankWords = { brand: [], name: [] };
+  let lastCallMs = 0;
   // Checks a search's result pages and reads the first that shows the barcode.
   const checkAndRead = async (label: string, results: string[], words: RankWords, limit: number, reserve = 0): Promise<ResearchOutcome | null> => {
     const checked = await pageShowingBarcode(opts, results, seenPages, limit, openedPages, words, reserve);
     pageChecks += checked.checked;
+    if (checked.kept.length) {
+      heldPages.push(...checked.kept);
+      heldWords = words;
+    }
     timeLimited = timeLimited || checked.timeLimited;
     discarded.push(...checked.notes.map((n) => `${label}: ${n}`));
     if (checked.page && left(opts) >= modelCallMs(opts) + 15000) {
@@ -401,7 +410,9 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
     }
     await opts.beforeAiCall?.();
     calls++;
+    const callStart = Date.now();
     const r = await researchAttempt({ ...opts, knownBrand: attempt.mode === 'name' ? brand : opts.knownBrand, ...(attempt.untrustedName ? { knownName: undefined } : {}) }, attempt.user, attempt.mode);
+    lastCallMs = Date.now() - callStart;
     model = r.model;
     discarded.push(...r.discarded.map((d) => `${attempt.label}: ${d}`));
     fetchFailed = fetchFailed || r.fetchFailed === true;
@@ -428,13 +439,15 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
       // Ranked by the product's brand and name, from the most trusted source (search words only).
       const words = rankWords([opts.knownBrand, opts.hint?.brand, r.lead?.brand, lead?.brand], [opts.knownName, r.pageTitle, opts.hint?.title, r.lead?.name, lead?.name]);
       // Another search follows (one already planned, the barcode's 13-digit form, or the search by the answer's name,
-      // as decided below) and can still start after these checks: the run's last checks are kept from unlikely pages.
+      // as decided below) and its own page checks can still run after these checks and its call (taken to last as
+      // long as this one did): the run's last checks are kept from unlikely pages, which are checked after the
+      // searches if none of them finds the product.
       const splices13 = attempt.label === 'barcode search' && !!ean13 && !(r.queries ?? []).some((q) => q.includes(ean13));
       const answerName = preferLatin(r.lead?.name, r.pageTitle);
       const nextLead = attempt.mode === 'barcode' && (!lead || (!lead.name && answerName)) ? { name: answerName ?? null, brand: r.lead?.brand ?? null } : lead;
       const lastBarcode = attempt.mode === 'barcode' && !splices13 && (attempt.label === 'barcode search (13-digit form)' || !attempts.some((a) => a.label === 'barcode search (13-digit form)'));
       const searchesByAnswer = lastBarcode && !!nextLead && !name && !!(nextLead.name || (!brand && nextLead.brand));
-      const anotherSearch = (i < attempts.length - 1 || splices13 || searchesByAnswer) && left(opts) >= modelCallMs(opts) + 15000 + 20000;
+      const anotherSearch = (i < attempts.length - 1 || splices13 || searchesByAnswer) && left(opts) >= modelCallMs(opts) + 15000 + 20000 + lastCallMs;
       const read = await checkAndRead(attempt.label, r.results, words, RUN_PAGE_CHECKS - pageChecks, anotherSearch ? LATER_SEARCH_CHECKS : 0);
       if (read) {
         found = read;
@@ -474,6 +487,15 @@ export async function researchProduct(opts: ResearchOptions): Promise<ResearchOu
         ].join(' '),
       });
     }
+  }
+  // Pages held back for a later search that did not check them (it found nothing, or other pages): checked now, with
+  // the run's checks and reads left (review of 2.9.3: a 13-digit search with no results left them unchecked).
+  const heldLeft = [...new Set(heldPages)].filter((u) => !seenPages.has(u));
+  if (!found && heldLeft.length) {
+    if (pageChecks < RUN_PAGE_CHECKS && pageReads < 2) {
+      const read = await checkAndRead('pages held back for later', heldLeft, heldWords, RUN_PAGE_CHECKS - pageChecks);
+      if (read) found = read;
+    } else discarded.push(...leftOutNotes({ documents: [], insecure: [], spent: heldLeft }).map((n) => `pages held back for later: ${n}`));
   }
   if (!found?.facts) return { facts: null, sources: [], discarded, model, fetchFailed, calls, timeLimited };
 
@@ -930,7 +952,7 @@ async function pageShowingBarcode(
   opened: Set<string> = new Set(),
   words: RankWords = { brand: [], name: [] },
   reserve = 0,
-): Promise<{ page: FetchedPage | null; host: string; notes: string[]; checked: number; timeLimited: boolean }> {
+): Promise<{ page: FetchedPage | null; host: string; notes: string[]; checked: number; timeLimited: boolean; kept: string[] }> {
   const { documents, insecure, pages } = sortResults(results, seen);
   // The most promising addresses first; a site's best two pages at most, its second counted 3 lower (sites take turns).
   const scored = pages.map((u, rank) => ({ u, rank, ...addressPromise(u, opts.gtin14, words, opened.has(u)) }));
@@ -972,6 +994,7 @@ async function pageShowingBarcode(
           host: hostOf(url),
           checked,
           timeLimited: false,
+          kept: [],
           notes: [...(without.length ? [`result pages without this barcode: ${without.join(', ')}`] : []), `${hostOf(url)} (${kind}) shows this barcode${page.barcode === 'text' ? '' : page.barcode === 'markup' ? ' in its page data' : ' in its product record'}, so Purrbi read it`, ...leftOutNotes({ documents, insecure, unlikely, perSite })],
         };
       }
@@ -980,13 +1003,17 @@ async function pageShowingBarcode(
       unread.push(`${hostOf(url)}${err instanceof SourceError ? ` (${err.status ? `HTTP ${err.status}` : err.kind})` : ''}`);
     }
   }
+  // When the time limit ended the checks, no later search can start either: the pages held back for one are not
+  // checked for the same reason.
+  const held = unchecked.length ? [] : kept;
+  const timeCut = unchecked.length ? [...unchecked, ...kept] : [];
   const notes = [
     ...(without.length ? [`result pages without this barcode: ${without.join(', ')}`] : []),
     ...(unread.length ? [`result pages that could not be read: ${unread.join(', ')}`] : []),
-    ...(unchecked.length ? [`result pages not checked (the scan’s time limit): ${[...new Set(unchecked.map(hostOf))].join(', ')}`] : []),
+    ...(timeCut.length ? [`result pages not checked (the scan’s time limit): ${[...new Set(timeCut.map(hostOf))].join(', ')}`] : []),
   ];
-  const leftOut = [...leftOutNotes({ documents, insecure, unlikely, pastLimit, perSite }), ...(kept.length ? [`result pages not checked (unlikely, and the run’s last checks are kept for its next search): ${[...new Set(kept.map(hostOf))].slice(0, 6).join(', ')}`] : [])];
-  return { page: null, host: '', checked, timeLimited: unchecked.length > 0, notes: candidates.length ? [...notes, ...leftOut] : ['no result page to check', ...leftOut] };
+  const leftOut = [...leftOutNotes({ documents, insecure, unlikely, pastLimit, perSite }), ...(held.length ? [`result pages held back (unlikely, and the run’s next search may need its last checks; checked after the searches if none finds the product): ${[...new Set(held.map(hostOf))].slice(0, 6).join(', ')}`] : [])];
+  return { page: null, host: '', checked, timeLimited: unchecked.length > 0, kept: held, notes: candidates.length || kept.length ? [...notes, ...leftOut] : ['no result page to check', ...leftOut] };
 }
 
 const READ_SYSTEM = [

@@ -1238,8 +1238,99 @@ describe('research 2.9.3: the run’s last checks are kept for its next search',
     const { r, fetched } = await run();
     expect(fetched).not.toContain('www.scribd.com');
     expect(fetched).not.toContain('pi.bigparadox.com');
-    expect(r.discarded).toContain('barcode search: result pages not checked (unlikely, and the run’s last checks are kept for its next search): scribd.com, pi.bigparadox.com');
+    expect(r.discarded).toContain('barcode search: result pages held back (unlikely, and the run’s next search may need its last checks; checked after the searches if none finds the product): scribd.com, pi.bigparadox.com');
+    // The search by name found the product: the pages held back are not checked after it.
+    expect(r.discarded.some((d) => d.startsWith('pages held back for later'))).toBe(false);
     expect(r.discarded).toContain('search by the answer’s name: desertcart.in (a search result) shows this barcode, so Purrbi read it');
     expect(r.sources[0]).toMatchObject({ sourceName: 'desertcart.in', matchConfidence: 'exact_barcode' });
   });
 });
+
+// Review of 2.9.3: pages held back for a later search were lost when that search found nothing; the hold was decided
+// on whether the next search could start, not whether its checks could run; and the trace named held pages as kept
+// when the time limit had already ended the run.
+describe('research 2.9.3 review fixes: pages held back for a later search', () => {
+  const plain = '<html><head><title>Page</title></head><body><h1>Something else</h1></body></html>';
+  const petshopUrl = 'https://www.petshop.example/whole-paws-salmon-pate-5-5-oz.html';
+  // A document page (unlikely whatever the product's words) that shows the barcode.
+  const docUrl = 'https://www.scribd.com/document/99/catalogue-2026';
+  const petshop = `<html><head><title>Whole Paws Grain-Free Salmon Pate 5.5 oz</title></head><body><h1>Whole Paws Grain-Free Salmon Paté Loaf Cat Food, 5.5 oz</h1>
+    <p>Ingredients: Salmon, Water Sufficient for Processing, Salmon Broth, Liver, Pea Protein, Natural Flavor, Guar Gum, Tricalcium Phosphate, Potassium Chloride, Salt</p><table><tr><td>UPC</td><td>099482481087</td></tr></table></body></html>`;
+  const shops = Array.from({ length: 8 }, (_, i) => `https://shop${i}.example/products/whole-paws-salmon-pate-${i}`);
+  // The answer names the product (unverified) when `name` is given: the search by the answer's name then follows.
+  const respond = (urls: string[], queries: string[], name?: string) =>
+    new Response(JSON.stringify({ output: [{ type: 'web_search_call', action: { type: 'search', queries, sources: urls.map((url) => ({ type: 'url', url })) } }, { type: 'message', content: [{ type: 'output_text', text: JSON.stringify(name ? modelAnswer({ product_name: name, brand: 'Whole Paws' }) : modelAnswer({ found: false })), annotations: [] }] }] }), { status: 200 });
+  // searches: each research call's result pages and queries, in order (the last repeats); callMs and stepMs: how long
+  // each research call and each fetch take (with a fake clock).
+  const run = async (searches: { urls: string[]; queries: string[]; name?: string }[], o: { deadlineMs?: number; stepMs?: number; callMs?: number } = {}) => {
+    let call = 0;
+    const fetched: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url === 'https://api.openai.com/v1/responses') {
+        const s = searches[Math.min(call++, searches.length - 1)];
+        if (o.callMs) vi.setSystemTime(Date.now() + o.callMs);
+        return respond(s.urls, s.queries, s.name);
+      }
+      if (url.includes('chat/completions'))
+        return new Response(JSON.stringify({ model: 'gpt-5-mini', choices: [{ message: { content: JSON.stringify(modelAnswer({ product_name: 'Whole Paws Grain-Free Salmon Paté Loaf Cat Food, 5.5 oz', brand: 'Whole Paws', intended_for: 'cats', ingredients_verbatim: 'Salmon, Water Sufficient for Processing, Salmon Broth, Liver, Pea Protein, Natural Flavor, Guar Gum, Tricalcium Phosphate, Potassium Chloride, Salt' })) }, finish_reason: 'stop' }] }), { status: 200 });
+      if (!url.endsWith('.js')) fetched.push(new URL(url).hostname);
+      if (o.stepMs) vi.setSystemTime(Date.now() + o.stepMs);
+      return new Response(url === petshopUrl || url === docUrl ? petshop : plain, { status: 200 });
+    }));
+    const r = await researchProduct({ apiKey: 'k', model: 'gpt-5-mini', gtin14: '00099482481087', barcode: '099482481087', knownSpecies: 'unknown', userAgent: 'test', now: new Date('2026-11-01T00:30:00Z'), ...(o.deadlineMs !== undefined ? { deadline: Date.now() + o.deadlineMs } : {}) });
+    return { r, fetched };
+  };
+  afterEach(() => vi.useRealTimers());
+  it('a later search that finds nothing leaves the pages held back for it to be checked after the searches', async () => {
+    // Search 1 queries the 12 digits only, so the 13-digit search follows; it returns no result page.
+    const { r, fetched } = await run([{ urls: [...shops, petshopUrl], queries: ['"099482481087"'] }, { urls: [], queries: ['"0099482481087"'] }]);
+    expect(r.discarded).toContain('barcode search (13-digit form): searched “"0099482481087"” (0 results)');
+    expect(r.discarded).toContain('barcode search: result pages held back (unlikely, and the run’s next search may need its last checks; checked after the searches if none finds the product): petshop.example');
+    expect(r.discarded).toContain('pages held back for later: petshop.example (a search result) shows this barcode, so Purrbi read it');
+    expect(fetched.filter((h) => h === 'www.petshop.example')).toHaveLength(1);
+    expect(r.sources[0]).toMatchObject({ sourceName: 'petshop.example', matchConfidence: 'exact_barcode' });
+    expect(r.facts?.ingredients?.value[0]).toBe('Salmon');
+    expect(r.facts?.ingredients?.value).toHaveLength(10);
+  });
+  it('the run’s last search keeps nothing back: its unlikely pages are checked with the checks left', async () => {
+    // Both forms searched in one call, no name to search by: no search follows.
+    const { r } = await run([{ urls: [...shops, petshopUrl], queries: ['"099482481087"', '"0099482481087"'] }]);
+    expect(r.discarded.some((d) => d.startsWith('barcode search (13-digit form)') || d.startsWith('search by the answer’s name'))).toBe(false);
+    expect(r.discarded.some((d) => d.includes('held back'))).toBe(false);
+    expect(r.discarded).toContain('barcode search: petshop.example (a search result) shows this barcode, so Purrbi read it');
+    expect(r.sources[0]).toMatchObject({ sourceName: 'petshop.example' });
+  });
+  it('nothing is held back when the next search’s own checks could not run after its call', async () => {
+    // 150 s left and a 20 s search call: 130 s are left at the checks. The 13-digit search could start (it needs
+    // 105 s), but after a call as long as this one its checks could not run, so search 1 checks its unlikely page itself.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const { r } = await run([{ urls: [...shops, petshopUrl], queries: ['"099482481087"'] }, { urls: [], queries: ['"0099482481087"'] }], { deadlineMs: 150000, callMs: 20000 });
+    expect(r.discarded.some((d) => d.includes('held back'))).toBe(false);
+    expect(r.discarded).toContain('barcode search: petshop.example (a search result) shows this barcode, so Purrbi read it');
+  });
+  it('when the time limit ends the checks, the pages held back are named under it, not as kept for a next search', async () => {
+    // 130 s left: enough to hold the last checks; each fetch then takes 6 s, so the checks stop part-way.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const { r, fetched } = await run([{ urls: [...shops, petshopUrl], queries: ['"099482481087"'] }, { urls: [], queries: ['"0099482481087"'] }], { deadlineMs: 130000, stepMs: 6000 });
+    expect(fetched).not.toContain('www.petshop.example');
+    expect(r.discarded.find((d) => d.startsWith('barcode search: result pages not checked (the scan’s time limit): '))).toMatch(/shop7\.example, petshop\.example$/);
+    expect(r.discarded.some((d) => d.includes('held back'))).toBe(false);
+    expect(r.discarded).toContain('barcode search (13-digit form): not run (the scan’s time limit)');
+    expect(r.timeLimited).toBe(true);
+    expect(r.facts).toBeNull();
+  });
+  it('a search whose only pages are held back does not say it had no result page to check', async () => {
+    // Search 1 names the product and uses 8 checks; the 13-digit search's only page (a document page) is held back
+    // for the search by the answer's name (4 checks left, all kept), which finds nothing: it is then checked and read.
+    const { r } = await run([
+      { urls: shops, queries: ['"099482481087"'], name: 'Whole Paws Grain Free Salmon Pate' },
+      { urls: [docUrl], queries: ['"0099482481087"'] },
+      { urls: [], queries: ['"Whole Paws" "Grain Free Salmon Pate" 099482481087'] },
+    ]);
+    expect(r.discarded).toContain('barcode search (13-digit form): result pages held back (unlikely, and the run’s next search may need its last checks; checked after the searches if none finds the product): scribd.com');
+    expect(r.discarded.filter((d) => d.includes('no result page to check'))).toEqual([]);
+    expect(r.discarded).toContain('search by the answer’s name: searched “"Whole Paws" "Grain Free Salmon Pate" 099482481087” (0 results)');
+    expect(r.discarded).toContain('pages held back for later: scribd.com (a search result) shows this barcode, so Purrbi read it');
+  });
+});
+

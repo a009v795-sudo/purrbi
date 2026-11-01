@@ -211,10 +211,16 @@ While the product is unresolved, only recall and documented-concern cautions are
   - uses any other number that is not stated in the score, its basis, the highlights or the unresolved items;
   - gives an unscored product a number out of 100;
   - omits the most serious caution;
-  - says the product lacks, has no or is missing information Purrbi has only not found (verdict 2.2.0, test B: "it lacks a
-    nutritional adequacy statement");
-  - says the product is made, formulated or intended for a species when only a retailer's listing says who it is for (the
-    model is told whether the species is confirmed).
+  - says the product lacks, has no, omits or does not show one of the items the assessment lists as missing, which Purrbi
+    has only not found (verdict 2.2.0, test B: "it lacks a nutritional adequacy statement"; also "without a feeding
+    statement", "there is no adequacy statement", "doesn't show calories", "isn't labeled complete and balanced"). Said
+    of Purrbi's own search it passes: "Purrbi has no feeding statement for it yet", "no adequacy statement was found",
+    "the retailer's listing has no adequacy statement";
+  - states who the product is for as fact when only a retailer's listing says so (the model is told whether the species
+    is confirmed): made, formulated, designed or intended for cats (also "for adult cats", "for use in cats", "made for
+    your cat"), a food for cats, an unhedged "for cats", this cat food. A hedge or attribution passes ("a retailer lists it
+    for cats", "Purrbi couldn't confirm it is made for cats", "according to a retailer's listing"); the product's own name
+    is left out of the check (a retailer's title "… Cat Food" is the name, not Purrbi's claim).
 - **Who it is for, unconfirmed.** When only a retailer's listing says who the product is for, the personal finding says
   "Listed for cats by a retailer’s listing; Purrbi couldn’t confirm it from the package or the maker." It is information,
   not a positive, so no "Made for cats" highlight is shown. (Results saved before this keep their wording until the product
@@ -335,14 +341,20 @@ any photo is asked for:
     other species (a dog food's page for a cat food).
   Sites take turns (a site's second page counts lower, a third is not checked). A run checks at most twelve pages (was
   eight), a search's pages with the checks the run has left, within the same time limit. While another search of the run
-  follows and can still start (the barcode's other form, the search by the answer's name), the run's last four checks are
-  not spent on a search's unlikely pages (address scoring 0 or less); they are named (2.9.3, test A on 2.9.2: two document
-  pages and a digits-of-pi search took the checks the search by name's marketplace pages needed). The ranking only chooses which
+  follows and its own page checks could still run after its call (taken to last as long as the search just made), the
+  run's last four checks are not spent on a search's unlikely pages (address scoring 0 or less): they are held back and
+  named, and checked after the searches when none of them found the product, with the checks and reads left (2.9.3, test A
+  on 2.9.2: two document pages and a digits-of-pi search took the checks the search by name's marketplace pages needed;
+  review: a follow-up search with no results must not leave them unchecked). When the time limit ends a search's checks,
+  the pages held back are named under the time limit, since no later search can start either. The ranking only chooses which
   pages Purrbi fetches: a page is used only when Purrbi finds the barcode on it. (2.9.0 briefly gave each search a share
   of eight and carried the rest; review found it could drop carried pages and start a paid search before free checks,
   so 2.9.1 checks each search's own pages in order instead.)
-- A product name or brand in another script (a Japanese import listing's) gives way to one in Latin script from a page
-  that also shows the barcode (test B: petfood.express), so the product is shown by its own name.
+- A product name or brand in another script that an earlier research page gave (a Japanese import listing's) gives way to
+  one in Latin script from a page that also shows the barcode or from the manufacturer's own page (test B:
+  petfood.express), so the product is shown by its own name. A database's, an owner's label photo's or a manufacturer's
+  name is never replaced; the brand gives way only when the name shown is then in Latin script too. A replacement is not
+  a fill: the evidence note says which page's name and brand are shown instead of which page's.
 - The trace names the result pages left out of the checks: documents and pages without a secure address with their
   addresses (once a run), the others by site with the reason (eight a run, two per site in a search, or the run's checks
   or reads already used).

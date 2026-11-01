@@ -51,6 +51,7 @@ let partialPage = false; // research finds a page showing BC.unknown's barcode w
 let researchCut: 'none' | 'not_started' | 'cut' = 'none'; // the scan's time limit stops research before its first search, or cuts it short
 let refusingPages = false; // the pages research names for BC.unknown turn automated readers away (and one is gone), with a long trace
 let latinPage = false; // research finds a US shop's page showing BC.unknown's barcode: its English name, who it is for, ingredients
+let makerName = false; // with latinPage: the name comes from the manufacturer's page (matched by brand and name), the brand from the shop's
 let researchOpts: { knownName?: string; knownBrand?: string; model?: string }[] = [];
 let verdictInputs: string[] = [];
 
@@ -146,7 +147,9 @@ const sources: Sources = {
     researchOpts.push({ knownName: o.knownName, knownBrand: o.knownBrand, model: o.model });
     if (latinPage && o.barcode === BC.unknown) {
       const page = { sourceId: `web:shop.example.us:${o.gtin14}`, sourceType: 'retailer_or_web' as const, sourceName: 'shop.example.us', url: 'https://shop.example.us/products/gravies', retrievedAt: NOW.toISOString(), matchConfidence: 'exact_barcode' as const, readerVersion: RESEARCH_VERSION };
-      return { facts: { productName: { value: 'TEST FIXTURE Wellness Gravies Chicken & Turkey', source: page }, brand: { value: 'TESTBRAND', source: page }, classificationSignals: [{ text: 'intended for cats', source: page.sourceId, kind: 'research' as const }] }, sources: [page], discarded: [], model: 'mock' };
+      const maker = { sourceId: `web:testbrand.example:${o.gtin14}`, sourceType: 'manufacturer' as const, sourceName: 'testbrand.example', url: 'https://testbrand.example/gravies-chicken-turkey', retrievedAt: NOW.toISOString(), matchConfidence: 'brand_and_product' as const, readerVersion: RESEARCH_VERSION };
+      const name = makerName ? { value: 'TEST FIXTURE Gravies Chicken & Turkey Dinner in Gravy', source: maker } : { value: 'TEST FIXTURE Wellness Gravies Chicken & Turkey', source: page };
+      return { facts: { productName: name, brand: { value: 'TESTBRAND', source: page }, classificationSignals: [{ text: 'intended for cats', source: page.sourceId, kind: 'research' as const }] }, sources: makerName ? [page, maker] : [page], discarded: [], model: 'mock' };
     }
     if (partialPage && o.barcode === BC.unknown) {
       const page = { sourceId: `web:shop.example.jp:${o.gtin14}`, sourceType: 'retailer_or_web' as const, sourceName: 'shop.example.jp', url: 'https://shop.example.jp/c0012.html', retrievedAt: NOW.toISOString(), matchConfidence: 'exact_barcode' as const, readerVersion: RESEARCH_VERSION };
@@ -310,6 +313,7 @@ beforeEach(async () => {
   researchCut = 'none';
   refusingPages = false;
   latinPage = false;
+  makerName = false;
   researchOpts = [];
   await fetch(`http://${process.env.FIRESTORE_EMULATOR_HOST}/emulator/v1/projects/demo-purrbi/databases/(default)/documents`, { method: 'DELETE' });
   await db.doc('users/u1/pets/cat1').set({ name: 'Miso', species: 'cat', birthDate: Timestamp.fromDate(new Date('2022-01-01')), allergiesStatus: 'reported', allergies: ['chicken'], profileVersion: 2 });
@@ -1215,7 +1219,47 @@ describe('fallbacks before asking the owner for photos', () => {
     const s = await read(later);
     expect(s.productName).toBe('TEST FIXTURE Wellness Gravies Chicken & Turkey');
     expect(s.brand).toBe('TESTBRAND');
-    expect(s.evidenceNotes.join(' ')).toMatch(/product name, brand.* from shop\.example\.us/);
+    // Replaced, not filled: said as such, and the shared record shows the new name too.
+    expect(s.evidenceNotes).toContain('Shown by the product name and brand on shop.example.us (it shows this barcode), instead of the product name and brand in another script from shop.example.jp.');
+    expect(s.evidenceNotes.join(' ')).not.toMatch(/Filled[^.]*(product name|brand)/);
+    expect((await db.doc(`products/${gtin}`).get()).data()!.facts.productName.value).toBe('TEST FIXTURE Wellness Gravies Chicken & Turkey');
+  });
+  // Review of research 2.9.3: only a name an earlier research page gave is replaced; the brand only with the name.
+  it.each(['database', 'verified_label', 'manufacturer'] as const)('a %s name in another script is never replaced, nor the brand while the name stays in that script', async (sourceType) => {
+    partialPage = true;
+    hintDown = true;
+    const first = await newScan('u1', BC.unknown);
+    await processScan(deps({ researchEnabled: true }), 'u1', first.id);
+    const gtin = (await read(first)).gtin;
+    await db.doc(`products/${gtin}`).update({ 'facts.productName.source.sourceType': sourceType, 'facts.brand.value': 'TESTBRAND（テストブランド）' });
+    partialPage = false;
+    hintDown = false;
+    latinPage = true;
+    const later = await newScan('u1', BC.unknown);
+    await processScan({ ...deps({ researchEnabled: true }), now: () => new Date(NOW.getTime() + 13 * 3600 * 1000) }, 'u1', later.id);
+    const s = await read(later);
+    expect(s.productName).toBe('TEST FIXTURE ウェルネス グレービー 85g');
+    expect(s.brand).toBe('TESTBRAND（テストブランド）');
+    expect(s.evidenceNotes.join(' ')).not.toMatch(/Shown by|instead of/);
+    expect((await db.doc(`products/${gtin}`).get()).data()!.facts.productName.value).toBe('TEST FIXTURE ウェルネス グレービー 85g');
+  });
+  it('the manufacturer’s own name replaces a listing’s name in another script, and the note names each page (review of research 2.9.3)', async () => {
+    partialPage = true;
+    hintDown = true;
+    const first = await newScan('u1', BC.unknown);
+    await processScan(deps({ researchEnabled: true }), 'u1', first.id);
+    const gtin = (await read(first)).gtin;
+    await db.doc(`products/${gtin}`).update({ 'facts.brand.value': 'TESTBRAND（テストブランド）' });
+    partialPage = false;
+    hintDown = false;
+    latinPage = true;
+    makerName = true;
+    const later = await newScan('u1', BC.unknown);
+    await processScan({ ...deps({ researchEnabled: true }), now: () => new Date(NOW.getTime() + 13 * 3600 * 1000) }, 'u1', later.id);
+    const s = await read(later);
+    expect(s.productName).toBe('TEST FIXTURE Gravies Chicken & Turkey Dinner in Gravy');
+    expect(s.brand).toBe('TESTBRAND');
+    expect(s.evidenceNotes).toContain('Shown by the product name on testbrand.example (the manufacturer’s page) and the brand on shop.example.us (it shows this barcode), instead of the product name and brand in another script from shop.example.jp.');
   });
   it('the barcode database is not asked while today’s AI budget is used up (review of research 2.7.0)', async () => {
     await db.doc(`system/aiUsage_${NOW.toISOString().slice(0, 10).replace(/-/g, '')}`).set({ calls: 100000 });

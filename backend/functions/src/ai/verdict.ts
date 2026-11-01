@@ -161,6 +161,105 @@ export function ruleVerdict(input: VerdictInput): string {
 const FORBIDDEN =
   /\b(safe|safer|safest|ideal|perfect|healthy|healthier|healthiest|nutritious|wholesome|great|excellent|outstanding|amazing|superb|superior|premium|top[- ]quality|high[- ]quality|quality food|best|recommended?|recommends|guarantee[sd]? (?:that|it|this|your|to|safe)|no concerns?|risk[- ]free|cures?|prevents?|treats? (?:allerg\w*|disease\w*|illness\w*)|heals?|vet[- ]approved|clinically)\b/i;
 
+// The words that name each missing item (the assessment's own list), as a sentence may refer to it.
+const MISSING_WORDS: [RegExp, string][] = [
+  [/adequacy|complete and balanced/i, '(?:nutritional\\s+)?adequacy(?:\\s+statement)?|complete[- ]and[- ]balanced(?:\\s+(?:statement|claim))?|feeding\\s+statement|aafco\\s+statement'],
+  [/analysis/i, '(?:guaranteed\\s+)?analysis'],
+  [/ingredient/i, 'ingredients?\\s+list|list\\s+of\\s+ingredients'],
+  [/calorie/i, 'calori\\w*(?:\\s+(?:content|statement|count))?'],
+];
+
+// Where one clause of a sentence ends: a full stop (not a decimal point), semicolon, comma, colon, dash or bracket.
+const CLAUSE_END = /[;,:—–!?()]|\.(?!\d)/g;
+/** The clause before `at`, from the last clause end. */
+function clauseBefore(text: string, at: number): string {
+  const before = text.slice(0, at);
+  let cut = 0;
+  for (const m of before.matchAll(CLAUSE_END)) cut = (m.index ?? 0) + 1;
+  return before.slice(cut);
+}
+/** The clause after `at`, up to the next clause end. */
+function clauseAfter(text: string, at: number): string {
+  const after = text.slice(at);
+  const m = new RegExp(CLAUSE_END.source).exec(after);
+  return m ? after.slice(0, m.index) : after;
+}
+/** The last `n` words of a stretch of text. */
+const lastWords = (t: string, n: number) => t.trim().split(/\s+/).slice(-n).join(' ');
+
+// Who a statement is about: Purrbi's record and the pages it read, or the product itself.
+const PURRBI_SIDE = /\b(?:purrbi(?:[’']s)?|records?|information|data|search(?:es)?|listings?|pages?|sources?)\b/i;
+const PRODUCT_SIDE = /\b(?:package|packaging|packet|labels?|bags?|pouch(?:es)?|tins?|box(?:es)?|cans|product)\b|\bthe\s+can\b/i;
+
+/**
+ * A sentence saying the product lacks, has no or omits one of the items the assessment lists as missing (which Purrbi
+ * has only not found). The item must be what the wording refers to, and the statement must be about the product:
+ * "Purrbi has no feeding statement for it yet", "the listing has no adequacy statement" and "no adequacy statement was
+ * found" are about Purrbi's search and pass (test B; review of verdict 2.2.0).
+ */
+function saysProductLacks(text: string, missing: string): boolean {
+  const terms = MISSING_WORDS.filter(([item]) => item.test(missing)).map(([, words]) => words);
+  if (!terms.length) return false;
+  const item = `(?:${terms.join('|')})`;
+  const lead = '(?:(?:a|an|the|its|any|clear|full|printed|nutritional|guaranteed)\\s+){0,3}';
+  const negations = [
+    `\\b(?:lacks?|lacking|without|omits?|omitting)\\s+${lead}${item}\\b`,
+    `\\b(?:has|have|had|with|there(?:[’']s|\\s+is|\\s+are|\\s+was)|shows?|gives?|carries|lists)\\s+no\\s+${lead}${item}\\b`,
+    `\\b(?:no|missing)\\s+${lead}${item}\\b`,
+    `\\b${item}\\s+(?:is|are)\\s+(?:missing|absent|not\\s+(?:given|listed|printed|stated|shown|included|provided))\\b`,
+    `\\b(?:doesn[’']t|does\\s+not|don[’']t|do\\s+not|didn[’']t|did\\s+not)\\s+(?:have|include|carry|state|list|show|provide|give|mention|contain|print|bear)\\s+${lead}${item}\\b`,
+    /adequacy|complete and balanced/i.test(missing) ? `\\b(?:isn[’']t|is\\s+not)\\s+(?:labell?ed\\s+|stated\\s+as\\s+|described\\s+as\\s+|shown\\s+as\\s+)?complete[- ]and[- ]balanced\\b` : '',
+  ].filter(Boolean);
+  for (const source of negations) {
+    for (const m of text.matchAll(new RegExp(source, 'gi'))) {
+      const at = m.index ?? 0;
+      const subject = lastWords(clauseBefore(text, at), 6);
+      const rest = clauseAfter(text, at + m[0].length);
+      // About Purrbi's record or the pages it read, not the product.
+      if (PURRBI_SIDE.test(subject) && !PRODUCT_SIDE.test(subject)) continue;
+      // "… was found", "… yet", "on the page Purrbi found": about the search.
+      if (/\b(?:found|find|yet|so\s+far|located|seen)\b/i.test(rest)) continue;
+      if (/^\s*(?:on|in|from)\s+(?:the|its|a|any|this|these)\s+(?:[\p{L}’']+\s+){0,2}(?:page|pages|listing|listings|record|source|sources)\b/iu.test(rest)) continue;
+      return true;
+    }
+  }
+  return false;
+}
+
+const SPECIES_NOUN = '(?:cats?|dogs?|kittens?|pupp(?:y|ies)|felines?|canines?)';
+const SPECIES_MODS = '(?:(?:all|adult|senior|indoor|outdoor|small|large|young|mature|older|growing|active|picky|fussy)\\s+){0,2}';
+// Who a claim leaves open or attributes: a retailer lists it, Purrbi couldn't confirm it, whether it is.
+const SPECIES_HEDGE = /\b(?:retailers?|listings?|lists?|listed|sellers?|shops?|stores?|confirm\w*|whether|not|unconfirmed|unclear|uncertain|may|might|could|possibly|probably|likely|appears?|seems?|says?|said|claims?|claimed|describe[sd]?)\b|n[’']t\b/i;
+
+/**
+ * A sentence stating who the product is for as fact: made, formulated, designed, intended or meant for cats (adjectives
+ * and "for use in" allowed), made for your cat, a food for cats, unhedged "for cats", this cat food. A claim with a hedge
+ * or attribution in the few words before it, or "according to a retailer" after it, passes. The product's own name and
+ * brand are left out of the check (a retailer's title such as "… Cat Food" is the name, not Purrbi's claim), and the bare
+ * "cat food" form is allowed when the name itself names the species.
+ */
+function assertsSpecies(text: string, product: { name?: string | null; brand?: string | null }): boolean {
+  let checked = text;
+  for (const n of [product.name, product.brand]) if (n && n.trim().length > 2) checked = checked.replace(new RegExp(escapeRe(n.trim()), 'gi'), 'the product');
+  const nameNamesSpecies = new RegExp(`\\b${SPECIES_NOUN}\\b`, 'i').test(product.name ?? '');
+  const claims = [
+    `\\b(?:made|formulated|designed|intended|meant|developed|created|crafted|tailored|specifically)\\s+(?:[\\p{L}-]+\\s+){0,2}for\\s+(?:use\\s+(?:in|by|with)\\s+)?(?:(?:a|an|your)\\s+)?${SPECIES_MODS}${SPECIES_NOUN}(?:[’']s\\s+species)?\\b`,
+    `\\bfor\\s+(?:use\\s+(?:in|by|with)\\s+)?${SPECIES_MODS}(?:cats|dogs|kittens|puppies|felines|canines)\\b`,
+    `\\bfor\\s+(?:a|an)\\s+${SPECIES_MODS}(?:cat|dog|kitten|puppy)\\b(?![’'])`,
+    nameNamesSpecies ? '' : `\\b(?:cat|dog|kitten|puppy|feline|canine)\\s+(?:food|treat|diet|snack|meal|pate|pâté|formula|recipe|kibble|topper|dinner|entr[eé]e|product)s?\\b`,
+  ].filter(Boolean);
+  for (const source of claims) {
+    for (const m of checked.matchAll(new RegExp(source, 'giu'))) {
+      const at = m.index ?? 0;
+      if (SPECIES_HEDGE.test(lastWords(clauseBefore(checked, at), 6))) continue;
+      const sentenceRest = checked.slice(at + m[0].length).split(/[.;!?](?!\d)/)[0];
+      if (/\b(?:according\s+to|as\s+(?:listed|stated|described)\s+by|per)\b[^.;]{0,40}\b(?:retailers?|listings?|sellers?|shops?|stores?)\b/i.test(sentenceRest)) continue;
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Why a model-written verdict cannot be used, or null if it can. */
 export function checkVerdict(text: string, input: VerdictInput): string | null {
   const n = words(text).length;
@@ -169,9 +268,9 @@ export function checkVerdict(text: string, input: VerdictInput): string | null {
   if (/not enough information to score|label score is not|preventing a full assessment|scoring engine|partial assessment|between \d+ and \d+/i.test(text)) return 'repeats the missing-information message instead of interpreting the findings';
   if (/…|\.\.\./.test(text)) return 'trailing ellipsis';
   // What Purrbi has not found is not missing from the product (test B: "it lacks a nutritional adequacy statement").
-  if (/\b(?:lacks?|lacking|has no|have no|doesn[’']t (?:have|include|carry|state|list)|does not (?:have|include|carry|state|list)|is missing|are missing|missing)\b[^.;]{0,40}\b(?:adequacy|complete and balanced|feeding|statement|analysis|ingredients? list|list of ingredients|calori\w*|label|information|nutrition\w*)/i.test(text)) return 'says the product lacks what Purrbi has not found';
+  if (saysProductLacks(text, input.assessment.missing)) return 'says the product lacks what Purrbi has not found';
   // Who it is for is stated only as confirmed as it is: a retailer's listing is not the package (test B).
-  if (input.product.speciesConfirmed === false && /\b(?:made|formulated|designed|intended|meant|specifically)\s+(?:specifically\s+|only\s+|especially\s+)?for\s+(?:cats|dogs|kittens|puppies|felines|canines)\b|\b(?:a|this)\s+(?:cat|dog)\s+food\s+(?:is\s+)?made\b/i.test(text)) return 'states who it is for as confirmed when only a retailer lists it'
+  if (input.product.speciesConfirmed === false && assertsSpecies(text, input.product)) return 'states who it is for as confirmed when only a retailer lists it';
   // A product's own name ("Perfect Portions", "Healthy Kitten") is not a claim Purrbi makes.
   const claims = [input.product.name, input.product.brand].filter((x) => x && x.length > 2).reduce((t, x) => t.replace(new RegExp(escapeRe(x), 'gi'), ' '), text);
   if (FORBIDDEN.test(claims)) return `claim Purrbi does not make (“${FORBIDDEN.exec(claims)![0]}”)`;
