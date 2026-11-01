@@ -217,14 +217,18 @@ While the product is unresolved, only recall and documented-concern cautions are
     "doesn't show calories"). This holds whatever the score still needs: a complete food's calories and a treat's
     analysis can be "not found yet" (the score's basis says so) without being missing for the score. "Isn't labeled
     complete and balanced" is refused only while the adequacy statement is not found (a treat labeled for intermittent
-    feeding truly isn't). Said of Purrbi's own search it passes: "Purrbi has no feeding statement for it yet", "no
-    adequacy statement was found", "the retailer's listing has no adequacy statement";
+    feeding truly isn't). Said of Purrbi's own search it passes: when the subject is Purrbi or what it read ("Purrbi has
+    no feeding statement for it yet", "the retailer's listing for this product has no adequacy statement"), or it says
+    the item was not found ("no adequacy statement was found", "not listed in Purrbi's sources"). A "source" or "Purrbi"
+    elsewhere in the sentence does not make it so ("named by source but lacks …", "Purrbi notes that it lacks …");
   - states who the product is for as fact when only a retailer's listing says so (the model is told whether the species
     is confirmed): made, formulated, designed or intended for cats (also "for adult cats", "for use in cats", "made for
     your cat"), a food for cats, an unhedged "for cats", this cat food. A hedge or attribution passes only right in front
     of the claim ("a retailer lists it for cats", "Purrbi couldn't confirm it is made for cats", "it may not be for dogs")
     or right after it ("…, according to a retailer's listing"): "a retailer lists it, and it is made for cats" is refused.
-    The product's own name is left out of the check (a retailer's title "… Cat Food" is the name, not Purrbi's claim).
+    A claim inside the product's own name or brand (a retailer's title "… Cat Food") or inside the words of Purrbi's own
+    findings given to the model (an ingredient note: "prohibited in or on cat food") is not Purrbi's claim; "for cats"
+    counts when it describes the product ("it is for cats", "a pate for cats", the name "for cats"), not "toxic for cats".
 - **Who it is for, unconfirmed.** When only a retailer's listing says who the product is for, the personal finding says
   "Listed for cats by a retailer’s listing; Purrbi couldn’t confirm it from the package or the maker." It is information,
   not a positive, so no "Made for cats" highlight is shown. (Results saved before this keep their wording until the product

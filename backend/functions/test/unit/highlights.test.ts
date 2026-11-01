@@ -280,4 +280,63 @@ describe('who the product is for and what is missing, said as Purrbi knows it (t
     });
     expect(checkVerdict(ruleVerdict(v), v)).toBeNull();
   });
+  // Second review of verdict 2.2.0: the subject decides who a "lacks" is about, not a "source" or "Purrbi" nearby; the
+  // usual lead words and forms of the item; and Purrbi's own findings are not its claim.
+  it('a “lacks” is about the product unless its subject is Purrbi or what it read; Purrbi’s own finding words are not a species claim', () => {
+    const base = {
+      product: { name: 'TEST FIXTURE Gravies', brand: 'TESTBRAND', species: 'cat', category: 'complete_food', speciesConfirmed: true, speciesBasis: 'retailer listing' },
+      assessment: { score: null as number | null, provisional: false, label: 'Information incomplete', basis: '', withheldReason: '', missing: 'nutritional adequacy ("complete and balanced") statement' },
+      pet: { name: 'your cat', species: 'cat', fit: 'incomplete', headline: '' },
+      positives: [{ title: 'Main ingredients named by source', detail: 'The first 5 main ingredients each say which animal or plant they come from.', value: '' }],
+      cautions: [],
+      unresolved: [],
+    };
+    const unconfirmed = { ...base, product: { ...base.product, speciesConfirmed: false } };
+    const otherMissing = { ...base, assessment: { ...base.assessment, missing: 'guaranteed analysis and the calorie content' } };
+    const moisture = { ...base, assessment: { ...base.assessment, missing: 'moisture guarantee (to compare protein and fat on a dry-matter basis)' } };
+    const LACKS = 'says the product lacks what Purrbi has not found';
+    const SPECIES = 'states who it is for as confirmed when only a retailer lists it';
+    const table: [string | null, typeof base, string][] = [
+      [LACKS, base, 'This food lists the main ingredients by source but lacks a nutritional adequacy statement, so its suitability for your cat cannot be fully assessed yet.'],
+      [LACKS, base, 'It lists its main ingredients by source and lacks a nutritional adequacy statement, so it may not be a complete diet and is not rated for your cat.'],
+      [LACKS, base, 'Its main ingredients are named by source but it doesn’t include a guaranteed analysis, so its protein and fat are unknown and it is not rated for your cat.'],
+      [LACKS, base, 'Its main ingredients are named by source; Purrbi notes that it lacks a nutritional adequacy statement, so it may not be a complete diet and is not rated for your cat.'],
+      [LACKS, base, 'Its main ingredients are named by source, but it lacks an AAFCO nutritional adequacy statement, so it may not be a complete diet and is not rated for your cat.'],
+      [LACKS, base, 'Its main ingredients are named by source, but it lacks the required nutritional adequacy statement, so it may not be a complete diet and is not rated for your cat.'],
+      [LACKS, base, 'Its main ingredients are named by source, but it lacks a statement of nutritional adequacy, so it may not be a complete diet and is not rated for your cat.'],
+      [LACKS, base, 'Its main ingredients are named by source, but it lacks the adequacy statement usually found on complete foods, so it is not rated for your cat.'],
+      [LACKS, moisture, 'Its main ingredients are named by source and it is labeled complete and balanced for adult maintenance, but the label has no moisture guarantee, so it is not rated for your cat.'],
+      [null, base, 'The retailer’s listing for this product has no adequacy statement, so Purrbi cannot rate it for your cat yet; its main ingredients are named by source and listed below.'],
+      [null, base, 'The retailer’s product page has no adequacy statement, so Purrbi cannot rate it for your cat yet; its main ingredients are named by source and listed below.'],
+      [null, base, 'Purrbi’s record for this product has no adequacy statement, so it is not rated for your cat yet; its main ingredients are named by source and listed below.'],
+      [null, otherMissing, 'Its main ingredients are named by source, but its calorie content is not listed in Purrbi’s sources, which makes portions harder to judge, and it is not rated for your cat.'],
+      [SPECIES, unconfirmed, 'This wet food is not rated yet but is made for cats, and its main ingredients are named by source; Purrbi has not found its complete and balanced statement.'],
+      [SPECIES, unconfirmed, 'The package says it is made for adult cats, and its main ingredients are named by source; Purrbi has not found its complete and balanced statement, so it is not rated yet.'],
+      [SPECIES, unconfirmed, 'Its label says it is formulated for adult cats and its main ingredients are named by source; Purrbi has not found its complete and balanced statement, so it is not rated yet.'],
+      // A short name is not a hiding place: "Adult" or "Indoor" as the name or brand.
+      [SPECIES, { ...unconfirmed, product: { ...unconfirmed.product, name: 'Adult' } }, 'This dry food is formulated for adult cats and its main ingredients are named by source; Purrbi has not found its complete and balanced statement, so it is not rated yet.'],
+      [SPECIES, { ...unconfirmed, product: { ...unconfirmed.product, brand: 'Indoor' } }, 'This dry food is formulated for indoor cats and its main ingredients are named by source; Purrbi has not found its complete and balanced statement, so it is not rated yet.'],
+    ];
+    for (const [expected, input, text] of table) expect([text, checkVerdict(text, input)]).toEqual([text, expected]);
+    // Through the pipeline: a jerky treat only a retailer lists for dogs, with propylene glycol (its note says "prohibited
+    // in or on cat food"), for a cat and for no pet. The rule-based verdict and the alert in the input's words pass.
+    const jerky = facts({ productName: { value: 'TEST FIXTURE Beef Jerky Strips', source: facts().productName!.source }, ingredientsText: 'Beef, glycerin, sugar, propylene glycol, salt, natural smoke flavor', adequacyText: '', classificationSignals: [] });
+    for (const p of [pet(), null]) {
+      const scope = classifyScope({ origin: 'opff', categoriesTags: [], texts: ['TEST FIXTURE Beef Jerky Strips', 'Dog Treats'], ingredientsText: jerky.ingredientsText?.value, adequacy: jerky.adequacy?.value, speciesClaims: [{ text: 'Dog Treats', basis: 'retailer_listing', source: 's0' }] });
+      const general = assessGeneral(jerky, scope);
+      const personal = personalize(p, jerky, scope, general, noRecall, NOW);
+      const highlights = buildHighlights({ facts: jerky, scope, general, personal, recall: noRecall });
+      const v = verdictInput({
+        productName: 'TEST FIXTURE Beef Jerky Strips', brand: 'TESTBRAND', species: scope.species, speciesConfirmed: scope.speciesEvidence ? scope.speciesEvidence.confirmed : false, speciesBasis: 'retailer listing', category: general.category,
+        score: general.score, provisional: general.scoreProvisional, scoreLabel: general.scoreLabel, scoreBasis: general.scoreBasis, withheldReason: general.scoreWithheldReason ?? '', missing: general.missingForScore,
+        coverage: general.scoreCoverage, low: general.scoreMinPossible ?? null, high: general.scoreMaxPossible, concerns: general.criticalConcerns.map((c) => c.split(':')[0]),
+        pet: p ? { name: p.name, species: p.species, fit: personal.state, headline: personal.headline } : null,
+        positives: highlights.positives, cautions: highlights.cautions, unresolved: personal.unresolved,
+      });
+      expect(v.product.speciesConfirmed).toBe(false);
+      expect(v.cautions[0]?.detail).toMatch(/in or on cat food/);
+      expect(checkVerdict(ruleVerdict(v), v)).toBeNull();
+      if (p) expect(checkVerdict(`Propylene glycol is prohibited in cat food because it affects cats’ red blood cells, and only a retailer lists this treat for dogs, so its Purrbi score is ${v.assessment.score}/100 (serious concern) for your cat.`, v)).toBeNull();
+    }
+  });
 });
