@@ -536,6 +536,21 @@ that fails on the code before it):
 - The verdict checks on an unconfirmed species. B's species is confirmed now, so no live scan used them.
 - The stored-recall fallback.
 
-**Blocked:** the backend's OpenAI key expired (2026-11-01). New research, AI verdicts, explanations and label-photo
-reading fail until a new key version is saved in Secret Manager (`OPENAI_API_KEY`) and the backend is deployed again.
+**OpenAI key expiry:** the key expired on 2026-11-01. The owner saved a new version of `OPENAI_API_KEY` in Secret
+Manager, and the backend was deployed again as `3d5dfc9` (same code as `c2cfa76`, plus records). OpenAI calls answer 200
+again.
+
+**Reruns on backend `3d5dfc9`** (2026-11-01, 05:43–05:45 UTC, account `accept`, new key):
+
+| Test | Scan / trace | What happened | Outcome |
+|---|---|---|---|
+| A `099482481087` | `p4-c14-099482481087` / `cc5e80fe-145` | Research ran (two calls, 200), five searches. The model cited Spoonful's page for the barcode (its address encodes 0099482481087). It answered **HTTP 429**, a security checkpoint for automated readers. The barcode search's 12 checks went to likely shop pages, none showing the barcode: Shein, Health First Market, Instacart, pricehistory.app and Whole Foods. Ubuy (×2), desertcart.in and eBay refuse readers (403); two Whole Foods addresses are gone (404). The search by the answer's name had no checks left. | Unscored, "Not yet confirmed for cats or dogs". Card: "A page found for this barcode (on ebay.com) turns automated readers away, so nothing could be checked on it or added." |
+| C `099482517243` | `p4-c14-099482517243` / `f599da0a-2d6` | Research ran (200). No page shows the barcode: scribd, jqs.app, barcode.codes, azrscorp.com, qrbarcode.app. barcodereport.com refuses readers; UPCitemdb's page is gone (404). | Unscored. Card: "Searched the manufacturer’s and retailers’ pages; nothing could be verified against a page, so nothing was added." |
+
+None of the 2.9.4 page-check changes came into play in these runs:
+- A's unlikely pages fell past the 12-check limit rather than being held back.
+- Its repeated Whole Foods addresses answered differently (404 and 200), so they were different pages, not tracking copies.
+
+A stays blocked by source access: every page found that shows its barcode turns automated readers away. C stays blocked
+by source coverage. Neither is a code defect still open.
 
