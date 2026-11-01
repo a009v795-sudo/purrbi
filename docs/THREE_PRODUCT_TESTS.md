@@ -554,3 +554,13 @@ None of the 2.9.4 page-check changes came into play in these runs:
 A stays blocked by source access: every page found that shows its barcode turns automated readers away. C stays blocked
 by source coverage. Neither is a code defect still open.
 
+
+## Android APK, build 10 (2026-11-01)
+
+- **Build:** run `41281542909`, artifact `purrbi-android-apk-10` (id `13073527710`, kept until 2027-01-30), from commit
+  `cd8030c`. Firebase config: project `purrbi-49c21`, app `com.mycompany.purrbiv2development`. versionCode 10, signed with
+  the same development key as build 9, so it installs over it.
+- **APK:** `app-release.apk`, 113,130,790 bytes, SHA-256
+  `1f58ebdd3d80b0df682a39282d65d9c5438c171bd7acd01a26f746fa838ba65c`.
+- **App:** unchanged since build 9. All changes since are in the backend, live on `purrbi-49c21` (`3d5dfc9`).
+- **Not verified here:** installing on a physical device and scanning with its camera.
