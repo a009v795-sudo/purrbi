@@ -696,3 +696,28 @@ It never keeps the shorter name, so the kitten food is never named as the adult 
 name is read in 95% of test A pairs (2.3.0: 53–59%), 90% of test C, 77% of Fancy Feast, 63% of Purina ONE and 29% of
 BLUE. No wrong name, brand or species is kept, and no sibling name.
 
+On backend `9d5a0c5` (the current version, deployed 2026-11-02 07:53 UTC), the same front photo sent to the
+ingredient-list request:
+
+| Run | Account / scan | Outcome |
+|---|---|---|
+| a11 | `accept` / `e1702805-e90` | Read: name "GRAIN FREE SALMON PÂTÉ LOAF RECIPE", brand WHOLE PAWS, for cats, type PREMIUM CAT FOOD. Note: "The ingredient list wasn’t read from this photo…" |
+| a12 | `demo` / `a2edf83f-f84` | The same |
+| a13 | `accept` / `86d790e5-b10` | The same |
+
+Across the 11 live readings of the owner's front photo with 2.4.0 versions:
+- brand and species were read in all 11;
+- the full name was read in 7, including all 3 on the current version;
+- the 4 misses were the "GRAIN FREE" pattern, which the current version reads.
+
+The barcode-side photo gives "Couldn’t read all of the ingredient list. Retake it straight on, in good light.", because
+its list is cut off at the photo's edge.
+
+**Still open:**
+- **A's score** needs the ingredient list and the nutrition panel. No reachable source has them, and the barcode-side
+  photo shows only part of the list. A photo of the whole ingredient panel and of the guaranteed analysis would complete
+  it.
+- **C's ingredient-list photo:** the cause is not known without the photo.
+- **Physical device:** these photo runs used the real app's release web build on the live backend, not a phone. The APK
+  is unchanged (build 10); the owner's device runs the same backend.
+
