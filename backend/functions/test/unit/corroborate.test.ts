@@ -104,7 +104,9 @@ describe('a read photo’s note', () => {
     // A disputed reading is not used at all: its note is the one said.
     const disputed = { stage: 'disputed' as const, agreements: [], conflicts: ['x'], note: 'Not used: x.' };
     expect(photoNote('ingredients', nameOnly, disputed)).toBe('Not used: x.');
-    // Every note fits the app's three lines (about 43 characters a line), except a dispute's, whose start says it.
-    for (const n of ['ingredients', 'nutrition', 'front'].map((p) => photoNote(p, reading({}), c))) expect(n.length, n).toBeLessThanOrEqual(129);
+    // Every note fits the app's three lines (about 43 characters a line, words wrapped), except a dispute's, whose start says it.
+    const wrapped = (text: string, width: number) => text.split(' ').reduce((ls, w) => (ls[ls.length - 1].length + 1 + w.length <= width && ls[ls.length - 1] ? [...ls.slice(0, -1), `${ls[ls.length - 1]} ${w}`] : [...ls.filter(Boolean), w]), ['']).length;
+    const notes = [...['ingredients', 'nutrition', 'front'].map((p) => photoNote(p, reading({}), c)), corroborateLabel(reading({ guaranteedAnalysis: GA_FULL }), null).note];
+    for (const n of notes) expect(wrapped(n, 43), n).toBeLessThanOrEqual(3);
   });
 });

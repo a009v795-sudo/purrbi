@@ -18,6 +18,8 @@ const BACK: RawPanel[] = [
   { kind: 'guaranteed_analysis', legibility: 'clear', heading: 'Constituants analytiques', text: 'Protéine / Proteína / Protein 35%\nTeneur en matières grasses / Contenido de grasa\n/ Fat content 16%\nCellulose brute / Fibra bruta 2,5%\nMatières minérales / Inorganic matter 8%' },
 ];
 const read = (panels: RawPanel[], over: Partial<RawLabelExtraction> = {}, model = 'model-a') => parseReading(raw(panels, over), model);
+/** Lines a text takes at `width` characters a line, words wrapped as the app wraps them. */
+const wrapped = (text: string, width: number) => text.split(' ').reduce((ls, w) => (ls[ls.length - 1].length + 1 + w.length <= width && ls[ls.length - 1] ? [...ls.slice(0, -1), `${ls[ls.length - 1]} ${w}`] : [...ls.filter(Boolean), w]), ['']).length;
 
 describe('grounded label reading', () => {
   it('keeps nothing a second reading does not confirm: an invented analysis on a front photo is dropped', () => {
@@ -95,6 +97,8 @@ describe('grounded label reading', () => {
     expect(pair([WP_FRONT], 'WHOLE PAWS GRAIN FREE SALMON PÂTÉ LOAF RECIPE', 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE')).toMatchObject({ status: 'processed', productName: 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE', brand: 'WHOLE PAWS', species: 'cat', productTypeClaim: 'PREMIUM CAT FOOD' });
     // The type line after it, a dash between; the same words, so the one not in capitals is kept.
     expect(pair([WP_FRONT], 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE – PREMIUM CAT FOOD', 'Grain Free Salmon Pâté Loaf Recipe').productName).toBe('Grain Free Salmon Pâté Loaf Recipe');
+    // The type line, printed on its own, given in front of the name: the name without it.
+    expect(pair([WP_FRONT], 'PREMIUM CAT FOOD GRAIN FREE SALMON PÂTÉ LOAF RECIPE', 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE').productName).toBe('GRAIN FREE SALMON PÂTÉ LOAF RECIPE');
     // Both in capitals, a dash left between: the name without the dash.
     expect(pair([WP_FRONT], 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE – PREMIUM CAT FOOD', 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE').productName).toBe('GRAIN FREE SALMON PÂTÉ LOAF RECIPE');
     // Both with the brand: the name without it.
@@ -108,7 +112,7 @@ describe('grounded label reading', () => {
     // Names that are not the same name are not kept, but the front's agreed, printed brand and species still are.
     expect(pair([WP_FRONT], 'SALMON', 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE')).toMatchObject({ status: 'processed', productName: null, brand: 'WHOLE PAWS', species: 'cat', productTypeClaim: 'PREMIUM CAT FOOD' });
     // Nothing agreed on a front photo: unreadable, and the owner is asked to retake the front.
-    expect(pair([WP_FRONT], 'A', 'C', { brand: 'B', species_claim: 'not_visible', product_type_claim: null }, { brand: 'D', species_claim: 'not_visible', product_type_claim: null })).toMatchObject({ status: 'unreadable', reason: 'Couldn’t read the name or who it is for. Retake the front straight on, in good light.' });
+    expect(pair([WP_FRONT], 'A', 'C', { brand: 'B', species_claim: 'not_visible', product_type_claim: null }, { brand: 'D', species_claim: 'not_visible', product_type_claim: null })).toMatchObject({ status: 'unreadable', reason: 'Couldn’t read the name or who it is for. Retake the front in good light.' });
   });
   // Review of 7accb55: the ways two models transcribe the same front (test A's can, test C's treats, a Fancy Feast can).
   it('reads a printed name whatever order or panels a model transcribes its lines in', () => {
@@ -134,6 +138,30 @@ describe('grounded label reading', () => {
     expect(both([c], [c], 'Salmon & Avocado Recipe Treats', 'SALMON & AVOCADO RECIPE TREATS', { brand: 'WHOLE PAWS', species_claim: 'cat', product_type_claim: 'CAT TREATS' })).toMatchObject({ productName: 'Salmon & Avocado Recipe Treats', species: 'cat', productTypeClaim: 'CAT TREATS' });
     const ff = lines('FANCY FEAST', 'CLASSIC PÂTÉ', 'SAVORY SALMON FEAST', 'GOURMET WET CAT FOOD', 'NET WT 3 OZ (85g)');
     expect(both([ff], [ff], 'Savory Salmon Feast Classic Pâté', 'Savory Salmon Feast Classic Pâté', { brand: 'Fancy Feast', species_claim: 'cat', product_type_claim: 'Gourmet Wet Cat Food' }).productName).toBe('Savory Salmon Feast Classic Pâté');
+    // A type line of format words printed between the name's lines (review of 3bd9ca0).
+    const ffBetween = lines('FANCY FEAST', 'CLASSIC PÂTÉ', 'GOURMET WET CAT FOOD', 'SAVORY SALMON FEAST');
+    expect(both([ffBetween], [ffBetween], 'Classic Pâté Savory Salmon Feast', 'Fancy Feast Classic Pâté Savory Salmon Feast', { brand: 'Fancy Feast', species_claim: 'cat', product_type_claim: null }).productName).toBe('Classic Pâté Savory Salmon Feast');
+    // A brand word only one reading's brand has is part of the name: a range in a brand claim does not hide.
+    const medleys = lines('FANCY FEAST', 'MEDLEYS', 'TUSCANY CHICKEN');
+    expect(combineReadings(read([medleys], { brand: 'Fancy Feast Medleys', species_claim: 'cat', product_type_claim: null, product_name: 'Fancy Feast Medleys Tuscany Chicken' }), read([medleys], { brand: 'Fancy Feast', species_claim: 'cat', product_type_claim: null, product_name: 'Tuscany Chicken' }, 'model-b'), GTIN).productName).toBeNull();
+    const gl = lines('FANCY FEAST', 'GRAVY LOVERS', 'CHICKEN FEAST');
+    expect(combineReadings(read([gl], { brand: 'Fancy Feast Gravy Lovers', species_claim: 'cat', product_type_claim: null, product_name: 'Fancy Feast Gravy Lovers Chicken Feast' }), read([gl], { brand: 'Fancy Feast', species_claim: 'cat', product_type_claim: null, product_name: 'Chicken Feast' }, 'model-b'), GTIN).productName).toBeNull();
+    // A logo word that is one reading's own printed brand, when the readings' brands differ (review of 3bd9ca0).
+    const blue = lines('BLUE', 'WILDERNESS', 'INDOOR', 'CHICKEN RECIPE', 'NATURAL ADULT DRY CAT FOOD');
+    const blueB = combineReadings(read([blue], { brand: 'BLUE', species_claim: 'cat', product_type_claim: null, product_name: 'BLUE Wilderness Indoor Chicken Recipe' }), read([blue], { brand: 'Blue Buffalo', species_claim: 'cat', product_type_claim: null, product_name: 'Wilderness Indoor Chicken Recipe' }, 'model-b'), GTIN);
+    expect(blueB).toMatchObject({ productName: 'Wilderness Indoor Chicken Recipe', brand: null, species: 'cat' });
+    // One reading left a name line out of its own transcription: the other's prints the whole name (review of 3bd9ca0);
+    // a transcription that shows a life stage beside it still says no.
+    const noBadge = lines('WHOLE PAWS', 'BY WHOLE FOODS MARKET', 'PREMIUM CAT FOOD', 'SALMON PÂTÉ', 'LOAF RECIPE');
+    expect(both([asPrinted], [noBadge])).toMatchObject(ok);
+    const kitten = lines('WHOLE PAWS', 'KITTEN', 'GRAIN FREE', 'SALMON PÂTÉ', 'LOAF RECIPE');
+    expect(both([kitten], [noBadge]).productName).toBeNull();
+    expect(both([asPrinted], [kitten]).productName).toBeNull(); // one transcription shows KITTEN beside it: that is enough to refuse it
+    expect(both([noBadge], [noBadge]).productName).toBeNull(); // neither transcription prints all of the name
+    // A name of thousands of spaces is read as quickly as any other.
+    const started = Date.now();
+    expect(both([asPrinted], [asPrinted], `GRAIN FREE${' '.repeat(10000)}SALMON PÂTÉ LOAF RECIPE`, NAME).productName).toBe(NAME);
+    expect(Date.now() - started).toBeLessThan(1000);
     // The two printed lines given the other way round by one reading: the same name, shown in the printed order.
     expect(both([ff], [ff], 'Savory Salmon Feast Classic Pâté', 'Classic Pâté Savory Salmon Feast', { brand: 'Fancy Feast', species_claim: 'cat', product_type_claim: 'Gourmet Wet Cat Food' }).productName).toBe('Classic Pâté Savory Salmon Feast');
     // A type line printed as part of the name stays in it.
@@ -164,6 +192,35 @@ describe('grounded label reading', () => {
     expect(name('SCIENCE DIET\nCHICKEN RECIPE\nSENIOR\nCAT FOOD', 'Chicken Recipe', 'Chicken Recipe')).toBeNull();
     expect(name('WHISKAS\n7+\nTUNA IN JELLY', 'Tuna in Jelly', 'Tuna in Jelly')).toBeNull();
     expect(name('FANCY FEAST\nADULT\nCLASSIC PÂTÉ\nCHICKEN FEAST', 'Classic Pâté Chicken Feast', 'Classic Pâté Chicken Feast')).toBe('Classic Pâté Chicken Feast');
+    // Life stages printed with an age or a qualifier, or on the brand's line (review of 3bd9ca0); "1+" is the adult one.
+    for (const stage of ['SENIOR 7+', 'ADULT 7+', 'MATURE ADULT', 'HEALTHY KITTEN', 'KITTEN 2-12 MONTHS', '2-12 MONTHS', '(11+)', 'LARGE BREED PUPPY'])
+      expect(name(`SCIENCE DIET\nCHICKEN RECIPE\n${stage}\nCAT FOOD`, 'Chicken Recipe', 'SCIENCE DIET Chicken Recipe', 'SCIENCE DIET'), stage).toBeNull();
+    expect(name('ROYAL CANIN KITTEN\nPERSIAN\nDRY CAT FOOD', 'Persian', 'Persian', 'Royal Canin')).toBeNull();
+    expect(name('WHISKAS\n1+\nTUNA IN JELLY', 'Tuna in Jelly', 'Whiskas Tuna in Jelly', 'Whiskas')).toBe('Tuna in Jelly'); // the adult line may be left out
+    expect(name('WHISKAS\nADULT 1-6\nTUNA IN JELLY', 'Tuna in Jelly', 'Whiskas Tuna in Jelly', 'Whiskas')).toBe('Tuna in Jelly');
+    expect(name('WHISKAS\nADULT 7+\nTUNA IN JELLY', 'Tuna in Jelly', 'Whiskas Tuna in Jelly', 'Whiskas')).toBeNull(); // a senior stage may not
+    expect(name('WHISKAS\n1+\nTUNA IN JELLY', 'Tuna in Jelly', 'Tuna in Jelly')).toBe('Tuna in Jelly');
+    expect(name('WHISKAS\n1+\nTUNA IN JELLY', '1+', '1+')).toBeNull(); // an age band is not a name
+    // A texture or flavour line beside the name that both readings leave out (review of 3bd9ca0).
+    expect(name('WHISKAS\n1+\nTUNA\nIN JELLY', 'Tuna', 'Whiskas Tuna', 'Whiskas')).toBeNull();
+    expect(name('FANCY FEAST\nGRAVY LOVERS\nCHICKEN FEAST\nGOURMET CAT FOOD', 'Chicken Feast', 'Chicken Feast 3 oz', 'Fancy Feast')).toBeNull();
+    expect(name('PURINA ONE\nINDOOR\nADULT\nTURKEY RECIPE\nDRY CAT FOOD', 'Indoor Adult', 'Indoor Adult', 'Purina ONE')).toBeNull();
+    expect(name('FANCY FEAST\nCLASSIC PÂTÉ COLLECTION\nCHICKEN FEAST\nSALMON FEAST\nTUNA FEAST', 'Chicken Feast', 'Chicken Feast', 'Fancy Feast')).toBeNull(); // one flavour of a variety pack
+    // A line printed between two of the name's lines, not beside them: still never left out.
+    expect(name('FANCY FEAST\nCLASSIC PÂTÉ\nKITTEN\nCHICKEN FEAST', 'Classic Pâté Chicken Feast', 'Classic Pâté Chicken Feast')).toBeNull();
+    // A range line between the brand and the name, unknown as a texture or flavour, that the reading adding the brand leaves out.
+    expect(name('FANCY FEAST\nMEDLEYS\nCLASSIC PÂTÉ\nCHICKEN FEAST', 'Fancy Feast Classic Pâté Chicken Feast', 'Classic Pâté Chicken Feast', 'Fancy Feast')).toBeNull();
+    // An age band alone is not a name, whatever stands beside it.
+    expect(name('WHISKAS\n1+\nCAT FOOD', '1+', '1+')).toBeNull();
+    // The name's own flavour on a line beside it does not stop it.
+    expect(name('FANCY FEAST\nSALMON\nCLASSIC PÂTÉ\nSAVORY SALMON FEAST', 'Classic Pâté Savory Salmon Feast', 'Classic Pâté Savory Salmon Feast', 'Fancy Feast')).toBe('Classic Pâté Savory Salmon Feast');
+    // A claim about what is in it is not a flavour of its own.
+    expect(name('PURINA ONE\n+PLUS\nINDOOR ADVANTAGE\nWITH REAL TURKEY\nDRY CAT FOOD', '+Plus Indoor Advantage', '+Plus Indoor Advantage', 'Purina ONE')).toBe('+Plus Indoor Advantage');
+    expect(name('PURINA ONE\n+PLUS\nWITH REAL TURKEY\nINDOOR ADVANTAGE\nDRY CAT FOOD', '+Plus Indoor Advantage', '+Plus Indoor Advantage', 'Purina ONE')).toBe('+Plus Indoor Advantage');
+    // A callout naming the flavour the name already has does not stop it.
+    expect(name('WHOLE PAWS\nSALMON PÂTÉ\nLOAF RECIPE\nREAL SALMON', 'Salmon Pâté Loaf Recipe', 'Salmon Pâté Loaf Recipe', 'Whole Paws')).toBe('Salmon Pâté Loaf Recipe');
+    // Only the rest of the brand's printed line is the brand's line ("PURINA ONE" with the brand "Purina"), not a name.
+    expect(name('PURINA ONE\nINDOOR ADVANTAGE\nDRY CAT FOOD', 'Purina ONE', 'Purina ONE', 'Purina')).toBeNull();
     // A word the readings could not read inside the printed name: the name they give without it is not read.
     expect(name('FANCY FEAST\nCLASSIC PÂTÉ\nTENDER [?] & CHICKEN FEAST\nGOURMET CAT FOOD', 'Classic Pâté Tender Chicken Feast', 'Classic Pâté Tender Chicken Feast')).toBeNull();
     // Generic words in the label languages are not a name.
@@ -173,7 +230,9 @@ describe('grounded label reading', () => {
     // A type a model gives that is a life stage or a texture stays in the name: "Persian" is another product than "Persian Kitten".
     const kept = (text: string, n: string, type: string) => pair([front(text)], n, n, { brand: null, species_claim: 'cat', product_type_claim: type }).productName;
     expect(kept('ROYAL CANIN\nPERSIAN\nKITTEN\nDRY CAT FOOD', 'Persian Kitten', 'Kitten')).toBe('Persian Kitten');
-    expect(kept('PURINA\nPRO PLAN\nSTERILISED\nADULT\nRICH IN SALMON\nCAT FOOD', 'Pro Plan Sterilised Adult', 'Adult')).toBe('Pro Plan Sterilised Adult');
+    expect(kept('PURINA\nPRO PLAN\nSTERILISED\nADULT\nRICH IN SALMON\nCAT FOOD', 'Pro Plan Sterilised Adult Rich in Salmon', 'Adult')).toBe('Pro Plan Sterilised Adult Rich in Salmon');
+    // The flavour line printed right after it, left out: another flavour's name, or not all of it.
+    expect(kept('PURINA\nPRO PLAN\nSTERILISED\nADULT\nRICH IN SALMON\nCAT FOOD', 'Pro Plan Sterilised Adult', 'Adult')).toBeNull();
     expect(kept('PERFECT PORTIONS\nCHICKEN PÂTÉ\nCAT FOOD', 'Perfect Portions Chicken Pâté', 'Pâté')).toBe('Perfect Portions Chicken Pâté');
     // Chicken against salmon, with or without the brand in one reading, and brands that are not the same brand.
     const flavours = front('WHOLE PAWS\nGRAIN FREE\nCHICKEN PÂTÉ LOAF RECIPE\nGRAIN FREE SALMON PÂTÉ LOAF RECIPE');
@@ -219,6 +278,8 @@ describe('grounded label reading', () => {
     expect(sp('FELIX\nSENSATIONS\nKARMA DLA KOTÓW', 'cat')).toBe('cat');
     expect(sp('Premium Hondenvoer', 'dog')).toBe('dog');
     expect(sp('HUNDERT PROZENT HUHN', 'dog')).toBe('unknown');
+    for (const [text, claim] of [['KISSANRUOKA', 'cat'], ['KOIRANRUOKA', 'dog'], ['KRMIVO PRO KOČKY', 'cat'], ['KRMIVO PRO PSY', 'dog'], ['MACSKAELEDEL', 'cat'], ['KUTYAELEDEL', 'dog'], ['HRANĂ PENTRU PISICI', 'cat'], ['HRANĂ PENTRU CÂINI', 'dog'], ['KEDİ MAMASI', 'cat'], ['KÖPEK MAMASI', 'dog'], ['FODER TIL KATTE', 'cat']] as const)
+      expect(sp(text, claim), text).toBe(claim);
     // Not from a species named only to rule it out, nor from a line where the other species may be the word not read.
     expect(sp('BULLY STICKS\n100% NATURAL\nNOT FOR CATS\n6 INCH', 'cat')).toBe('unknown');
     expect(sp('PUREBITES\nFREEZE DRIED\nCHICKEN BREAST\nTREATS FOR CATS & [?]', 'cat')).toBe('unknown');
@@ -251,8 +312,11 @@ describe('grounded label reading', () => {
     // A front taken for the ingredient list is read as a front (its note says the list was not read: corroborate.ts).
     expect(back([band], [band], 'ingredients')).toMatchObject({ status: 'processed', brand: 'WHOLE PAWS' });
     const side: RawPanel = { kind: 'other', legibility: 'clear', heading: null, text: 'DISTRIBUTED BY: WHOLE FOODS MARKET\nAUSTIN, TX 78703' };
-    expect(back([side], [side], 'ingredients').reason).toBe('No ingredient list was found in this photo. Photograph that panel, straight on.');
-    expect(back([side], [side], 'nutrition').reason).toBe('No nutrition panel was found in this photo. Photograph that panel, straight on.');
+    expect(back([side], [side], 'ingredients').reason).toBe('No ingredient list was found. Photograph that panel, straight on.');
+    expect(back([side], [side], 'nutrition').reason).toBe('No nutrition panel was found. Photograph that panel, straight on.');
+    // The list seen clearly by both readings but not read, its heading not in the photo: the heading is asked for.
+    const unheaded: RawPanel = { kind: 'ingredients', legibility: 'clear', heading: null, text: 'Salmon, Water Sufficient For Processing, Guar Gum' };
+    expect(back([unheaded], [unheaded], 'ingredients').reason).toBe('Couldn’t read the ingredient list. Include its “Ingredients” heading.');
     // A panel a reading calls clear but marks a word in is not read in full either.
     const marked: RawPanel = { kind: 'ingredients', legibility: 'clear', heading: 'INGREDIENTS:', text: 'Salmon, Water, [?], Guar Gum, Salt' };
     expect(back([marked], [marked], 'ingredients')).toMatchObject({ status: 'unreadable', reason: RETAKE_LIST, uncertainFields: ['ingredients'] });
@@ -279,14 +343,14 @@ describe('grounded label reading', () => {
     const label = combineReadings(read([barcode, side], none), read([barcode, side, cutGuide, cutList], none, 'model-b'), '00099482481087', 'ingredients');
     expect(label).toMatchObject({ status: 'unreadable', reason: 'Couldn’t read all of the ingredient list. Retake it straight on, in good light.' });
     // A feeding guide is not asked for.
-    expect(combineReadings(read([cutGuide], none), read([cutGuide], none, 'model-b'), '00099482481087').reason).toBe('No label details were readable in this photo. Retake it closer to the panel you need.');
+    expect(combineReadings(read([cutGuide], none), read([cutGuide], none, 'model-b'), '00099482481087').reason).toBe('No label details could be read. Retake it closer to the panel you need.');
     // A blurry front where one reading filed callouts as an ingredient panel: taken for the front, the front is asked for.
     const blurryFront: RawPanel = { kind: 'front', legibility: 'partial', heading: null, text: '[?] [?]' };
     const callouts: RawPanel = { kind: 'ingredients', legibility: 'partial', heading: null, text: 'Real salmon [?]' };
-    expect(combineReadings(read([blurryFront], { ...none, barcode_digits: null }), read([blurryFront, callouts], { ...none, barcode_digits: null }, 'model-b'), GTIN, 'front').reason).toBe('Couldn’t read the name or who it is for. Retake the front straight on, in good light.');
+    expect(combineReadings(read([blurryFront], { ...none, barcode_digits: null }), read([blurryFront, callouts], { ...none, barcode_digits: null }, 'model-b'), GTIN, 'front').reason).toBe('Couldn’t read the name or who it is for. Retake the front in good light.');
   });
   it('every reason fits the app’s two lines of a photo’s message', () => {
-    // About 43 characters a line in the app's font at a phone's width (review of 7accb55).
+    // About 43 characters a line in the app's font at a phone's width (reviews of 7accb55 and 3bd9ca0), words wrapped.
     const P = (kind: RawPanel['kind'], legibility: RawPanel['legibility'] = 'partial'): RawPanel => ({ kind, legibility, heading: null, text: '[?] [?]' });
     const none = { product_name: null, brand: null, species_claim: 'not_visible' as const, product_type_claim: null };
     const reasons = new Set<string>();
@@ -297,9 +361,12 @@ describe('grounded label reading', () => {
     const otherCode = `400604022103${gs1CheckDigit('400604022103')}`;
     reasons.add(combineReadings(read([FRONT], { barcode_digits: otherCode }), read([FRONT], { barcode_digits: otherCode }, 'model-b'), GTIN).reason);
     reasons.add(combineReadings(read([FRONT, { ...BACK[0], text: 'COMPOSITION: Dinde, pois' }]), read([FRONT], {}, 'model-b'), GTIN).reason);
+    const unheaded: RawPanel = { kind: 'ingredients', legibility: 'clear', heading: null, text: 'Salmon, Water, Guar Gum' };
+    for (const purpose of ['ingredients', 'nutrition']) reasons.add(combineReadings(read([unheaded], none), read([unheaded], none, 'model-b'), GTIN, purpose).reason);
+    for (const purpose of ['ingredients', 'nutrition']) reasons.add(combineReadings(read([P('guaranteed_analysis', 'clear'), P('ingredients')], none), read([P('ingredients'), P('guaranteed_analysis')], none, 'model-b'), GTIN, purpose).reason);
     reasons.delete('');
     expect(reasons.size).toBeGreaterThan(6);
-    for (const r of reasons) expect(r.length, r).toBeLessThanOrEqual(86);
+    for (const r of reasons) expect(wrapped(r, 43), r).toBeLessThanOrEqual(2);
   });
   it('an earlier reader’s name, brand or type with an unreadable mark is not used', () => {
     const saved = (over: Partial<ValidatedLabel>): ValidatedLabel => ({ ...combineReadings(read([WP_FRONT], { ...WP, product_name: 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE' }), read([WP_FRONT], { ...WP, product_name: 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE' }, 'model-b'), GTIN), ...over });

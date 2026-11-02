@@ -570,3 +570,90 @@ by source coverage. Neither is a code defect still open.
   - C: unscored and unconfirmed.
   - All three match the results recorded above. The report does not say whether the barcodes were typed or scanned with
     the camera.
+
+
+## Owner's camera scans and label photos (2026-11-02): label reader 2.4.0
+
+**Owner's report** (physical Android device, APK build 10, backend `3d5dfc9`, label reader `label-extract-2.3.0`):
+- The barcodes were scanned with the phone's camera: camera scanning works on a physical device (the owner's report; not
+  observed here).
+- C: the front photo was read; the ingredient-list photo was not.
+- A: neither photo gave anything. The owner sent the result screenshots and photos of A's front and barcode side.
+
+**Diagnosis**, with the owner's two photos of A sent through the app on the live backend (account `accept`; driver
+`p4_photo_real.mjs`):
+- It is not an API, backend or action-flow failure. Every photo was received, read twice (gpt-4.1-mini and gpt-5-mini,
+  HTTP 200) and given a status.
+- **A's front** was read in 2 of 3 runs: name "GRAIN FREE SALMON PÂTÉ LOAF RECIPE", brand "WHOLE PAWS", for cats,
+  "PREMIUM CAT FOOD". In the third run, one reading gave the name with the brand in front and the other without it.
+  2.3.0 compared names at 80% of their words (5 of 7 here), and an agreed brand and species alone did not make a photo
+  read, so it was called unreadable.
+- **A's barcode side** is unreadable with good reason: the ingredient list is cut off at the photo's edge, and one
+  reading saw it only partly. Its message was the generic "No label details were readable…", which does not say what to
+  retake.
+- **A front photo sent for the ingredient-list request** was shown as "Read twice, with the same result", though no
+  ingredient list was read from it.
+- **C's ingredient photo:** the cause is not known without the photo. Other users' scans are not readable from here, by
+  design.
+
+**Fix, in four rounds; the first three were not deployed:**
+1. `9614b22` agreed names when one reading added the brand or a type line, and counted a front's agreed brand and species
+   as read. A review (reproduced cases, two skeptics each) found:
+   - sibling names kept ("Flaked Tuna Feast" for "Flaked Tuna & Mackerel Feast", a kitten food named as the adult one);
+   - chicken against salmon accepted;
+   - a species guessed from an illegible front;
+   - range names and generic words kept as names;
+   - back photos with a logo band called read;
+   - misleading reasons.
+2. `7accb55` replaced it with strict, grounded rules: word-for-word names, and every value printed in both
+   transcriptions. A second review (12 findings, 3 lenses, 2 skeptics each) found:
+   - a sibling's name still kept when one reading added the brand and both left out a printed line (KITTEN, GRAVY
+     LOVERS);
+   - correct names lost when a model transcribes lines in another order (23% of test A pairs in its fuzz);
+   - brand and species lost when one reading leaves the logo or type line out of its transcription;
+   - compound species words not read (Katzenfutter, Kattenvoer);
+   - a type that names a life stage stripped from names;
+   - a back photo with a logo band told to retake the front;
+   - reasons and notes too long for the app's 2 and 3 lines;
+   - names with `[?]` in saved 2.3.0 readings;
+   - database images re-read by a hard-coded panel.
+3. `3bd9ca0` fixed those. A third, focused review (2 lenses, a skeptic each) found:
+   - life stages printed with an age or a qualifier ("SENIOR 7+", "ADULT 7+", "HEALTHY KITTEN") not seen beside a name;
+   - correct names lost to a logo word in one reading's name ("BLUE Wilderness …") and to a name line one transcription
+     left out;
+   - reasons wrapping to three lines;
+   - a size pattern slow on names of thousands of spaces;
+   - species words of six more languages not read.
+4. The current version fixes those too. A short line of a texture or flavour beside a name that the name leaves out now
+   blocks it, as a life stage does: "IN JELLY", "GRAVY LOVERS", "TURKEY RECIPE", one flavour of a variety pack. The rules
+   are in METHODOLOGY.md ("How a label is read").
+
+**Measured on the reviewers' models of how the two models transcribe real fronts.** 50,000–100,000 reading pairs each,
+with independent transcription choices. The choice rates are the reviewers' estimates, not measurements.
+
+| Front | correct name, 2.4.0 / 2.3.0 | brand | species | wrong name, brand or species kept |
+|---|---|---|---|---|
+| Test A, Whole Paws salmon pâté (`fuzzA.js`) | 87% / 53% | 83% / 44% | 91% / 50% | 0% / 0% |
+| Test A, with 8% of transcriptions missing a name line | 88% / 59% | 82% / 44% | 92% / 55% | 0% / brand 0.5% |
+| Test C, Whole Paws treats | 90% / 30% | 81% / 23% | 92% / 28% | 0% / 0% |
+| Fancy Feast Classic Pâté Savory Salmon Feast | 46% / 30% | 42% / 16% | 90% / 28% | 0% / 0% |
+| Purina ONE +Plus Indoor Advantage | 24% / 23% | 64% / 16% | 87% / 22% | 0% / 0% |
+| BLUE Wilderness Indoor Chicken | 18% / 32% | 16% / 14% | 89% / 30% | 0% / 0% |
+
+- **BLUE:** its lower name rate is the refusal to leave out a "HIGH PROTEIN, GRAIN-FREE" line printed between the name's
+  lines. BLUE sells a Wilderness line with wholesome grains too.
+- **Sibling names:** in the third reviewer's fuzz (each model leaves the life stage out of its name 30% of the time),
+  2.4.0 keeps a sibling's name in 0.0% of pairs on the "SENIOR 7+", "ADULT 7+" and "KITTEN" layouts; 2.3.0 keeps one in
+  5.6–7.9%.
+- **Earlier attacks:** every harmful case from the three reviews gives no name, rerunning their scripts against the
+  current version.
+- **Remaining by design:**
+  - a name may still be incomplete when both models leave out the same printed range line next to it and the line names
+    no life stage, texture or flavour ("Indoor Adult" without "Hairball Control"; 2.3.0 keeps these too);
+  - a name is lost when the readings disagree on the brand ("Purina Fancy Feast" / "Fancy Feast").
+
+Tests: 523 unit, 111 emulator (both type checks). Each rule has a test that fails without it: mutation checks on each
+round's code, every one caught except three that a second layer masks:
+- spaces in a name are collapsed in two places;
+- a claim line is skipped before the variant check;
+- the kind-words condition on stripping a type.

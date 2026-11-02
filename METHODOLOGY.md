@@ -290,41 +290,46 @@ Nothing is marked as reviewed by a person unless it was.
   brand. A species also needs no transcription to name another species ("FOR CATS & DOGS" is not "for cats"), and is not
   taken from a line with an unreadable mark (the other species may be the word it hides) or from a species named only to
   rule it out ("NOT FOR CATS"); compound and other-language words count (Katzenfutter, Hundefutter, Kattenvoer, kattmat,
-  "dla kotów").
+  "dla kotów", kissanruoka, "pro kočky", macskaeledel, pisici, kedi and their dog words).
 - A product name is kept only when both readings give the same words, connecting words ("&", "and", "with", "et", "und",
-  "mit", …) and kind words ("cat", "food", "treats", "premium", "recipe", …) aside, in any order. The brand both agree on
-  in front of it, the package size after it, and a type line of kind words after it are left out, unless the type line is
-  printed as part of the name ("SALMON & AVOCADO RECIPE TREATS"). So one reading may add the brand or the type line, or
-  give two printed lines the other way round: "WHOLE PAWS GRAIN FREE SALMON PÂTÉ LOAF RECIPE" / "GRAIN FREE SALMON PÂTÉ
-  LOAF RECIPE" (the owner's photo of test A, 2026-11-02, where one of three readings of the same photo gave the name with
-  the brand). Each reading's name must be printed in its own transcription:
+  "mit", …) and kind words ("cat", "food", "treats", "premium", "recipe", …) aside, in any order. Left out of it: the
+  brand both agree on in front of it, or brand words both readings' brands share ("BLUE" with the brands "BLUE" and "Blue
+  Buffalo"); the package size after it; and a type line of kind words in front of it or after it, when that line is printed
+  on its own ("PREMIUM CAT FOOD", but not the "TREATS" of "SALMON & AVOCADO RECIPE TREATS"). So one reading may add the
+  brand or the type line, or give two printed lines the other way round: "WHOLE PAWS GRAIN FREE SALMON PÂTÉ LOAF RECIPE" /
+  "GRAIN FREE SALMON PÂTÉ LOAF RECIPE" (the owner's photo of test A, 2026-11-02, where one of three readings of the same
+  photo gave the name with the brand). The name must be printed:
   - as printed lines, or parts of lines beside only the brand or the size, in any order;
-  - every line between them only kind words, the brand, the size or who makes it ("PREMIUM CAT FOOD", "BY WHOLE FOODS
-    MARKET");
+  - with nothing between its lines but kind words with a format, the brand, the size, who makes it, a claim about what is
+    in it or the default adult stage ("GOURMET WET CAT FOOD", "BY WHOLE FOODS MARKET", "WITH REAL TURKEY", "ADULT",
+    "1+");
   - never across an unreadable mark;
-  - never next to a printed life stage it leaves out (KITTEN, JUNIOR, SENIOR, 7+): the kitten food is not named as the
-    adult one.
-  The name as a reading gave it, brand or type line included, must be printed in one of the transcriptions, so nothing
-  printed between the brand and the name is left out. A name that differs in any other word is not kept (a flavour, a
-  variant, a life stage, a pack: "Flaked Tuna & Mackerel Feast" is not "Flaked Tuna Feast"), nor one with an unreadable
-  mark, nor one of generic words only ("Cat Food", "Croquettes pour chat adulte"). Of two names kept, the one printed word
-  for word is shown.
+  - never next to a short printed line of a life stage, a texture or a flavour it leaves out ("KITTEN", "SENIOR 7+",
+    "HEALTHY KITTEN", "IN JELLY", "GRAVY LOVERS", "TURKEY RECIPE"): the kitten food is not named as the adult one, nor
+    one flavour of a variety pack as the pack.
+  Every transcription that has all of a name's words must print it that way, and at least one must; one that left out a
+  word of it says neither (a model may not transcribe a badge it put in the name). The name as each reading gave it,
+  brand or type line included, must be printed too, so nothing printed between the brand and the name is left out. A name
+  that differs in any other word is not kept (a flavour, a variant, a life stage, a pack: "Flaked Tuna & Mackerel Feast"
+  is not "Flaked Tuna Feast"), nor one with an unreadable mark, nor one of generic words only ("Cat Food", "Croquettes
+  pour chat adulte"), nor an age band ("1+"), nor only the rest of the brand's own line ("ONE" of "PURINA ONE"). Of two
+  names kept, the one printed word for word is shown.
 - A front's brand, species and product type count as read, with or without the name, when both readings call the photo
   legible and see the front: on a photo taken of the front, any of them; on a photo taken of a panel, only when no panel
   a back photo is taken for is in view (a logo band above an ingredient list does not make a front); on a general photo,
   also with the front clear in both readings, a back-panel sliver neither could read, and an agreed species or type.
-- A photo that gives nothing says what to retake, in at most 86 characters (the app shows two lines). For a photo of a
-  panel: that panel when a reading saw it but could not read it in full ("Couldn’t read all of the ingredient list.
-  Retake it straight on, in good light."), or that it was not found. For a front: "Couldn’t read the name or who it is
-  for. Retake the front straight on, in good light." No cause is guessed, and a feeding guide is not asked for. The trace
-  gives each reading's panels and name.
+- A photo that gives nothing says what to retake in two lines of the app (about 43 characters a line, words wrapped). For
+  a photo of a panel: that panel when a reading saw it but could not read it in full ("Couldn’t read all of the
+  ingredient list. Retake it straight on, in good light."), its heading when both saw it clearly but it could not be read
+  ("Couldn’t read the ingredient list. Include its “Ingredients” heading."), or that it was not found. For a front:
+  "Couldn’t read the name or who it is for. Retake the front in good light." No cause is guessed, and a feeding guide is
+  not asked for. The trace gives each reading's panels and name.
 - A photo read, but not for what it was taken for, says so in its note instead of how far it is matched ("The ingredient
   list wasn’t read from this photo. Retake it straight on, with the whole list in the frame."; for a front: "Who it is
   for wasn’t read from this photo…"). A database label image counts as read for its panel only when that panel was read.
-- The first 2.4.0 rules (commit 9614b22) and the strict rules that replaced them (7accb55) were never deployed: two
-  reviews found names of sibling products kept (a flavour, life stage or range left out), species guessed from blank
-  fronts, back photos called fronts, correct names lost when a model transcribes lines in another order, compound species
-  words not read, and reasons too long for the app; the rules above replaced them.
+- Three versions of these rules were never deployed: `9614b22`, `7accb55` and `3bd9ca0`. Three reviews found harmful or
+  lost outcomes in them, and the rules above replaced them. Measured on the reviewers' models of how the two models
+  transcribe five real fronts, the rules keep no wrong name, brand or species, and no sibling's name.
 - Purrbi takes the values from the transcription with its own fixed rules (`domain/analysisText.ts` for the analysis):
   - the ingredient list only after a printed "Ingredients"/"Composition" heading;
   - the adequacy statement as printed, also from a line a partly legible panel shows in full (no unreadable mark), without the composition that may follow it on the same line ("Aliment complet pour chat adulte. Composition : …");
