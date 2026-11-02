@@ -657,3 +657,31 @@ round's code, every one caught except three that a second layer masks:
 - spaces in a name are collapsed in two places;
 - a claim line is skipped before the variant check;
 - the kind-words condition on stripping a type.
+
+**Live, with the owner's photos, through the real app** (release web build, the photo chosen from the gallery), label
+reader 2.4.0:
+
+On backend `73c808e`:
+
+| Run | Account / scan | Photo → request | Outcome |
+|---|---|---|---|
+| a3 | `demo` (no earlier reading of A) / trace `5f8c4f92-039` | front → front | Read: name "GRAIN FREE SALMON PÂTÉ LOAF RECIPE", brand WHOLE PAWS, for cats, type PREMIUM CAT FOOD. Note: "Read twice, with the same result. Nothing public to compare it with yet." |
+| a3 | same scan | barcode side → ingredient list | Unreadable: "Couldn’t read all of the ingredient list. Retake it straight on, in good light." (gpt-5-mini saw the list and a feeding guide, not clear; gpt-4.1-mini only the barcode and side text) |
+| a4 | `accept` / `a3df1226-622` | front → ingredient list | Read: brand and species, no name. Note: "The ingredient list wasn’t read from this photo. Retake it straight on, with the whole list in the frame." |
+| a5 | `demo` / `237d6876-395` | front → ingredient list | Read: name, brand, species, type; the same note |
+
+On backend `41674de`, which traces identity not kept on a read photo:
+
+| Run | Account / scan | Photo → request | Outcome |
+|---|---|---|---|
+| a6 | `accept` / `94316fbc-d0c` | front → ingredient list | Read: brand and species; not kept: name "GRAIN FREE SALMON PÂTÉ LOAF RECIPE" / "SALMON PÂTÉ LOAF RECIPE", type "PREMIUM CAT FOOD" / "GRAIN FREE" |
+| a7 | `demo` / `c651bcf0-90e` | front → ingredient list | The same as a6 |
+
+After these photos, the scan shows the name, brand WHOLE PAWS and "Cats". It asks only for the ingredient list and the
+nutrition panel, which no reachable source has for A, and stays unscored until they are read.
+
+**The name is missed when one model gives "GRAIN FREE" as its product type and leaves it out of its name.** All five runs
+read the front for brand and species; the name was read in 2 of 5. The trace from `41674de` shows why. The next version
+keeps the fuller name when one reading's type completes its name to the other's, and never the shorter one, so the
+kitten food is not named as the adult one.
+

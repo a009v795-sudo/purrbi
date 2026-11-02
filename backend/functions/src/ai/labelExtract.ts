@@ -545,7 +545,18 @@ function agreedName(a: Reading, b: Reading, brand: string | null, type: string |
     if (noBrand === n && ownBrand(n)) noBrand = coreName(n, ownBrand(n), null);
     return typeLine ? coreName(noBrand, null, type) : noBrand;
   };
-  const [ca, cb] = [core(na), core(nb)];
+  let [ca, cb] = [core(na), core(nb)];
+  // One reading may give a line of the name as its product type ("GRAIN FREE" as the type and "SALMON PÂTÉ LOAF RECIPE"
+  // as the name, the other "GRAIN FREE SALMON PÂTÉ LOAF RECIPE": the owner's photo of test A, live, 2026-11-02): the
+  // fuller name, every word of which both readings read. Never the shorter one.
+  const keyOf = (c: string) => distinct(c).sort().join(' ');
+  const withType = (c: string, t: string | null) => !!t && !UNSURE.test(t) && keyOf(`${t} ${c}`) !== keyOf(c);
+  // The name as each reading gave it, brand included, and with its type when that completes it.
+  let [fa, fb] = [na, nb];
+  if (keyOf(ca) !== keyOf(cb)) {
+    if (withType(cb, b.productTypeClaim) && keyOf(`${b.productTypeClaim} ${cb}`) === keyOf(ca)) [cb, fb] = [ca, `${b.productTypeClaim} ${nb}`];
+    else if (withType(ca, a.productTypeClaim) && keyOf(`${a.productTypeClaim} ${ca}`) === keyOf(cb)) [ca, fa] = [cb, `${a.productTypeClaim} ${na}`];
+  }
   // The same words, in any order: two printed lines given either way round ("Savory Salmon Feast Classic Pâté"); one of
   // them a word that says which product it is, not a number ("1+").
   const key = distinct(ca).sort().join(' ');
@@ -566,7 +577,7 @@ function agreedName(a: Reading, b: Reading, brand: string | null, type: string |
     const judges = [a, b].filter(shows);
     return judges.length > 0 && judges.every((r) => namePrinted(n, r, brand));
   };
-  if (!confirmed(ca) || !confirmed(cb) || (na !== ca && !confirmed(na)) || (nb !== cb && !confirmed(nb))) return null;
+  if (!confirmed(ca) || !confirmed(cb) || (fa !== ca && !confirmed(fa)) || (fb !== cb && !confirmed(fb))) return null;
   // Shown as printed: a name printed word for word first, the fuller of two such ("… LOAF RECIPE" over "… LOAF"), else the
   // one with fewer kind words added ("… RECIPE" over "… RECIPE TREATS" taken from a "CAT TREATS" line); then the one not
   // in capitals, which only reads better.

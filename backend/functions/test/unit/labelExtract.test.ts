@@ -109,6 +109,18 @@ describe('grounded label reading', () => {
     // "&", "and" and "with" printed either way are the same name.
     const tuna: RawPanel = { kind: 'front', legibility: 'clear', heading: null, text: 'TUNA & SALMON FEAST\nCAT FOOD' };
     expect(pair([tuna], 'Tuna & Salmon Feast', 'Tuna and Salmon Feast', { brand: null, species_claim: 'cat', product_type_claim: null }).productName).toBe('Tuna & Salmon Feast');
+    // One reading gives the GRAIN FREE line as its product type and leaves it out of the name (live, three of five runs
+    // of the owner's photo): the fuller name, both readings having read every word of it; never the shorter one.
+    const gfType = combineReadings(read([WP_FRONT], { ...WP, product_name: 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE' }), read([WP_FRONT], { ...WP, product_type_claim: 'GRAIN FREE', product_name: 'SALMON PÂTÉ LOAF RECIPE' }, 'model-b'), GTIN, 'front');
+    expect(gfType).toMatchObject({ productName: 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE', brand: 'WHOLE PAWS', species: 'cat', productTypeClaim: null });
+    expect(combineReadings(read([WP_FRONT], { ...WP, product_type_claim: 'GRAIN FREE', product_name: 'SALMON PÂTÉ LOAF RECIPE' }), read([WP_FRONT], { ...WP, product_name: 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE' }, 'model-b'), GTIN).productName).toBe('GRAIN FREE SALMON PÂTÉ LOAF RECIPE');
+    // A type that is not printed with the name does not complete it ("PREMIUM CAT FOOD" is not part of "GRAIN FREE …").
+    expect(pair([WP_FRONT], 'SALMON PÂTÉ LOAF RECIPE', 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE').productName).toBeNull();
+    // The life stage given as one reading's type completes the kitten name, never shortens it to the adult one.
+    const kittenFront: RawPanel = { kind: 'front', legibility: 'clear', heading: 'FANCY FEAST', text: 'KITTEN\nCLASSIC PÂTÉ\nCHICKEN FEAST' };
+    const ff = { brand: 'Fancy Feast', species_claim: 'cat' as const };
+    expect(combineReadings(read([kittenFront], { ...ff, product_type_claim: 'Kitten', product_name: 'Classic Pâté Chicken Feast' }), read([kittenFront], { ...ff, product_type_claim: null, product_name: 'Kitten Classic Pâté Chicken Feast' }, 'model-b'), GTIN).productName).toBe('Kitten Classic Pâté Chicken Feast');
+    expect(combineReadings(read([kittenFront], { ...ff, product_type_claim: null, product_name: 'Kitten Classic Pâté Chicken Feast' }), read([kittenFront], { ...ff, product_type_claim: 'Kitten', product_name: 'Classic Pâté Chicken Feast' }, 'model-b'), GTIN).productName).toBe('Kitten Classic Pâté Chicken Feast');
     // A name both readings gave but not kept is traced as each gave it (not in `rejected`, which says what to retake).
     expect(pair([WP_FRONT], 'SALMON', 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE')).toMatchObject({ rejected: [], notKept: ['name: "SALMON" / "GRAIN FREE SALMON PÂTÉ LOAF RECIPE"'] });
     expect(pair([WP_FRONT], 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE', 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE').notKept).toBeUndefined();
