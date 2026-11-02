@@ -797,3 +797,47 @@ Provider time-outs and malformed answers are covered by unit tests only, not liv
 - **App id:** `com.mycompany.purrbiv2development`.
 - **Signed with:** the development key (not for store upload).
 - **Install:** not installed here (no device).
+
+### Reader 2.5.0 and the misread-digit rule, deployed (backend `d591775`, then `c32144c`)
+
+**Review.** An adversarial review of the first draft (four reviewers) found 19 issues. All are fixed with a test each
+(unit 541/541, emulator 116/116), among them:
+- a third reading by one model could confirm its own model's reading;
+- sentence joining pulled feeding-guide lines and front callouts into statements;
+- a misread-digit photo could replace a partial saved analysis;
+- "one digit apart" accepted a tens digit.
+
+**Deploys.**
+- `d591775`: run 41514654394.
+- `c32144c`: run 41516705996.
+- Both verified: functions active, rules equal to the repository, 5 of 5 indexes READY.
+
+**Live (release web build of `43020cb`):**
+
+| Test | Account / scan / trace | Result |
+|---|---|---|
+| C, barcode only, after the deploy | `accept` / `cW5xQLEW1Ock7ja343Rr` / `ad923c87-592` | **Complete, 91/100 Strong**, treat for cats. Your back-of-bag photo, saved this morning as disputed, was compared again under the new rule and used: <br>- ingredients: SALMON, VEGETABLE GLYCERINE, PEA FLOUR, AVOCADO, PEA PROTEIN, ROSEMARY EXTRACT; <br>- analysis: the saved 42/12/3/26% (the photo's misread 28% is not used, and the app says so); <br>- calories: 3,300 kcal/kg and 1.7 kcal per treat. <br>No AI call was needed. Explanations and the written verdict fell back to the rule-based text (see below). |
+| B, barcode only | `accept` / `vPw04EJts0hbp4smlb2L` / `b7e51a38-7f8` | Complete, 75/100 Good, unchanged |
+| A, barcode only | `accept` / `P3taIZLzNBPYiDUKp232` / `89f4621a-310` | needs_photos. Ingredients, analysis (5 rows) and calories (1,181 kcal/kg, 184 kcal/can) come from the earlier can-side reading. Only the AAFCO statement is missing, so it asks for the nutrition panel. |
+| A, can-side photo on reader 2.5.0 | `demo` / `7zRNr5hKDcupleS1GEs9` / `1b07552f-d27`, then `wbIgWJXXQWGP0QUVn6g1` / `74c821b0-21d` | **Not run to a reading.** Every OpenAI call answered HTTP 429 "You have no credits remaining" (from about 20:00 UTC). On `d591775` the photos said "The photo couldn’t be processed. Try again or retake it."; on `c32144c` they say "Label reading isn’t available right now. Try this photo again later." That shows the error path, not a reading. |
+
+**AI unavailable.** From about 20:00 UTC the OpenAI organization has no credits left. Until credits are added:
+- label photos are not read;
+- web research does not run, and is retried later;
+- explanations and written verdicts fall back to the rule-based text.
+
+Database lookups, saved records and owners' saved readings still work, as the C and B scans show.
+
+### Regressions (barcode only, release web build of `43020cb`, backend `9d5a0c5`, account `demo`)
+
+| Barcode | Scan / trace | Result |
+|---|---|---|
+| 076344060048 | `81SNwLApFcOCOfq6uX5F` / `13a4c48c-27c` | Complete, 97/100 Strong (Wellness Flaked Skipjack Tuna & Wild Salmon Entrée in Broth, for cats) |
+| 850063633017 | `fDDghvyszCDYQb65fK1x` / `2822d40d-60d` | needs_photos (nutrition): the manufacturer's page matched to the barcode prints no analysis |
+| 099482480882 | `FwdNlTMYDuxpF7MyW1qv` / `34d92055-8d7` | needs_photos (front): "not yet confirmed for cats or dogs". Open Food Facts files it as "food"; reading its front image failed ("fetch failed"), retried after 6 h. |
+| 099482080754 | `TqnfeOJBGKKiXQGOIijm` / `0160fe40-b59` | needs_photos (front, ingredients). The barcode database is limiting requests until 2026-11-03 10:19 UTC, and no page found shows the barcode. Kept apart from 099482480882: no name or ingredients were borrowed. |
+
+**Still open:**
+- **A's score** needs the AAFCO statement from a photo read by reader 2.5.0, which needs OpenAI credits.
+- **Physical device:** the camera, a denied permission and a cancelled scan were not run.
+- **FlutterFlow Issues panel:** four warnings were not visible in the screenshots.
