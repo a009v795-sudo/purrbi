@@ -298,9 +298,14 @@ Nothing is marked as reviewed by a person unless it was.
   on its own ("PREMIUM CAT FOOD", but not the "TREATS" of "SALMON & AVOCADO RECIPE TREATS"). So one reading may add the
   brand or the type line, or give two printed lines the other way round: "WHOLE PAWS GRAIN FREE SALMON PÂTÉ LOAF RECIPE" /
   "GRAIN FREE SALMON PÂTÉ LOAF RECIPE" (the owner's photo of test A, 2026-11-02, where one of three readings of the same
-  photo gave the name with the brand). A reading may also give a line of the name as its product type: with "GRAIN FREE"
-  as its type and "SALMON PÂTÉ LOAF RECIPE" as its name, against the other's "GRAIN FREE SALMON PÂTÉ LOAF RECIPE" (three of
-  five live readings of the same photo), the fuller name is kept, and never the shorter one. The name must be printed:
+  photo gave the name with the brand). When one reading's name leaves out words of the other's, the fuller name is kept,
+  and never the shorter one, which is a sibling's name:
+  - when it adds no flavour the shorter leaves out (two flavours are two products, or a pack). Examples: "SALMON PÂTÉ LOAF
+    RECIPE" for "GRAIN FREE SALMON PÂTÉ LOAF RECIPE" (live, test A); "Classic Pâté Chicken Feast" for "Kitten Classic Pâté
+    Chicken Feast";
+  - or when the shorter reading gave the missing words as its product type. Example: "GRAIN FREE" as its type and "SALMON
+    PÂTÉ LOAF RECIPE" as its name (three of five live readings of the same photo).
+  The name must be printed:
   - as printed lines, or parts of lines beside only the brand or the size, in any order;
   - with nothing between its lines but kind words with a format, the brand, the size, who makes it, a claim about what is
     in it or the default adult stage ("GOURMET WET CAT FOOD", "BY WHOLE FOODS MARKET", "WITH REAL TURKEY", "ADULT",

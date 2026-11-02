@@ -349,7 +349,7 @@ const SIZE_WORD = /^(?:\d+|net|wt|weight|x|poids|netto|peso|neto|inhalt|contenu)
 const sizeOnly = (ws: string[]) => ws.some((w) => UNIT.test(w)) && ws.every((w) => UNIT.test(w) || SIZE_WORD.test(w));
 // A life stage that is not the default adult one: a name printed beside one is another product without it
 // ("KITTEN" above "CLASSIC PÂTÉ CHICKEN FEAST" is the kitten food, not the adult one).
-const LIFE_STAGE = new Set(['kitten', 'kittens', 'puppy', 'puppies', 'junior', 'senior', 'seniors', 'mature', 'ageing', 'aging', 'chaton', 'chatons', 'chiot', 'chiots', 'katzchen', 'welpe', 'welpen', 'cachorro', 'cachorros', 'gatito', 'gatitos', 'gattino', 'gattini', 'cucciolo', 'cuccioli', 'filhote', 'filhotes', 'gatinho', 'gatinhos', 'kitten', 'kattunge', 'kattungar', 'killing', 'killinger', 'valp', 'valpar', 'hvalp', 'hvalpe']);
+const LIFE_STAGE = new Set(['kitten', 'kittens', 'puppy', 'puppies', 'junior', 'senior', 'seniors', 'mature', 'chaton', 'chatons', 'chiot', 'chiots', 'katzchen', 'welpe', 'welpen', 'cachorro', 'cachorros', 'gatito', 'gatitos', 'gattino', 'gattini', 'cucciolo', 'cuccioli', 'filhote', 'filhotes', 'gatinho', 'gatinhos', 'kitten', 'kattunge', 'kattungar', 'killing', 'killinger', 'valp', 'valpar', 'hvalp', 'hvalpe']);
 // An age band from 7 up ("7+", "11+", "SENIOR 7+", "AGE 11+"; "1+" is the adult one), or an age in months ("2-12 MONTHS").
 const SENIOR_AGE = /(?:^|[^\d.,])(?:[7-9]|1\d)\s*\+/;
 const IN_MONTHS = /\b\d+\s*(?:[-–]\s*\d+\s*)?(?:months?|mos?|m|mois|monate|meses|mesi|maanden|maander)\b/i;
@@ -556,6 +556,23 @@ function agreedName(a: Reading, b: Reading, brand: string | null, type: string |
   if (keyOf(ca) !== keyOf(cb)) {
     if (withType(cb, b.productTypeClaim) && keyOf(`${b.productTypeClaim} ${cb}`) === keyOf(ca)) [cb, fb] = [ca, `${b.productTypeClaim} ${nb}`];
     else if (withType(ca, a.productTypeClaim) && keyOf(`${a.productTypeClaim} ${ca}`) === keyOf(cb)) [ca, fa] = [cb, `${a.productTypeClaim} ${na}`];
+  }
+  // One reading's name may leave out a printed line of it ("SALMON PÂTÉ LOAF RECIPE" for "GRAIN FREE SALMON PÂTÉ LOAF
+  // RECIPE": live, test A) or a life stage ("Classic Pâté Chicken Feast" for "Kitten Classic Pâté Chicken Feast"): the
+  // fuller name, every word of the shorter in it, when what it adds names no flavour the shorter leaves out (two flavours
+  // are two products, or a pack). It must pass every printed check below. Never the shorter: that is a sibling's name.
+  if (keyOf(ca) !== keyOf(cb)) {
+    const adds = (long: string, short: string) => {
+      const left = distinct(long);
+      for (const w of distinct(short)) {
+        const i = left.indexOf(w);
+        if (i < 0) return null;
+        left.splice(i, 1);
+      }
+      return left.length && !left.some((w) => FLAVOUR_WORDS.has(w)) ? left : null;
+    };
+    if (adds(ca, cb)) [cb, fb] = [ca, ca];
+    else if (adds(cb, ca)) [ca, fa] = [cb, cb];
   }
   // The same words, in any order: two printed lines given either way round ("Savory Salmon Feast Classic Pâté"); one of
   // them a word that says which product it is, not a number ("1+").

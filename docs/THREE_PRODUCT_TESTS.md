@@ -680,8 +680,19 @@ On backend `41674de`, which traces identity not kept on a read photo:
 After these photos, the scan shows the name, brand WHOLE PAWS and "Cats". It asks only for the ingredient list and the
 nutrition panel, which no reachable source has for A, and stays unscored until they are read.
 
-**The name is missed when one model gives "GRAIN FREE" as its product type and leaves it out of its name.** All five runs
-read the front for brand and species; the name was read in 2 of 5. The trace from `41674de` shows why. The next version
-keeps the fuller name when one reading's type completes its name to the other's, and never the shorter one, so the
-kitten food is not named as the adult one.
+**The name is missed when one model leaves "GRAIN FREE" out of its name**, giving it as its product type or not at all.
+All five runs read the front for brand and species; the name was read in 2 of 5. The trace from `41674de` shows why.
+
+On backend `413aa00`, which keeps the fuller name when one reading's type completes its name:
+
+| Run | Account / scan | Outcome |
+|---|---|---|
+| a8 | `accept` / `43b2dc36-d47` | Read: name, brand, species, type |
+| a9 | `demo` / `87018a23-5a7` | Read: name (completed by the other reading's type), brand, species; type not kept |
+| a10 | `accept` / `6f2e5cc9-a53` | Read: brand, species, type; not kept: name "GRAIN FREE SALMON PÂTÉ LOAF RECIPE" / "SALMON PÂTÉ LOAF RECIPE" (the second reading left GRAIN FREE out and gave "PREMIUM CAT FOOD" as its type) |
+
+The next version keeps the fuller name in a10's case too. Every word of the shorter name is in it, and it adds no flavour.
+It never keeps the shorter name, so the kitten food is never named as the adult one. On the reviewers' fuzz models the
+name is read in 95% of test A pairs (2.3.0: 53–59%), 90% of test C, 77% of Fancy Feast, 63% of Purina ONE and 29% of
+BLUE. No wrong name, brand or species is kept, and no sibling name.
 
