@@ -7,13 +7,16 @@ import { analysisRows, joinWrappedValues } from '../../src/domain/analysisText';
 import { classifyScope } from '../../src/domain/scope';
 import { assessGeneral } from '../../src/domain/score';
 import type { GuaranteedAnalysisEntry, ProductFacts } from '../../src/domain/types';
-import { fillMissing, hasUsableMoisture, missingInfo, requestsForWithheldScore } from '../../src/pipeline/facts';
+import { coreDifferences, fillMissing, missingInfo, MOISTURE_REQUEST, moistureStatus, rowsFromOwnReading, withScoreNeeds } from '../../src/pipeline/facts';
 import { facts, SRC } from '../helpers/fixtures';
 
 const rows = (text: string) => analysisRows(text, false).map((r) => `${r.nutrient}:${r.value}${r.unit}:${r.qualifier}`);
 const ga = (pairs: [string, number][]): GuaranteedAnalysisEntry[] =>
   pairs.map(([nutrient, value]) => ({ nutrient: nutrient as GuaranteedAnalysisEntry['nutrient'], label: nutrient, qualifier: nutrient === 'crude_fiber' || nutrient === 'moisture' ? 'max' : 'min', value, unit: '%' }));
 const scopeOf = (f: ProductFacts) => classifyScope({ origin: 'opff', categoriesTags: f.classificationSignals.map((s) => s.text), texts: [f.productName?.value ?? ''], adequacy: f.adequacy?.value });
+/** What the guard adds to, or rewords in, the photo requests. */
+const byGuard = (a: Parameters<typeof withScoreNeeds>[0], scope: Parameters<typeof withScoreNeeds>[1], req: ReturnType<typeof missingInfo>) =>
+  withScoreNeeds(a, scope, req).filter((r) => !req.some((x) => x.purpose === r.purpose && x.title === r.title && x.reason === r.reason));
 
 describe('an analysis value wrapped onto the next printed line', () => {
   it('is read with its row (test A’s can)', () => {
@@ -27,33 +30,188 @@ describe('an analysis value wrapped onto the next printed line', () => {
     expect(joinWrappedValues('Made with chicken\n100% natural')).toBe('Made with chicken\n100% natural');
     expect(joinWrappedValues('Calories\n3,500 kcal/kg')).toBe('Calories\n3,500 kcal/kg'); // not a value this parser reads as a row ("3,500")
   });
+  // Review of 2.5.1: each layout below gave one row's value to another nutrient, or lost rows already read, on the first
+  // 2.5.1 draft. Each now reads what the reader read before 2.5.1.
+  it('joins nothing where names and values are printed apart, which value is whose being unclear', () => {
+    const CORE = ['crude_protein:10%:min', 'crude_fat:6%:min', 'crude_fiber:1%:max'];
+    // Names stacked above values: the first value would go to the last name (taurine's 0.05% as moisture).
+    expect(rows('Crude Protein (min) 10%\nCrude Fat (min) 6%\nCrude Fiber (max) 1%\nTaurine (min)\nMoisture (max)\n0.05%\n78%')).toEqual(CORE);
+    expect(rows('Crude Protein (min)\nCrude Fat (min)\nCrude Fiber (max)\nMoisture (max)\n10%\n6%\n1%\n78%')).toEqual([]);
+    expect(rows('Crude Protein\nCrude Fat\nCrude Fiber\nMoisture\n10%\n6%\n1%\n78%')).toEqual([]);
+    expect(rows('Analytical constituents:\nProtein\nFat content\nMoisture\n10%\n5%\n80%')).toEqual([]);
+    expect(rows('Moisture / Humidité\nProtein / Protéine\n80%\n10%')).toEqual([]);
+    // A stacked French block after the English rows adds no second moisture value, so the English one is kept.
+    const twoLanguages = 'Crude Protein (min) 10%\nCrude Fat (min) 6%\nCrude Fiber (max) 1%\nMoisture (max) 78%\nProtéines brutes (min.)\nMatières grasses brutes (min.)\nFibres brutes (max.)\nHumidité (max.)\n10 %\n6 %\n1 %\n78 %';
+    expect(rows(twoLanguages)).toEqual([...CORE, 'moisture:78%:max']);
+    // Values printed above their names: each value would go to the name above it, one row off.
+    expect(rows('36%\nCrude Protein (min)\n16%\nCrude Fat (min)\n3%\nCrude Fiber (max)\n10%\nMoisture (max)')).toEqual([]);
+    expect(rows('Guaranteed Analysis\n32%\nCrude Protein (min)\n18%\nCrude Fat (min)')).toEqual([]);
+    // A value line that is ambiguous on its own leaves the line above as it was read.
+    const LINE = 'Crude Protein (min) 26%, Crude Fat (min) 15%, Crude Fiber (max) 4%, Moisture (max) 10%, Calcium';
+    const READ = ['crude_protein:26%:min', 'crude_fat:15%:min', 'crude_fiber:4%:max', 'moisture:10%:max'];
+    expect(rows(`${LINE} (min)\n1.2%, (max) 1.7%, Phosphorus (min) 1.0%`)).toEqual(READ);
+    expect(rows(`${LINE}\n1.2% min, 1.7% max`)).toEqual(READ);
+    expect(rows(`${LINE}\n1.0% - 1.5%`)).toEqual(READ);
+  });
+  // Second review of 2.5.1: a row list that wraps more than once, other separators, names that are no nutrient of
+  // Purrbi's stacked above values, and a line above that is ambiguous on its own.
+  it('reads a row list wrapped twice or after a line of its own, in any separator, and in French', () => {
+    const FOUR = ['crude_protein:10%:min', 'crude_fat:6%:min', 'crude_fiber:1%:max', 'moisture:78%:max'];
+    expect(rows('Crude Protein (Min.) 10%, Crude Fat (Min.)\n6%, Crude Fiber (Max.) 1%, Moisture (Max.)\n78%')).toEqual(FOUR);
+    expect(rows('Crude Protein (Min.) 10%, Crude Fat (Min.)\n6%, Crude Fiber (Max.) 1%, Moisture (Max.) 78%, Taurine (Min.)\n0.05%')).toEqual([...FOUR, 'taurine:0.05%:min']);
+    expect(rows('GUARANTEED ANALYSIS: Crude Protein (Min.)\n10%, Crude Fat (Min.) 6%, Crude Fiber (Max.) 1%, Moisture (Max.)\n78%')).toEqual(FOUR);
+    expect(rows('Crude Protein (Min.) 10% • Crude Fat (Min.) 6% • Crude Fiber (Max.) 1% • Moisture (Max.)\n78% • Taurine (Min.) 0.05%')).toEqual([...FOUR, 'taurine:0.05%:min']);
+    expect(rows('Protéines brutes (min.) 10 %, Matières grasses brutes (min.)\n6 %, Cellulose brute (max.) 1 %, Humidité (max.)\n78 %')).toEqual(FOUR);
+    // An ingredient list above lists several things: not a name stacked over a value.
+    const can = 'Ingredients: Chicken, Water, Liver, Natural Flavor, Guar Gum, Taurine, d-Calcium Pantothenate.\nGuaranteed Analysis: Crude Protein (Min.) 10%, Crude Fat (Min.) 6%, Crude Fiber (Max.) 1%, Moisture (Max.)\n78%, Taurine (Min.) 0.05%';
+    expect(rows(can)).toEqual([...FOUR, 'taurine:0.05%:min']);
+    expect(rows('Ingredients: Salmon, Chicken, Peas, Taurine\nGUARANTEED ANALYSIS: Crude Protein (Min.) 10%, Crude Fat (Min.) 6%, Crude Fiber (Max.) 1%, Moisture (Max.)\n78%, Taurine (Min.) 0.05%')).toEqual([...FOUR, 'taurine:0.05%:min']);
+  });
+  it('never gives a value to the wrong row when the stacked names are not Purrbi’s nutrients, or a line above is ambiguous', () => {
+    expect(rows('Guaranteed Analysis\nCrude Fat (min)\nVitamin E (min)\nMoisture (max)\n6%\n200 IU/lb\n78%')).toEqual([]);
+    expect(rows('Guaranteed Analysis\nOmega-3 Fatty Acids* (min)\nTotal Microorganisms* (min)\nCrude Protein (min)\n0.2%\n100,000,000 CFU/lb\n26%').filter((r) => r.startsWith('crude_protein'))).toEqual([]);
+    // The rows of the value line are read as before; the ambiguous line above stays unread.
+    expect(rows('Crude Protein (min) 10%, Crude Fat (min) 6%, Crude Fiber (max) 1%, Calcium (min) 0.2% (max) 0.4%, Moisture (max)\n78%, Ash (max) 3%, Taurine (min) 0.05%')).toEqual(['ash:3%:max', 'taurine:0.05%:min']);
+  });
+  it('generated: an analysis printed as one row list and wrapped at any width loses no row and gives none to another nutrient', () => {
+    const ROWS: [string, string, number, string][] = [
+      ['Crude Protein (Min.)', 'crude_protein', 10, 'min'], ['Crude Fat (Min.)', 'crude_fat', 6, 'min'], ['Crude Fiber (Max.)', 'crude_fiber', 1.5, 'max'],
+      ['Moisture (Max.)', 'moisture', 78, 'max'], ['Ash (Max.)', 'ash', 2.5, 'max'], ['Taurine (Min.)', 'taurine', 0.05, 'min'], ['Calcium (Min.)', 'calcium', 0.3, 'min'],
+    ];
+    let seed = 7;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+    let lost = 0;
+    let wrong = 0;
+    for (let n = 0; n < 2000; n++) {
+      const picked = ROWS.filter((_, i) => i < 4 || rnd() < 0.5);
+      const sep = [', ', ', ', ' • ', '; '][Math.floor(rnd() * 4)];
+      const words = `GUARANTEED ANALYSIS: ${picked.map(([name, , v]) => `${name} ${v}%`).join(sep)}`.split(' ');
+      const width = 18 + Math.floor(rnd() * 50);
+      const lines: string[] = [''];
+      for (const w of words) lines[lines.length - 1] && lines[lines.length - 1].length + 1 + w.length > width ? lines.push(w) : (lines[lines.length - 1] = lines[lines.length - 1] ? `${lines[lines.length - 1]} ${w}` : w);
+      const got = analysisRows(lines.join('\n'), false);
+      for (const [, key, v, q] of picked) {
+        const r = got.find((x) => x.nutrient === key);
+        if (!r) lost++;
+        else if (r.value !== v || r.qualifier !== q) wrong++;
+      }
+      wrong += got.filter((x) => !picked.some(([, key]) => key === x.nutrient)).length;
+    }
+    expect(wrong).toBe(0);
+    expect(lost).toBe(0);
+  });
+  it('still reads one name over one value, also after a heading, and a row list wrapped twice', () => {
+    const ALL = ['crude_protein:10%:min', 'crude_fat:6%:min', 'crude_fiber:1%:max', 'moisture:78%:max'];
+    expect(rows('Crude Protein (min)\n10%\nCrude Fat (min)\n6%\nCrude Fiber (max)\n1%\nMoisture (max)\n78%')).toEqual(ALL);
+    expect(rows('Guaranteed Analysis\nCrude Protein (min)\n10%\nCrude Fat (min)\n6%\nCrude Fiber (max)\n1%\nMoisture (max)\n78%')).toEqual(ALL);
+    expect(rows('Crude Protein (Min.) 10%, Crude Fat (Min.)\n6%, Crude Fiber (Max.) 1%, Moisture (Max.)\n78%, Taurine (Min.) 0.05%')).toEqual([...ALL, 'taurine:0.05%:min']);
+  });
 });
 
-describe('a fuller analysis of the same label', () => {
-  const src = { ...SRC, sourceId: 'label:2', sourceType: 'user_label' as const, sourceName: 'Your label photo' };
-  it('replaces one without a usable moisture guarantee when it agrees on protein, fat and fiber', () => {
-    const base = facts({ guaranteedAnalysis: { value: ga([['crude_protein', 10], ['crude_fat', 6], ['crude_fiber', 1]]), source: SRC } });
-    const full = ga([['crude_protein', 10], ['crude_fat', 6], ['crude_fiber', 1], ['moisture', 78], ['taurine', 0.05]]);
-    const merged = fillMissing(base, { guaranteedAnalysis: { value: full, source: src } });
-    expect(merged.filled).toEqual(['guaranteedAnalysis']);
-    expect(hasUsableMoisture(merged.facts.guaranteedAnalysis!.value)).toBe(true);
-    // Not when it disagrees on a core guarantee (another reading, another label), nor when the base already has moisture.
-    const other = ga([['crude_protein', 12], ['crude_fat', 6], ['crude_fiber', 1], ['moisture', 78]]);
-    expect(fillMissing(base, { guaranteedAnalysis: { value: other, source: src } }).filled).toEqual([]);
-    const withMoisture = facts();
-    expect(fillMissing(withMoisture, { guaranteedAnalysis: { value: full, source: src } }).filled).toEqual([]);
+describe('moisture from the owner’s own reading of the same label (this owner’s result only)', () => {
+  const inUse = ga([['crude_protein', 10], ['crude_fat', 6], ['crude_fiber', 1]]);
+  const full = ga([['crude_protein', 10], ['crude_fat', 6], ['crude_fiber', 1], ['moisture', 78], ['taurine', 0.05]]);
+  const added = (inUseRows: GuaranteedAnalysisEntry[] | undefined, readings: GuaranteedAnalysisEntry[][]) => rowsFromOwnReading(inUseRows, readings)?.added.map((r) => `${r.nutrient}:${r.value}:${r.qualifier}`) ?? null;
+  it('adds the moisture guarantee, and the rows the analysis in use lacks, of a reading with the same protein, fat and fiber', () => {
+    expect(added(inUse, [ga([['crude_protein', 10]]), full])).toEqual(['moisture:78:max', 'taurine:0.05:min']);
+    // The rows in use stay as they are: a taurine the reading gives differently is not taken (reviews of 2.5.1).
+    expect(added([...inUse, ...ga([['taurine', 0.1]])], [full])).toEqual(['moisture:78:max']);
+    // A row only the analysis in use has is kept: the reading adds, it never removes.
+    expect(added([...inUse, ...ga([['omega_6', 2]])], [full])).toEqual(['moisture:78:max', 'taurine:0.05:min']);
+    // An unusable moisture row in use gives way to the reading's.
+    expect(added([...inUse, ...ga([['moisture', 99]])], [full])).toEqual(['moisture:78:max', 'taurine:0.05:min']);
+  });
+  it('adds nothing from a reading that differs on protein, fat or fiber or their min/max, has no usable moisture, or when moisture is there', () => {
+    expect(added(inUse, [ga([['crude_protein', 12], ['crude_fat', 6], ['crude_fiber', 1], ['moisture', 78]])])).toBeNull();
+    const otherFat = ga([['crude_protein', 10], ['crude_fat', 5.5], ['crude_fiber', 1], ['moisture', 78]]);
+    expect(added(inUse, [otherFat])).toBeNull();
+    expect(coreDifferences(inUse, otherFat)).toEqual(['crude fat 5.5% vs 6%']);
+    // A min/max the analysis in use states must be the reading's too (a reading that lost "(Max.)" is not the same row).
+    const noMax = full.map((r) => (r.nutrient === 'crude_fiber' ? { ...r, qualifier: 'not_stated' as const } : r));
+    expect(added(inUse, [noMax])).toBeNull();
+    // A min/max the analysis in use does not state may be the reading's.
+    expect(added(inUse.map((r) => ({ ...r, qualifier: 'not_stated' as const })), [full])).toEqual(['moisture:78:max', 'taurine:0.05:min']);
+    expect(added(inUse, [ga([['crude_protein', 10], ['crude_fat', 6], ['crude_fiber', 1], ['moisture', 99]])])).toBeNull(); // implausible
+    expect(added(inUse, [inUse])).toBeNull(); // no moisture to add
+    expect(added(full, [full])).toBeNull(); // moisture already there
+    expect(added(ga([['crude_protein', 10], ['crude_fat', 6]]), [full])).toBeNull(); // no fiber in use to compare
+    expect(added(undefined, [full])).toBeNull();
+  });
+  it('fillMissing never replaces an analysis that has protein, fat and fiber (a photo never overwrites the shared record)', () => {
+    const base = facts({ guaranteedAnalysis: { value: [...inUse, ...ga([['taurine', 0.05], ['calcium', 0.3]])], source: SRC } });
+    const photo = { ...SRC, sourceId: 'photo:x', sourceType: 'verified_label' as const, sourceName: 'A label photo matched to this barcode' };
+    expect(fillMissing(base, { guaranteedAnalysis: { value: full, source: photo } }).filled).toEqual([]);
   });
 });
 
 describe('a withheld score always leaves something to add', () => {
-  it('asks for the nutrition panel when a complete food lacks only the moisture guarantee', () => {
+  it('asks for the nutrition panel when a wet complete food’s score waits only for the moisture guarantee', () => {
     const f = facts({ guaranteedAnalysis: { value: ga([['crude_protein', 10], ['crude_fat', 6], ['crude_fiber', 1]]), source: SRC } });
     const scope = scopeOf(f);
     const a = assessGeneral(f, scope);
     expect(a.score).toBeNull();
     expect(a.missingForScore).toEqual(['moisture guarantee (to compare protein and fat on a dry-matter basis)']);
-    const req = missingInfo(f, scope, a.category);
-    expect(req).toEqual([{ purpose: 'nutrition', title: 'Guaranteed analysis, with moisture', reason: 'The moisture guarantee wasn’t read. Needed to compare protein and fat as dry matter, and to score it.' }]);
+    const req = missingInfo(f, scope, a.category, a.score !== null);
+    expect(req).toEqual([]);
+    expect(withScoreNeeds(a, scope, req)).toEqual([MOISTURE_REQUEST]);
+    expect(MOISTURE_REQUEST).toEqual({ purpose: 'nutrition', title: 'Guaranteed analysis, with moisture', reason: 'Needed to compare protein and fat as dry matter, and to score it.' });
+    // Its card says what Purrbi has, never that a search will add it (no other source's analysis replaces the one in use).
+    expect(moistureStatus(f)).toEqual({ purpose: 'nutrition', status: 'not_found', detail: 'The guaranteed analysis Purrbi has (from Test fixture database) gives no moisture guarantee.' });
+    const own = { ...SRC, sourceId: 'label:p1', sourceType: 'user_label' as const, sourceName: 'Your label photo' };
+    expect(moistureStatus({ ...f, guaranteedAnalysis: { ...f.guaranteedAnalysis!, source: own } }).detail).toBe('The guaranteed analysis Purrbi has (from your label photo) gives no moisture guarantee.');
+  });
+  it('asks a treat missing its ingredient list for the nutrition panel in the same round, when the list alone would not be enough', () => {
+    const treat = (over: Parameters<typeof facts>[0] = {}) =>
+      facts({ classificationSignals: [{ text: 'en:cat-treats', source: 'test' }], ingredientsText: '', ingredients: undefined, adequacyText: '', guaranteedAnalysis: { value: ga([['crude_protein', 30], ['crude_fat', 12], ['crude_fiber', 3]]), source: SRC }, calories: undefined, ...over });
+    const f = treat();
+    const scope = scopeOf(f);
+    const a = assessGeneral(f, scope);
+    expect(a.missingForScore).toEqual(['ingredient list']); // the scorer names the shortfall only once nothing essential is missing
+    const req = missingInfo(f, scope, a.category, a.score !== null);
+    expect(req.map((r) => r.purpose)).toEqual(['ingredients']);
+    expect(byGuard(a, scope, req)).toEqual([{ purpose: 'nutrition', title: 'Nutrition panel', reason: 'Needed to score this product: with the ingredient list, Purrbi still needs the calorie content statement, or the feeding statement.' }]);
+    // With its calorie content, the ingredient list alone would do: nothing more is asked.
+    const withKcal = treat({ calories: { value: [{ kcal: 3500, per: 'kg' }], source: SRC } });
+    const b = assessGeneral(withKcal, scopeOf(withKcal));
+    expect(b.missingForScore).toEqual(['ingredient list']);
+    expect(byGuard(b, scopeOf(withKcal), missingInfo(withKcal, scopeOf(withKcal), b.category))).toEqual([]);
+    // Both photos in: scored.
+    const done = treat({ ingredientsText: 'Salmon, rice flour, sunflower oil', calories: { value: [{ kcal: 3500, per: 'kg' }], source: SRC } });
+    expect(assessGeneral(done, scopeOf(done)).score).not.toBeNull();
+  });
+  it('asks nothing of a dry food scored without moisture (protein and fat pass as fed)', () => {
+    const f = facts({ guaranteedAnalysis: { value: ga([['crude_protein', 32], ['crude_fat', 16], ['crude_fiber', 3], ['taurine', 0.1]]), source: SRC } });
+    const scope = scopeOf(f);
+    const a = assessGeneral(f, scope);
+    expect(a.score).not.toBeNull();
+    expect(withScoreNeeds(a, scope, missingInfo(f, scope, a.category, true))).toEqual([]);
+  });
+  it('a treat known by name only is asked in one round for everything its score needs (second review of 2.5.1)', () => {
+    const bare = facts({ classificationSignals: [{ text: 'en:cat-treats', source: 'test' }], ingredientsText: '', ingredients: undefined, adequacyText: '', guaranteedAnalysis: undefined, calories: undefined });
+    const scope = scopeOf(bare);
+    const a = assessGeneral(bare, scope);
+    const req = withScoreNeeds(a, scope, missingInfo(bare, scope, a.category, false));
+    expect(req.map((r) => [r.purpose, r.title])).toEqual([['ingredients', 'Ingredient list'], ['nutrition', 'Nutrition panel']]);
+    expect(req[1].reason).toBe('Needed to score this product: with the ingredient list, Purrbi still needs the calorie content statement, or both the feeding statement and the guaranteed analysis.');
+    // With its ingredient list on record: the analysis request names the calorie statement too.
+    const listed = facts({ classificationSignals: [{ text: 'en:cat-treats', source: 'test' }], adequacyText: '', guaranteedAnalysis: undefined, calories: undefined });
+    const b = assessGeneral(listed, scopeOf(listed));
+    expect(withScoreNeeds(b, scopeOf(listed), missingInfo(listed, scopeOf(listed), b.category, false))).toEqual([{ purpose: 'nutrition', title: 'Nutrition panel', reason: 'Needed to score this product: Purrbi still needs the calorie content statement, or both the feeding statement and the guaranteed analysis.' }]);
+  });
+  it('a scored product’s request completes the assessment and never says it is needed for the score (second review of 2.5.1)', () => {
+    const treat = facts({ classificationSignals: [{ text: 'en:cat-treats', source: 'test' }], adequacyText: '', guaranteedAnalysis: undefined });
+    const t = assessGeneral(treat, scopeOf(treat));
+    expect(t.score).not.toBeNull();
+    expect(withScoreNeeds(t, scopeOf(treat), missingInfo(treat, scopeOf(treat), t.category, true))).toEqual([{ purpose: 'nutrition', title: 'Guaranteed analysis', reason: 'The protein, fat and fiber guarantees aren’t all listed yet; they complete the assessment.' }]);
+    // A complete food with its statement, scored without a fiber guarantee: asked for the analysis only.
+    const noFiber = facts({ guaranteedAnalysis: { value: ga([['crude_protein', 10], ['crude_fat', 6], ['moisture', 78]]), source: SRC } });
+    const c = assessGeneral(noFiber, scopeOf(noFiber));
+    expect(c.score).not.toBeNull();
+    expect(missingInfo(noFiber, scopeOf(noFiber), c.category, true)).toEqual([{ purpose: 'nutrition', title: 'Guaranteed analysis', reason: 'The protein, fat and fiber guarantees aren’t all listed yet; they complete the assessment.' }]);
+    // A complete food without its statement: asked for the statement, for the score.
+    const noStatement = facts({ adequacyText: '' });
+    const d = assessGeneral(noStatement, scopeOf(noStatement));
+    expect(missingInfo(noStatement, scopeOf(noStatement), d.category, d.score !== null)).toEqual([{ purpose: 'nutrition', title: '"Complete and balanced" statement', reason: 'Needed to check what the food is complete and balanced for, and to score it.' }]);
   });
   it('for every mix of evidence a complete food or a treat can have, an unscored result asks for a photo', () => {
     const analyses: (GuaranteedAnalysisEntry[] | undefined)[] = [
@@ -83,16 +241,15 @@ describe('a withheld score always leaves something to add', () => {
               const a = assessGeneral(f, scope);
               if (a.score !== null) continue;
               unscored++;
-              const requests = missingInfo(f, scope, a.category);
-              const all = [...requests, ...requestsForWithheldScore(a, scope, requests)];
+              const requests = missingInfo(f, scope, a.category, false);
+              const all = withScoreNeeds(a, scope, requests);
               expect(all.length, `${kind} ${JSON.stringify(g)} ${adequacyText} ${ingredientsText} ${calories}: ${a.missingForScore.join('; ')}`).toBeGreaterThan(0);
               for (const r of all) expect(r.reason.length).toBeGreaterThan(10);
               // The backstop was needed (before 2.5.1 these were dead ends): a treat with protein, fat and fiber but
-              // too little else to score, e.g. no calorie content and no feeding statement.
-              if (requestsForWithheldScore(a, scope, requests).length) guarded.push(`${kind}: ${a.missingForScore.join('; ')}`);
+              // too little else to score (no calorie content and no feeding statement), a wet food without moisture.
+              if (byGuard(a, scope, requests).length) guarded.push(`${kind}: ${a.missingForScore.join('; ')}`);
             }
     expect(unscored).toBeGreaterThan(20);
     expect(guarded.length).toBeGreaterThan(0);
-    expect(guarded.every((g) => g.startsWith('en:cat-treats'))).toBe(true);
   });
 });

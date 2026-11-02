@@ -33,6 +33,8 @@ const BC = {
   hyphenA: withCheck('501234567800'), // "Mannan-Oligosaccharides"
   hyphenB: withCheck('501234567801'), // the same term spelled "Mannan Oligosaccharides"
   longList: withCheck('501234567802'), // more explainable terms than one run explains
+  treatNoKcal: withCheck('501234567803'), // the treat without its calorie content
+  wetDb: withCheck('501234567804'), // a wet cat food whose database analysis has no moisture (ash, but no statement)
 };
 
 let db: Firestore;
@@ -58,6 +60,8 @@ let latinNoSpecies = false; // with latinPage: the page says nothing about who t
 let sameSite = false; // with latinPage: the English page is on the Japanese listing's site (same source id), read 13 h later
 let latinBrandValue = 'TESTBRAND'; // with latinPage: the brand the page gives
 let recallResult: RecallCheck | null = null; // what the FDA recall check answers (default: none found)
+let wetDbFat = 6; // BC.wetDb's crude fat in the database
+let wetDbQualified = false; // BC.wetDb's database rows state their min/max
 let researchOpts: { knownName?: string; knownBrand?: string; model?: string }[] = [];
 let verdictInputs: string[] = [];
 
@@ -68,11 +72,18 @@ const sources: Sources = {
   async lookupOpenFacts(dbName: OpenFactsDb, barcode: NormalizedBarcode): Promise<OpenFactsLookup> {
     calls[`lookup:${dbName}`] = (calls[`lookup:${dbName}`] ?? 0) + 1;
     if (dbName === 'opff' && opffDown && barcode.digits === BC.down) throw new SourceError('Open Pet Food Facts', 'timeout', 'no response');
-    if (dbName === 'opff' && barcode.digits === BC.treat) {
+    if (dbName === 'opff' && (barcode.digits === BC.treat || barcode.digits === BC.treatNoKcal)) {
       return { found: true, db: dbName, code: barcode.digits, source: src(dbName, barcode.digits), product: {
         product_name: 'TEST FIXTURE Salmon Cat Treats', brands: 'TESTBRAND', categories_tags: ['en:cat-food', 'en:cat-treats'],
         ingredients_text: 'Salmon, rice flour, sunflower oil, mixed tocopherols',
-        nutriments: { proteins_100g: 30, proteins_unit: 'g', fat_100g: 12, fat_unit: 'g', fiber_100g: 3, fiber_unit: 'g', 'energy-kcal_100g': 350 },
+        nutriments: { proteins_100g: 30, proteins_unit: 'g', fat_100g: 12, fat_unit: 'g', fiber_100g: 3, fiber_unit: 'g', ...(barcode.digits === BC.treat ? { 'energy-kcal_100g': 350 } : {}) },
+      } };
+    }
+    if (dbName === 'opff' && barcode.digits === BC.wetDb) {
+      return { found: true, db: dbName, code: barcode.digits, source: src(dbName, barcode.digits), product: {
+        product_name: 'TEST FIXTURE Chicken Pate Wet Cat Food', brands: 'TESTBRAND', categories_tags: ['en:cat-food', 'en:wet-cat-food'],
+        ingredients_text: 'Chicken, chicken broth, chicken liver, guar gum, taurine',
+        nutriments: { proteins_100g: 10, proteins_unit: 'g', fat_100g: wetDbFat, fat_unit: 'g', fiber_100g: 1, fiber_unit: 'g', ash_100g: 2.5, ash_unit: 'g', ...(wetDbQualified ? { proteins_modifier: '>=', fat_modifier: '>=', fiber_modifier: '<=' } : {}) },
       } };
     }
     if (dbName === 'opff' && (barcode.digits === BC.food || barcode.digits === BC.down)) {
@@ -308,6 +319,8 @@ beforeAll(() => {
 
 beforeEach(async () => {
   calls = {};
+  wetDbFat = 6;
+  wetDbQualified = false;
   opffDown = false;
   verdictMode = 'ok';
   verdictInputs = [];
@@ -997,7 +1010,122 @@ describe('label photo stages: submitted → extracted → corroborated → verif
     expect(s.scoreAvailable).toBe(false);
     expect(s.status).toBe('needs_photos');
     expect(s.photoRequests).toEqual([expect.objectContaining({ purpose: 'nutrition', title: 'Guaranteed analysis, with moisture' })]);
-    expect(s.photoRequests[0].reason).toMatch(/The moisture guarantee wasn’t read\. Needed to compare protein and fat as dry matter, and to score it\.$/);
+    // The card says what Purrbi has; no search is promised (another source's analysis never replaces the one in use). The
+    // owner's photo of the analysis was read without moisture: a sharper one is asked for only if the panel prints it.
+    expect(s.photoRequests[0].reason).toMatch(/^The guaranteed analysis Purrbi has \(from (?:your label photo|a label photo matched to this barcode)\) gives no moisture guarantee\. If the panel prints one, a sharper photo of it is needed to compare protein and fat as dry matter, and to score it\.$/);
+    expect(s.fieldStatus).toEqual([expect.objectContaining({ purpose: 'nutrition', status: 'not_found' })]);
+  });
+  it('a complete dry food scored without a moisture guarantee is complete, with nothing more asked (review of 2.5.1)', async () => {
+    labelPatch = { guaranteedAnalysis: [
+      { nutrient: 'crude_protein', label: 'Crude Protein', qualifier: 'min', value: 32, unit: '%' },
+      { nutrient: 'crude_fat', label: 'Crude Fat', qualifier: 'min', value: 16, unit: '%' },
+      { nutrient: 'crude_fiber', label: 'Crude Fiber', qualifier: 'max', value: 3, unit: '%' },
+    ] as ValidatedLabel['guaranteedAnalysis'] };
+    const ref = await newScan('u1', BC.food, 'cat1');
+    await processScan(deps(), 'u1', ref.id);
+    await processPhoto(deps(), 'u1', (await photoFor('u1', ref.id)).id);
+    const s = await read(ref);
+    expect(s.scoreAvailable).toBe(true);
+    expect(s.status).toBe('complete');
+    expect(s.photoRequests).toEqual([]);
+  });
+  it('a treat whose score waits for its calorie content or feeding statement is searched for them, and its card says what the search found (review of 2.5.1)', async () => {
+    // With the search switched off, the card says so (before: "the next full check searches for it", and none did).
+    const off = await newScan('u1', BC.treatNoKcal, 'cat1');
+    await processScan(deps(), 'u1', off.id);
+    expect(calls.research).toBeUndefined();
+    expect((await read(off)).photoRequests[0].reason).toMatch(/^The manufacturer’s page hasn’t been searched yet: the manufacturer search is switched off\. /);
+    const ref = await newScan('u2', BC.treatNoKcal);
+    await processScan(deps({ researchEnabled: true }), 'u2', ref.id);
+    expect(calls.research).toBe(1); // before: never searched, as missingInfo asked for nothing
+    const s = await read(ref);
+    expect(s.scoreAvailable).toBe(false);
+    expect(s.status).toBe('needs_photos');
+    expect(s.photoRequests).toEqual([expect.objectContaining({ purpose: 'nutrition', title: 'Nutrition panel' })]);
+    expect(s.photoRequests[0].reason).not.toMatch(/hasn’t been searched yet/);
+    expect(s.photoRequests[0].reason).toMatch(/^No manufacturer or retailer page could be matched to this barcode \(checked 2026-10-28\)\. Needed to score this product: Purrbi still needs the calorie content statement, or the feeding statement\.$/);
+  });
+  it('of an owner’s two readings of the same can, the one that adds moisture to the other is used, for this owner only (2.5.1)', async () => {
+    const core = [
+      { nutrient: 'crude_protein', label: 'Crude Protein', qualifier: 'min', value: 10, unit: '%' },
+      { nutrient: 'crude_fat', label: 'Crude Fat', qualifier: 'min', value: 6, unit: '%' },
+      { nutrient: 'crude_fiber', label: 'Crude Fiber', qualifier: 'max', value: 1, unit: '%' },
+    ] as ValidatedLabel['guaranteedAnalysis'];
+    const ref = await newScan('u1', BC.food, 'cat1');
+    await processScan(deps(), 'u1', ref.id);
+    // Test A on the owner's account: one reading kept moisture 78%, a later one lost it (the wrapped row).
+    labelPatch = { guaranteedAnalysis: [...core, { nutrient: 'moisture', label: 'Moisture', qualifier: 'max', value: 78, unit: '%' }] as ValidatedLabel['guaranteedAnalysis'] };
+    await processPhoto(deps(), 'u1', (await photoFor('u1', ref.id)).id);
+    labelPatch = { guaranteedAnalysis: core };
+    await processPhoto(deps(), 'u1', (await photoFor('u1', ref.id)).id);
+    const s = await read(ref);
+    expect(s.scoreAvailable).toBe(true);
+    expect(s.status).not.toBe('needs_photos');
+    expect(s.nutritionSource).toBe('Your label photo (read by AI, not reviewed)');
+    expect(JSON.stringify(s.nutrition)).toMatch(/Moisture/);
+    // The shared record never got any of the owner's readings (neither is tied to the barcode).
+    expect((await db.doc(`products/${s.gtin}`).get()).data()!.facts.guaranteedAnalysis).toBeUndefined();
+  });
+  const wetPhoto = () => {
+    labelPatch = { guaranteedAnalysis: [
+      { nutrient: 'crude_protein', label: 'Crude Protein', qualifier: 'min', value: 10, unit: '%' },
+      { nutrient: 'crude_fat', label: 'Crude Fat', qualifier: 'min', value: 6, unit: '%' },
+      { nutrient: 'crude_fiber', label: 'Crude Fiber', qualifier: 'max', value: 1, unit: '%' },
+      { nutrient: 'moisture', label: 'Moisture', qualifier: 'max', value: 78, unit: '%' },
+    ] as ValidatedLabel['guaranteedAnalysis'] };
+  };
+  it('an owner’s photo with the same protein, fat and fiber adds its moisture to the database analysis, for this owner only (second review of 2.5.1)', async () => {
+    wetPhoto(); // the photo's reading has no ash row, so it is not the database analysis whole
+    const ref = await newScan('u1', BC.wetDb, 'cat1');
+    await processScan(deps(), 'u1', ref.id);
+    await processPhoto(deps(), 'u1', (await photoFor('u1', ref.id)).id);
+    const s = await read(ref);
+    expect(s.scoreAvailable).toBe(true);
+    const rows = JSON.stringify(s.nutrition);
+    expect(rows).toMatch(/Moisture \(your label photo\)/);
+    expect(rows).toMatch(/ash/i); // the database's other rows are kept
+    expect(s.evidenceNotes.join(' ')).toMatch(/Your label photo, with the same protein, fat and fiber as the analysis from TEST FIXTURE database, adds: moisture 78%\./);
+    // The shared record keeps the database analysis, without moisture.
+    const shared = (await db.doc(`products/${s.gtin}`).get()).data()!.facts.guaranteedAnalysis.value as { nutrient: string }[];
+    expect(shared.some((r) => r.nutrient === 'moisture')).toBe(false);
+  });
+  it('the rows in use keep their min/max when a bilingual photo adds its moisture (second review of 2.5.1)', async () => {
+    wetDbQualified = true;
+    labelPatch = { guaranteedAnalysis: [
+      { nutrient: 'crude_protein', label: 'Crude Protein / Protéines brutes', qualifier: 'min', value: 10, unit: '%' },
+      { nutrient: 'crude_fat', label: 'Crude Fat / Matières grasses brutes', qualifier: 'min', value: 6, unit: '%' },
+      { nutrient: 'crude_fiber', label: 'Crude Fiber / Cellulose brute', qualifier: 'max', value: 1, unit: '%' },
+      { nutrient: 'moisture', label: 'Moisture / Humidité', qualifier: 'max', value: 78, unit: '%' },
+    ] as ValidatedLabel['guaranteedAnalysis'] };
+    const ref = await newScan('u1', BC.wetDb, 'cat1');
+    await processScan(deps(), 'u1', ref.id);
+    await processPhoto(deps(), 'u1', (await photoFor('u1', ref.id)).id);
+    const s = await read(ref);
+    expect(s.scoreAvailable).toBe(true);
+    const rows = s.nutrition as { label: string; qualifier: string }[];
+    expect(rows.filter((r) => !/your label photo/.test(r.label)).map((r) => r.qualifier)).toEqual(['min', 'min', 'max', 'not_stated']); // protein, fat, fiber, ash as in use
+    expect(rows.some((r) => /^Moisture \/ Humidité \(your label photo\)$/.test(r.label))).toBe(true);
+  });
+  it('a moisture guarantee that cannot go with the analysis in use is not asked for again, and the result says why (second review of 2.5.1)', async () => {
+    wetDbFat = 5.6; // the photo reads fat 6%: close enough to corroborate, not the same analysis
+    wetPhoto();
+    const ref = await newScan('u1', BC.wetDb, 'cat1');
+    await processScan(deps(), 'u1', ref.id);
+    await processPhoto(deps(), 'u1', (await photoFor('u1', ref.id)).id);
+    const s = await read(ref);
+    expect(s.scoreAvailable).toBe(false);
+    expect(s.photoRequests.some((r: { title: string }) => r.title === 'Guaranteed analysis, with moisture')).toBe(false);
+    expect(s.status).not.toBe('needs_photos');
+    expect(s.evidenceNotes.join(' ')).toMatch(/Your label photo gives a moisture guarantee \(78%\), but its protein, fat or fiber differ from the analysis Purrbi has \(crude fat 6% vs 5\.6%\), so its moisture isn’t used with that analysis\./);
+  });
+  it('once a scan has its photos, a card says to scan the barcode again rather than asking for one the app cannot send (second review of 2.5.1)', async () => {
+    const ref = await newScan('u1', BC.food, 'cat1');
+    for (let i = 0; i < 6; i++) await photoFor('u1', ref.id);
+    await processScan(deps(), 'u1', ref.id);
+    const s = await read(ref);
+    expect(s.status).toBe('needs_photos');
+    expect(s.photoRequests.length).toBeGreaterThan(0);
+    for (const r of s.photoRequests as { reason: string }[]) expect(r.reason).toMatch(/ This scan has its 6 photos: scan the barcode again to add another\.$/);
   });
   it('a photo the label reader cannot take (no AI credits, rate limit) says so, without asking for a retake', async () => {
     extractThrows = new SourceError('OpenAI', 'rate_limited', 'no credits remaining', 429);

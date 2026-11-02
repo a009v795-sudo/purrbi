@@ -298,22 +298,52 @@ function sectionRows(text: string, percentHeader: boolean): GuaranteedAnalysisEn
 }
 
 // A row whose value wraps onto the next printed line ("…, Moisture (Max.)" / "78%, Taurine (Min.) 0.05%") is one row: a
-// line whose last row names one nutrient and has no number is joined to a next line that starts with a value (2.5.1;
-// test A's can, where one reading lost the moisture guarantee this way).
+// line that ends with a name of one nutrient, with no number in it, after its last value (whatever separates the rows:
+// a comma, a bullet, a space) is joined to a next line that starts with a value (2.5.1; test A's can, where one reading
+// lost the moisture guarantee this way). Never when the lines around show names and values printed apart, where which
+// value is whose is unclear (reviews of 2.5.1):
+// - a value line that is a value alone (no name on it) with another value first on the next line (values stacked
+//   below their names), an energy statement aside; a value line that goes on to other rows is a row line that wrapped;
+// - when the name above is a line of its own (no value on it): the line before it is another such name, one nutrient or
+//   ending with its printed min/max and listing nothing (names stacked above their values), or a value alone (each value
+//   printed above its name);
+// - either line ambiguous on its own ("1.2%, (max) 1.7%", "1.0% - 1.5%"): joined, the rows of the other would be lost.
 const WRAPPED_VALUE = /^\s*\d+(?:[.,]\d+)?\s*(?:%|mg\b|g\b|iu\b|ui\b|kcal\b|ppm\b)/i;
+/** A line of values with no names ("10%", "6 % min", "78 %; 0.05 %"). */
+const valuesOnly = (line: string | undefined) => {
+  if (line === undefined) return false;
+  const { parts, rest } = partsOf(clean(line));
+  return parts.length > 0 && !/\p{L}/u.test(rest) && parts.every((p) => !/\p{L}/u.test(p.name));
+};
+/** A line that starts with a number, whatever its unit ("200 IU/lb", "100,000,000 CFU/lb"); an energy statement is not one. */
+const numberFirst = (line: string | undefined) => line !== undefined && /^\s*[\d.,]*\d/.test(line) && !/kcal|kilocal|\bkj\b/i.test(line);
+/** A name on a line of its own, one of several stacked above their values: one nutrient, or ending with its printed min/max, listing nothing. */
+const stackedName = (line: string | undefined) => {
+  if (line === undefined || /[,;]/.test(line) || partsOf(clean(line)).parts.length) return false;
+  return nutrientKeysIn(line).length === 1 || QUALIFIER_END.test(trail(clean(line)));
+};
+/** The sectionRows rule: a later value with no name of its own, or the end of a range, makes a line ambiguous. */
+const ambiguousLine = (line: string) => partsOf(clean(line)).parts.slice(1).some((p) => !/\p{L}/u.test(p.name.replace(/\([^)]*\)/g, '')) || RANGE.test(p.name));
 export function joinWrappedValues(text: string): string {
+  const lines = text.split('\n');
   const out: string[] = [];
-  for (const line of text.split('\n')) {
+  lines.forEach((line, i) => {
     const prev = out[out.length - 1];
     if (prev !== undefined && WRAPPED_VALUE.test(line)) {
-      const last = prev.split(/[,;]/).pop()!.trim();
-      if (last && !/\d/.test(last) && nutrientKeysIn(last).length === 1) {
+      const above = partsOf(clean(prev));
+      const name = lead(above.rest).trim(); // the name the line above ends with, after its last value
+      const before = out.slice(0, -1).reverse().find((l) => l.trim());
+      const after = lines.slice(i + 1).find((l) => l.trim());
+      const ownLine = !above.parts.length;
+      const apart =
+        (valuesOnly(line) && numberFirst(after)) || (ownLine && (stackedName(before) || valuesOnly(before))) || ambiguousLine(line) || ambiguousLine(prev);
+      if (name && !/\d/.test(name) && nutrientKeysIn(name).length === 1 && !apart) {
         out[out.length - 1] = `${prev.trimEnd()} ${line.trim()}`;
-        continue;
+        return;
       }
     }
     out.push(line);
-  }
+  });
   return out.join('\n');
 }
 

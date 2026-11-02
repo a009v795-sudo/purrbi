@@ -32,10 +32,10 @@ import { databaseGuarantees, DB_FOR_TYPE, implausibleAnalysis, lookupOpenFacts a
 import { otherScript, RESEARCH_RESULTS_IN_USE, RESEARCH_VERSION, ResearchNotStarted, researchProduct as researchImpl, researchStartMs, type ResearchOutcome } from '../sources/research';
 import { currentCalls, errorDetail, runWithCallLog } from '../util/diagnostics';
 import { SourceError } from '../util/http';
-import { rematchAnalysis } from '../domain/nutrition';
+import { findNutrient, hasCoreGuaranteedAnalysis, rematchAnalysis } from '../domain/nutrition';
 import { ASSESSMENT_VERSION, MAX_CACHE_LOOKUPS, MAX_NEW_TERMS, olderAssessment, RESEARCH_TIME_LIMIT_MS, SCAN_STATUS, STEP8_LATEST_START_MS, STUCK_AFTER_MS, WORKING_STATUSES, type ErrorCode, type RuntimeConfig } from './config';
 import { corroborateLabel, photoNote } from './corroborate';
-import { barcodeHosts, dropStaleImageReads, enrichmentFacts, fillMissing, labelToFacts, missingInfo, refusalOf, requestsForWithheldScore, refusingHosts, retrievalStatus, searchStop, supersededIdentity, type PhotoRequest, type RetrievalContext } from './facts';
+import { barcodeHosts, coreDifferences, dropStaleImageReads, enrichmentFacts, fillMissing, hasUsableMoisture, isMoistureRequest, labelToFacts, missingInfo, MOISTURE_RETAKE_REASON, moistureStatus, refusalOf, rowsFromOwnReading, refusingHosts, retrievalStatus, searchStop, supersededIdentity, withScoreNeeds, type PhotoRequest, type RetrievalContext } from './facts';
 import { explanationFields, highlightFields, ingredientRowFields, jobFields, resultFields, type JobInfo } from './serialize';
 import {
   aiBudgetLeft,
@@ -482,9 +482,17 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   // Label images in the database answer missing panels and, while it is unresolved what the product is, the front.
   // When the product type is unclear, the nutrition panel (its feeding statement says complete or complementary) helps too.
   const typeUnclear = scope.status === 'unknown' || scope.category === 'unknown';
+  // What a photo would be asked for now: missingInfo's requests with what the score still needs (withScoreNeeds on the
+  // facts so far), so research and the database's label images look for it too, and a card never says a search will be
+  // made that never is (review of 2.5.1). Not the moisture guarantee: no other source's analysis is put in place of the
+  // one in use, so only the owner's own photo can add it.
+  const neededNow = () => {
+    const a = assessGeneral(facts, scope);
+    return withScoreNeeds(a, scope, missingInfo(facts, scope, scope.category, a.score !== null)).filter((r) => !isMoistureRequest(r));
+  };
   const panelNeeds = () => [
     ...new Set([
-      ...missingInfo(facts, scope, scope.category).map((r) => r.purpose).filter((p) => p === 'ingredients' || p === 'nutrition' || (p === 'front' && typeUnclear)),
+      ...neededNow().map((r) => r.purpose).filter((p) => p === 'ingredients' || p === 'nutrition' || (p === 'front' && typeUnclear)),
       ...(scope.category === 'unknown' && scope.status === 'supported' && !facts.adequacy ? (['nutrition'] as const) : []),
     ]),
   ];
@@ -540,7 +548,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
 
   // 2b. Bounded manufacturer/web research.
   // Research also runs when it is unresolved whether the product is for cats or dogs.
-  const stillMissing = scope.status === 'unknown' || scope.category === 'unknown' || missingInfo(facts, scope, scope.category).some((r) => r.purpose !== 'front' || !facts.productName);
+  const stillMissing = scope.status === 'unknown' || scope.category === 'unknown' || neededNow().some((r) => r.purpose !== 'front' || !facts.productName);
   const hasWeb = facts.sources.some((s) => s.sourceType === 'manufacturer' || s.sourceType === 'retailer_or_web');
   // A search made while the barcode database was paused is repeated only once it answers again: the same
   // search without its words would find the same nothing.
@@ -810,8 +818,27 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
     }
     facts = merged.facts;
   }
-  if (labelUsed) job.evidenceNotes.push(labelTied ? 'Used details read from your label photo, matched to this barcode (AI, not reviewed).' : 'Used details read from your label photo (AI, not reviewed). The photo is not yet tied to this barcode, so this is a label-based assessment.');
   facts = rederive(facts);
+  // An analysis in use without a usable moisture guarantee, for this owner's result only: what the owner's own reading of
+  // the label adds to it with the same protein, fat and fiber (2.5.1, `rowsFromOwnReading`). Disputed or conflicted
+  // readings never count, and the shared record (written above) never gets it. The rows in use stay as they are; the
+  // added rows are re-derived on their own, after the analysis in use was (an EU name among them must not clear the
+  // min/max of the rows in use), and say they come from the photo when the analysis in use does not (reviews of 2.5.1).
+  const ownReadings = current.filter((e) => e.stage !== 'disputed' && !e.conflicts?.length);
+  const own = rowsFromOwnReading(facts.guaranteedAnalysis?.value, ownReadings.map((e) => e.label.guaranteedAnalysis));
+  if (own && facts.guaranteedAnalysis) {
+    const e = ownReadings.find((x) => x.label.guaranteedAnalysis === own.reading)!;
+    const src: SourceRef = { sourceId: `label:${e.photoId}`, sourceType: 'user_label', sourceName: 'Your label photo', retrievedAt: e.processedAt.toISOString(), matchConfidence: e.stage === 'verified' ? 'exact_barcode' : 'none' };
+    const inUse = facts.guaranteedAnalysis;
+    const ownAnalysis = inUse.source.sourceType === 'user_label';
+    const added = rematchAnalysis(own.added).map((r) => (ownAnalysis ? r : { ...r, label: `${r.label} (your label photo)` }));
+    facts = { ...facts, guaranteedAnalysis: { ...inUse, value: [...inUse.value.filter((r) => r.nutrient !== 'moisture'), ...added] }, sources: facts.sources.some((x) => x.sourceId === src.sourceId) ? facts.sources : [...facts.sources, src] };
+    labelUsed = true;
+    if (e.stage !== 'verified') labelTied = false;
+    const list = own.added.map((r) => `${r.nutrient === 'other' ? r.label : r.nutrient.replace(/^crude_/, '').replace(/_/g, '-')} ${r.value}${r.unit}`).join(', ');
+    job.evidenceNotes.push(`${ownAnalysis ? 'Another reading of your label photo, with the same protein, fat and fiber, adds' : `Your label photo, with the same protein, fat and fiber as the analysis from ${inUse.source.sourceName}, adds`}: ${list}.`);
+  }
+  if (labelUsed) job.evidenceNotes.push(labelTied ? 'Used details read from your label photo, matched to this barcode (AI, not reviewed).' : 'Used details read from your label photo (AI, not reviewed). The photo is not yet tied to this barcode, so this is a label-based assessment.');
   scope = scopeOf(facts, origin);
 
   // 5. Recall check (FDA), cached; skipped for out-of-scope products.
@@ -854,12 +881,29 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   const state = overallState(general, recall, scope);
   // What a photo would still add. After "Continue without photos" the result is complete, but the requests
   // stay listed (optional), so the owner can add a photo later and the findings so far are kept.
-  const requests: PhotoRequest[] = missingInfo(facts, scope, general.category);
-  // No dead end: a score withheld for something no request covers asks for the photo that would supply it.
-  const uncovered = requestsForWithheldScore(general, scope, requests);
-  if (uncovered.length) {
-    requests.push(...uncovered);
-    job.diagnosticNotes.push(`Asked for ${uncovered.map((r) => r.purpose).join(' and ')} too: the score still needs the ${general.missingForScore.join(' and the ')}.`);
+  const asked = missingInfo(facts, scope, general.category, general.score !== null);
+  // No dead end: a withheld score's need that no request covers asks for the photo that would supply it.
+  let requests: PhotoRequest[] = withScoreNeeds(general, scope, asked);
+  const changed = requests.filter((r) => !asked.some((x) => x.purpose === r.purpose && x.title === r.title && x.reason === r.reason));
+  if (changed.length) job.diagnosticNotes.push(`Asked for ${changed.map((r) => r.purpose).join(' and ')} with what the score still needs: the ${general.missingForScore.join(' and the ')}.`);
+  // After the current label reader has read the owner's photo of the analysis (review of 2.5.1):
+  // - its moisture guarantee goes with a different protein, fat or fiber than the analysis in use: the moisture is not
+  //   asked for again (another photo of the same panel prints the same values, and each one spends the owner's photos and
+  //   AI checks), and the note says why;
+  // - it was read without one: the card says so, and asks for a sharper photo only if the panel prints one.
+  let moistureReadWithout = false;
+  if (requests.some(isMoistureRequest)) {
+    const read = ownReadings.filter((e) => e.label.version === LABEL_EXTRACTION_VERSION && hasCoreGuaranteedAnalysis(e.label.guaranteedAnalysis));
+    const withMoisture = read.find((e) => hasUsableMoisture(e.label.guaranteedAnalysis));
+    if (withMoisture) {
+      requests = requests.filter((r) => !isMoistureRequest(r));
+      job.evidenceNotes.push(
+        `Your label photo gives a moisture guarantee (${findNutrient(withMoisture.label.guaranteedAnalysis, 'moisture')!.value}%), but its protein, fat or fiber differ from the analysis Purrbi has (${coreDifferences(facts.guaranteedAnalysis?.value, withMoisture.label.guaranteedAnalysis).join('; ')}), so its moisture isn’t used with that analysis. The score waits for a moisture guarantee that goes with it.`,
+      );
+    } else if (read.length) {
+      moistureReadWithout = true;
+      requests = requests.map((r) => (isMoistureRequest(r) ? { ...r, reason: MOISTURE_RETAKE_REASON } : r));
+    }
   }
   // Each request says why its information is still missing: not searched, unreachable, not on the sources,
   // unreadable, or rejected by a check.
@@ -870,9 +914,13 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
     researchNotRun,
     ...(meta.enrichment.databaseImages ? { images: meta.enrichment.databaseImages } : {}),
   };
-  const fieldStatus = requests.map((r) => retrievalStatus(r.purpose, retrieval));
+  const fieldStatus = requests.map((r) => (isMoistureRequest(r) ? moistureStatus(facts, moistureReadWithout) : retrievalStatus(r.purpose, retrieval)));
   // The same reason is said once, on the first card it applies to; the others say only what their photo adds.
-  const shownRequests = requests.map((r, i) => ({ ...r, reason: fieldStatus.slice(0, i).some((f) => f.detail === fieldStatus[i].detail) ? r.reason : `${fieldStatus[i].detail} ${r.reason}` }));
+  // A scan's photos used up (maxPhotosPerScan): a card never asks for one the app cannot send. A new scan of the barcode
+  // takes more and keeps the owner's readings (review of 2.5.1).
+  const labelPhotoCount = (await db.collection(`users/${o.uid}/photos`).where('scanId', '==', o.scanId).count().get().catch(() => null))?.data().count ?? 0;
+  const usedUp = labelPhotoCount >= config.limits.maxPhotosPerScan ? ` This scan has its ${config.limits.maxPhotosPerScan} photos: scan the barcode again to add another.` : '';
+  const shownRequests = requests.map((r, i) => ({ ...r, reason: `${fieldStatus.slice(0, i).some((f) => f.detail === fieldStatus[i].detail) ? r.reason : `${fieldStatus[i].detail} ${r.reason}`}${usedUp}` }));
 
   // The concise result: up to two positives and two cautions, and the verdict for the selected pet.
   // Supported products get a model-written verdict, checked against this assessment and cached; until it
@@ -932,7 +980,6 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   // than those of a result already saved (e.g. a photo and a pet change processed at the same time) does
   // not overwrite it.
   const ref = db.doc(scanPath(o.uid, o.scanId));
-  const labelPhotoCount = (await db.collection(`users/${o.uid}/photos`).where('scanId', '==', o.scanId).count().get().catch(() => null))?.data().count ?? 0;
   let superseded = false;
   try {
     const fields = {

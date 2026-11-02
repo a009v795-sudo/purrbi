@@ -1,6 +1,6 @@
 # Purrbi assessment methodology
 
-Version: `assessment-3.0.0` overall, made of `purrbi-score-3.0.0` (score), `scope-3.0.0` (classification), `verdict-2.2.0` (verdict),
+Version: `assessment-3.0.0` overall, made of `purrbi-score-3.0.1` (score), `scope-3.0.0` (classification), `verdict-2.2.0` (verdict),
 `kb-2026-10-28-draft` (ingredient notes), `label-extract-2.5.1` (label reader), `research-2.9.4` (web research), `explain-2.0.0` (claim-checked explanations).
 A saved result records `assessmentVersion` and its parts (`scoreVersion`, `kbVersion`, `scopeVersion`); the shared product record its
 classification version; each fact read from a label, page or document its reader's version; each explanation its own. When the app opens
@@ -53,10 +53,24 @@ meet", feeding tests). A manufacturer's "AAFCO nutrient profile claim substantia
 
 Essential inputs are required before any number is shown; without them the score is withheld (never estimated) and the result names the exact
 missing requirement while still showing what was found. A number is also shown only when the parts assessed are worth at least 70 points.
-A withheld score always asks for the photo that would supply what it needs (2.5.1): a complete food missing only the moisture guarantee asks
-for the nutrition panel "with moisture", and anything else the score needs that no request covers (e.g. a treat with protein, fat and fiber
-but no calorie or feeding statement) asks for the panel that prints it. Before 2.5.1 such a result could end "complete" and unscored with
-nothing to add (test A, account `accept`, trace `36da991d-34a`).
+A withheld score always asks for the photo that would supply what it needs (2.5.1). Before 2.5.1 such a result could end "complete" and
+unscored with nothing to add (test A, account `accept`, trace `36da991d-34a`):
+- The backstop adds a request only while the score is withheld (a dry food whose protein and fat pass as fed is scored without moisture,
+  and is never asked for it). A scored product may still be asked for a panel the assessment lacks (a treat's analysis): its card says it
+  completes the assessment, never that the score needs it, and a complete food that has its statement is asked only for the analysis.
+- A complete food withheld only for the moisture guarantee asks for the nutrition panel "with moisture". Its card says what Purrbi has ("The
+  guaranteed analysis Purrbi has (from …) gives no moisture guarantee."), never that a search will add it: research and the database's label
+  images fill only what is missing, so an analysis in use is never replaced by another source's. Only the owner's own reading of the label
+  adds it, for their result (section 9). Once the current label reader has read the owner's photo of the analysis:
+  - read without a moisture guarantee, the card says so and asks for a sharper photo only if the panel prints one;
+  - read with one whose protein, fat or fiber differ from the analysis in use, the moisture is not asked for again (another photo of the
+    same panel prints the same values), and the result says why ("… differ from the analysis Purrbi has (crude fat 6% vs 5.6%) …").
+- Anything else the score needs that no request covers (a treat with protein, fat and fiber but no calorie or feeding statement) asks for the
+  panel that prints it. Research and the database's label images look for it too, so its card says what they found, or why they did not run.
+- A treat's or topper's need for its calorie content or feeding statement rewords the nutrition request it shares a panel with, also when
+  its ingredient list is missing and the list alone would not be enough, so one round of photos asks for all of it ("with the ingredient
+  list, Purrbi still needs the calorie content statement, or both the feeding statement and the guaranteed analysis").
+- Once a scan has its 6 photos, each card says to scan the barcode again to add another (a new scan keeps the owner's readings).
 
 | Category | Essential (no number without) | Optional (coverage only) |
 |---|---|---|
@@ -93,11 +107,14 @@ Guaranteed minimums and maximums are never presented as exact analytical values.
 |---|---|---|
 | Main ingredients named by source | 40 | 40 × the share of the first five source ingredients that name their animal or plant |
 | Calorie content statement | 30 | Listed 30 (portion control: treats under about 10% of daily calories) |
-| Feeding statement | 15 | Clear 15; unclear 8 |
+| Feeding statement | 15 | Clear 15; unclear 8. A treat's own wording that it is not a complete diet ("Not intended as a meal replacement", "not intended as a sole diet", "not meant to replace a complete and balanced diet") is a clear intermittent-feeding statement, unless the text makes a substantiated claim ("formulated to meet", "animal feeding tests"), whose caveat ("Not intended as the sole diet for kittens") never makes a complete food complementary (3.0.1, test C). An analysis footnote ("*Not recognized as an essential nutrient by the AAFCO … Nutrient Profiles") is not a statement |
 | Guaranteed analysis (protein, fat, fiber) | 15 | Listed 15 |
 
-"Source ingredients" leave out processing liquids (water, broth), vitamins and minerals, and technological additives (gums, preservatives,
-salt). An ingredient "names its source" unless it is a generic name: meat, animal, poultry, fish, by-products, derivatives, digest, cereals,
+"Source ingredients" leave out processing liquids (water, broth), vitamins and minerals, and technological additives: thickeners and
+gums, preservatives (BHA, BHT, potassium sorbate, tocopherols, rosemary extract), emulsifiers (lecithin), humectants (glycerine, propylene
+glycol, sorbitol), processing aids (stearates, silica), colours (titanium dioxide, "Red 40") and salt, in the forms labels print ("Mono- and
+Diglycerides", "Lécithine de soja") (3.0.1; test C, where "vegetable glycerine" was counted as a source that does not name its plant). Only
+the name's head counts: "Animal Fat preserved with BHA" is a fat source (a generic one), bracketed or not. An ingredient "names its source" unless it is a generic name: meat, animal, poultry, fish, by-products, derivatives, digest, cereals,
 vegetable oils, natural flavor(s). "Chicken by-product meal" names its animal; what part is used is not what this checks.
 
 **Supplements** get no number: their purpose, dose and evidence vary by ingredient. They get the label facts, their active ingredients with
@@ -319,8 +336,15 @@ Nothing is marked as reviewed by a person unless it was.
   - An unreadable mark inside it drops it, and a line continuing a line with an unreadable mark is not read on its own
     (the mark may be "not").
   - (Test A's can, 2026-11-02: one reading gave no statement and the other the whole one, so the photo was not scored.)
-- Of two analyses of the same product, one without a usable moisture guarantee gives way to one with it that has the protein, fat
-  and fiber guarantees and agrees with it on each of them (2.5.1), as one without those guarantees already gave way to a fuller one.
+- For one owner's result only (2.5.1), an analysis without a usable moisture guarantee is completed from the owner's own reading of the
+  label when that reading gives a usable moisture guarantee and exactly the protein, fat and fiber in use (the same value and unit, and the
+  same min/max where the analysis in use states one): the rows the moisture is used with. The reading adds its moisture guarantee and every
+  row the analysis in use lacks; the rows in use stay as they are, and the added rows say "(your label photo)" when the analysis in use
+  comes from elsewhere. The added rows are re-derived on their own, so an EU name among them never clears the min/max of the rows in use.
+  The note names what was added. A reading that differs on protein, fat or fiber adds nothing. Disputed or conflicted readings never
+  count. The shared record never gets it: it is written before the owner's readings are merged, and a label photo matched to a barcode
+  fills only what the shared record lacks. Database, page and photo analyses otherwise keep the rule above: one with protein, fat and fiber
+  is never replaced. (Test A's can: one reading lost the wrapped moisture row and blocked the owner's fuller reading of the same label.)
 - "Feeding trials" or "feeding protocols" alone is not an adequacy statement (2.5.0): a callout such as "Clinically
   proven in feeding trials to reduce hairballs" was read as "complete and balanced" before. A statement substantiated by
   feeding tests says so in formal words ("Animal feeding tests using AAFCO procedures substantiate …"). A saved record's
@@ -386,8 +410,14 @@ Nothing is marked as reviewed by a person unless it was.
   - rows printed one per line or inline as on EU packs ("Protéine : 37,0 %, Matières grasses : 13,0 %, …"); a name printed above its value, a name wrapped inside its brackets, or a unit printed on the next line is joined to it — but not a complete name above (one that ends with its min/max, as in a bilingual table) or a group heading ("Water-soluble vitamins");
   - each row needs a name of its own that names one nutrient (or, for another row, a real word), with no other number in it and balanced brackets, and a printed unit (or a "(%)" heading); a fibre fraction ("total dietary fibre") is not the crude fibre guarantee, and fatty acids ("acidi grassi") are not fat;
   - a min/max printed after the value is the row's own; one wrapped onto the next line ("6.0%\nmin, Crude Fiber") goes to the row before;
-  - a value wrapped onto the next line after its row's name ("…, Moisture (Max.)" / "78%, Taurine (Min.) 0.05%") is that row's (2.5.1:
-    test A's can, where a faithful transcription lost the moisture guarantee);
+  - a value wrapped onto the next line after its row's name ("…, Moisture (Max.)" / "78%, Taurine (Min.) 0.05%") is that row's, whatever
+    separates the rows (a comma, a bullet, a space) and however often the list wraps (2.5.1: test A's can, where a faithful transcription
+    lost the moisture guarantee). Never where the lines around show names and values printed apart, which value is whose being unclear:
+    a value alone on its line with another value first on the next (values stacked below their names; an energy statement aside); a name
+    on a line of its own under another such name (one nutrient, or ending with its printed min/max, listing nothing: names stacked above
+    their values) or under a value alone (values printed above their names); or either line ambiguous on its own ("1.2%, (max) 1.7%"),
+    which would make the other's rows ambiguous too. An ingredient list above lists several things, so it is not a stacked name. A count
+    grouped twice in thousands ("80,000,000 CFU/lb") is not read (nothing wrong is read: the row is left out);
   - nothing ambiguous is read: a printed line where a value has no name of its own ("1.0% / 1.5%", "30% 28%") or which gives a range is skipped; a section where values are printed before their names ("Minimum: 30% Crude Protein, …") is not read at all; nor are values printed inline without units, a space that may be a thousands separator ("36 900 UI/kg"), one value under two nutrients ("oméga 3 et 6"), anything an unreadable mark touches, and a nutrient given two different values (two recipes, as fed and dry matter); "15,000 IU/kg" is fifteen thousand.
 - Readings made by `label-extract-2.3.0` stay in use: their name was agreed under the earlier rule (the same name for 80%
   of its words) and their brand and species without the check that they are printed. A name, brand or type an earlier

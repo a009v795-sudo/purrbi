@@ -1,11 +1,18 @@
 // Merging product facts from several sources and deciding what is still missing.
 import { ingredientsInUse, rowsInUse21, type ValidatedLabel } from '../ai/labelExtract';
-import { CORE_GA, dryMatterPercent, findNutrient, hasCoreGuaranteedAnalysis } from '../domain/nutrition';
-import type { GuaranteedAnalysisEntry } from '../domain/types';
+import { dryMatterPercent, findNutrient, hasCoreGuaranteedAnalysis } from '../domain/nutrition';
+import { stillNeededOnceListed } from '../domain/score';
+import type { GeneralAssessment, GuaranteedAnalysisEntry } from '../domain/types';
 import type { ProductCategory, ProductFacts, ScopeResult, SourceRef } from '../domain/types';
 
 type FactKey = 'productName' | 'brand' | 'imageUrl' | 'ingredientsText' | 'ingredients' | 'guaranteedAnalysis' | 'calories' | 'adequacy' | 'feedingDirections' | 'activeIngredients' | 'packageSize';
 export const FACT_KEYS: FactKey[] = ['productName', 'brand', 'imageUrl', 'ingredientsText', 'ingredients', 'guaranteedAnalysis', 'calories', 'adequacy', 'feedingDirections', 'activeIngredients', 'packageSize'];
+
+/** A moisture guarantee in % that a dry-matter comparison can use (the scorer needs it for a complete food). */
+export function hasUsableMoisture(ga: GuaranteedAnalysisEntry[] | undefined): boolean {
+  const m = findNutrient(ga, 'moisture');
+  return m?.unit === '%' && dryMatterPercent(10, m.value) !== null;
+}
 
 /**
  * Fills fields that `base` lacks from `extra`. Existing facts are never overwritten, with two exceptions:
@@ -13,30 +20,46 @@ export const FACT_KEYS: FactKey[] = ['productName', 'brand', 'imageUrl', 'ingred
  * gives way to a fuller one, so a partial reading never blocks the label photo that completes it; and a
  * feeding statement that names no species, life stage or standard gives way to one that does.
  */
-/** A moisture guarantee in % that a dry-matter comparison can use (the scorer needs it for a complete food). */
-export function hasUsableMoisture(ga: GuaranteedAnalysisEntry[] | undefined): boolean {
-  const m = findNutrient(ga, 'moisture');
-  return m?.unit === '%' && dryMatterPercent(10, m.value) !== null;
+const CORE_ROWS = ['crude_protein', 'crude_fat', 'crude_fiber'] as const;
+/** A reading's row `x` gives the row in use `r`: the same value and unit, and its min/max unless `r` states none. */
+const sameRow = (r: GuaranteedAnalysisEntry, x: GuaranteedAnalysisEntry | undefined) =>
+  !!x && x.unit === r.unit && (x.qualifier === r.qualifier || r.qualifier === 'not_stated') && Math.abs(x.value - r.value) < 1e-9;
+const rowKey = (e: GuaranteedAnalysisEntry) => (e.nutrient === 'other' ? `other|${e.label.toLowerCase()}` : e.nutrient);
+
+/**
+ * For one owner's result only (2.5.1, reviews of 2.5.1): what an owner's own reading of the label adds to an analysis in
+ * use that has no usable moisture guarantee. The reading must give a usable moisture guarantee and exactly the protein,
+ * fat and fiber of the analysis in use (the same value and unit, and the same min/max where the analysis in use states
+ * one), the rows the moisture is used with for the dry-matter comparison. It adds its moisture guarantee and every row
+ * the analysis in use lacks; the rows in use stay as they are. A reading that differs on protein, fat or fiber adds
+ * nothing: which analysis is this package's is unclear. The shared record never gets it (it is written before).
+ */
+export function rowsFromOwnReading(inUse: GuaranteedAnalysisEntry[] | undefined, readings: GuaranteedAnalysisEntry[][]): { reading: GuaranteedAnalysisEntry[]; added: GuaranteedAnalysisEntry[] } | null {
+  if (!inUse?.length || hasUsableMoisture(inUse)) return null;
+  const reading = readings.find((c) => hasUsableMoisture(c) && CORE_ROWS.every((k) => !!findNutrient(inUse, k) && sameRow(findNutrient(inUse, k)!, findNutrient(c, k))));
+  if (!reading) return null;
+  const moisture = findNutrient(reading, 'moisture')!;
+  const have = new Set(inUse.filter((e) => e.nutrient !== 'moisture').map(rowKey));
+  return { reading, added: reading.filter((e) => (e.nutrient === 'moisture' ? e === moisture : !have.has(rowKey(e)))) };
+}
+
+/** How an owner's reading's protein, fat and fiber differ from the analysis in use ("crude fat 6% vs 5.5%"), for its note. */
+export function coreDifferences(inUse: GuaranteedAnalysisEntry[] | undefined, reading: GuaranteedAnalysisEntry[]): string[] {
+  return CORE_ROWS.flatMap((k) => {
+    const a = findNutrient(inUse, k);
+    const b = findNutrient(reading, k);
+    if (!a && !b) return [];
+    if (a && sameRow(a, b)) return [];
+    const name = k.replace('crude_', 'crude ');
+    return [`${name} ${b ? `${b.value}${b.unit}` : 'not read'} vs ${a ? `${a.value}${a.unit}` : 'none'}`];
+  });
 }
 
 export function fillMissing(base: ProductFacts, extra: Partial<ProductFacts>): { facts: ProductFacts; filled: string[] } {
   const facts: ProductFacts = { ...base, classificationSignals: [...base.classificationSignals], sources: [...base.sources] };
   const filled: string[] = [];
   const partialAnalysis = (ga: ProductFacts['guaranteedAnalysis']) => !!ga && !hasCoreGuaranteedAnalysis(ga.value);
-  // An analysis without a usable moisture guarantee gives way to one with it that has the protein, fat and fiber
-  // guarantees and agrees with it on each of them (2.5.1: one reading of a can lost the wrapped "Moisture (Max.) / 78%"
-  // row and blocked a fuller reading of the same label, so the food could not be scored).
-  const agreesOnCore = (a: GuaranteedAnalysisEntry[], b: GuaranteedAnalysisEntry[]) =>
-    CORE_GA.every((k) => {
-      const [x, y] = [findNutrient(a, k), findNutrient(b, k)];
-      return !x || !y || (x.unit === y.unit && Math.abs(x.value - y.value) <= 0.5);
-    });
-  const addsMoisture =
-    !!facts.guaranteedAnalysis && !!extra.guaranteedAnalysis && !hasUsableMoisture(facts.guaranteedAnalysis.value) && hasUsableMoisture(extra.guaranteedAnalysis.value) &&
-    hasCoreGuaranteedAnalysis(extra.guaranteedAnalysis.value) && agreesOnCore(facts.guaranteedAnalysis.value, extra.guaranteedAnalysis.value);
-  const fuller =
-    (partialAnalysis(facts.guaranteedAnalysis) && !!extra.guaranteedAnalysis && (hasCoreGuaranteedAnalysis(extra.guaranteedAnalysis.value) || extra.guaranteedAnalysis.value.length > facts.guaranteedAnalysis!.value.length)) ||
-    addsMoisture;
+  const fuller = partialAnalysis(facts.guaranteedAnalysis) && !!extra.guaranteedAnalysis && (hasCoreGuaranteedAnalysis(extra.guaranteedAnalysis.value) || extra.guaranteedAnalysis.value.length > facts.guaranteedAnalysis!.value.length);
   for (const k of FACT_KEYS) {
     const v = extra[k];
     const clearer = k === 'adequacy' && facts.adequacy?.value.type === 'unclear' && !!extra.adequacy && extra.adequacy.value.type !== 'unclear';
@@ -327,8 +350,11 @@ export function retrievalStatus(purpose: PhotoPurpose, ctx: RetrievalContext): F
   return out('not_searched', `The manufacturer’s page hasn’t been searched yet: ${why}.`);
 }
 
-/** Only what is missing for this product type; a photo of several panels satisfies several requests. */
-export function missingInfo(facts: ProductFacts, scope: ScopeResult, category: ProductCategory): PhotoRequest[] {
+/**
+ * Only what is missing for this product type; a photo of several panels satisfies several requests. `scored`: the score
+ * is shown, so a request completes the assessment and never says it is needed for the score (review of 2.5.1).
+ */
+export function missingInfo(facts: ProductFacts, scope: ScopeResult, category: ProductCategory, scored = false): PhotoRequest[] {
   if (scope.status === 'out_of_scope') return [];
   const out: PhotoRequest[] = [];
   const identityUnclear = !facts.productName || scope.status === 'unknown' || category === 'unknown';
@@ -344,21 +370,21 @@ export function missingInfo(facts: ProductFacts, scope: ScopeResult, category: P
   if (!facts.ingredients?.value.length) {
     out.push({ purpose: 'ingredients', title: 'Ingredient list', reason: 'Needed to check ingredients and any allergies you recorded.' });
   }
-  // A complete food is scored on protein and fat as dry matter, which needs the moisture guarantee (2.5.1: it was not
-  // asked for, so a food missing only moisture stayed unscored with nothing to add).
-  const onlyMoisture =
-    category === 'complete_food' && !!facts.adequacy && hasCoreGuaranteedAnalysis(facts.guaranteedAnalysis?.value) && !hasUsableMoisture(facts.guaranteedAnalysis?.value);
-  const needsNutrition =
-    (category === 'complete_food' && (!facts.adequacy || !hasCoreGuaranteedAnalysis(facts.guaranteedAnalysis?.value) || onlyMoisture)) ||
-    ((category === 'treat' || category === 'complementary') && !hasCoreGuaranteedAnalysis(facts.guaranteedAnalysis?.value));
-  if (needsNutrition) {
+  const core = hasCoreGuaranteedAnalysis(facts.guaranteedAnalysis?.value);
+  if (category === 'complete_food' && !facts.adequacy) {
     out.push({
       purpose: 'nutrition',
-      title: onlyMoisture ? 'Guaranteed analysis, with moisture' : category === 'complete_food' ? 'Guaranteed analysis and "complete and balanced" statement' : 'Guaranteed analysis',
-      reason: onlyMoisture
-        ? 'The moisture guarantee wasn’t read. Needed to compare protein and fat as dry matter, and to score it.'
+      title: core ? '"Complete and balanced" statement' : 'Guaranteed analysis and "complete and balanced" statement',
+      reason: 'Needed to check what the food is complete and balanced for, and to score it.',
+    });
+  } else if ((category === 'complete_food' || category === 'treat' || category === 'complementary') && !core) {
+    out.push({
+      purpose: 'nutrition',
+      title: 'Guaranteed analysis',
+      reason: scored
+        ? 'The protein, fat and fiber guarantees aren’t all listed yet; they complete the assessment.'
         : category === 'complete_food'
-          ? 'Needed to check what the food is complete and balanced for, and to score it.'
+          ? 'Needed to compare protein and fat with the nutrient profiles, and to score it.'
           : 'Needed to score this product.',
     });
   }
@@ -366,23 +392,53 @@ export function missingInfo(facts: ProductFacts, scope: ScopeResult, category: P
 }
 
 /**
- * No dead end: when the score is withheld for something no photo request covers, the request that would supply it
- * (2.5.1). The scorer and `missingInfo` decide separately, and a gap between them left a result unscored with nothing
- * to add.
+ * The request for a moisture guarantee (2.5.1). Research and the database's label images never add one: an analysis in
+ * use is never replaced by another source's (only by the owner's own reading of the whole analysis, for their result),
+ * so the card says what Purrbi has rather than promising a search (review of 2.5.1).
  */
-export function requestsForWithheldScore(assessment: { score: number | null; missingForScore?: string[] }, scope: ScopeResult, requests: PhotoRequest[]): PhotoRequest[] {
-  if (assessment.score !== null || !assessment.missingForScore?.length || scope.status !== 'supported') return [];
-  const have = new Set(requests.map((r) => r.purpose));
-  const out: PhotoRequest[] = [];
-  const add = (r: PhotoRequest) => {
-    if (have.has(r.purpose)) return;
-    have.add(r.purpose);
-    out.push(r);
+export const MOISTURE_REQUEST: PhotoRequest = { purpose: 'nutrition', title: 'Guaranteed analysis, with moisture', reason: 'Needed to compare protein and fat as dry matter, and to score it.' };
+export const isMoistureRequest = (r: PhotoRequest) => r.purpose === MOISTURE_REQUEST.purpose && r.title === MOISTURE_REQUEST.title;
+
+/** The moisture request's reason once the owner's photo of the analysis was read without one (review of 2.5.1). */
+export const MOISTURE_RETAKE_REASON = 'If the panel prints one, a sharper photo of it is needed to compare protein and fat as dry matter, and to score it.';
+
+/**
+ * Why the moisture guarantee is still missing: the analysis in use, named by its source, gives none (and, `readWithout`,
+ * the owner's photo of the analysis was read without one).
+ */
+export function moistureStatus(facts: ProductFacts, readWithout = false): FieldStatus {
+  const s = facts.guaranteedAnalysis?.source;
+  const from = !s ? '' : s.sourceType === 'user_label' ? ' (from your label photo)' : s.sourceType === 'verified_label' ? ' (from a label photo matched to this barcode)' : ` (from ${s.sourceName})`;
+  const photo = readWithout && s?.sourceType !== 'user_label' && s?.sourceType !== 'verified_label' ? ', and your label photo of the analysis was read without one' : '';
+  return { purpose: 'nutrition', status: 'not_found', detail: `The guaranteed analysis Purrbi has${from} gives no moisture guarantee${photo}.` };
+}
+
+/**
+ * No dead end: the photo requests with what a withheld score still needs (2.5.1). The scorer and `missingInfo` decide
+ * separately, and a gap between them left a result unscored with nothing to add. Only for a withheld score: nothing is
+ * added for a scored food (review of 2.5.1). A need no request covers adds the request that supplies it. A treat's or
+ * topper's need for its calorie content or feeding statement (also the one it would still have once its missing ingredient
+ * list is in) rewords the nutrition request it shares a panel with, so one round of photos asks for all of it.
+ */
+export function withScoreNeeds(
+  assessment: Pick<GeneralAssessment, 'score' | 'missingForScore' | 'category' | 'components' | 'scoreCoverage'>,
+  scope: ScopeResult,
+  requests: PhotoRequest[],
+): PhotoRequest[] {
+  if (assessment.score !== null || !assessment.missingForScore.length || scope.status !== 'supported') return requests;
+  const out = requests.map((r) => ({ ...r }));
+  const ask = (r: PhotoRequest, reword = false) => {
+    const same = out.find((x) => x.purpose === r.purpose);
+    if (!same) out.push(r);
+    else if (reword) Object.assign(same, { title: r.title, reason: r.reason });
   };
   for (const m of assessment.missingForScore) {
-    if (/ingredient/i.test(m)) add({ purpose: 'ingredients', title: 'Ingredient list', reason: 'Needed to check ingredients and to score this product.' });
-    else if (/product type/i.test(m)) add({ purpose: 'front', title: 'Front of the package', reason: 'To confirm the product name, brand, species and product type.' });
-    else add({ purpose: 'nutrition', title: 'Nutrition panel', reason: `Needed to score this product: Purrbi still needs the ${m}.` });
+    if (/ingredient/i.test(m)) ask({ purpose: 'ingredients', title: 'Ingredient list', reason: 'Needed to check ingredients and to score this product.' });
+    else if (/moisture/i.test(m)) ask(MOISTURE_REQUEST);
+    else if (/product type/i.test(m)) ask({ purpose: 'front', title: 'Front of the package', reason: 'To confirm the product name, brand, species and product type.' });
+    else ask({ purpose: 'nutrition', title: 'Nutrition panel', reason: `Needed to score this product: Purrbi still needs the ${m}.` }, /calorie|feeding statement/i.test(m));
   }
+  const later = stillNeededOnceListed(assessment);
+  if (later) ask({ purpose: 'nutrition', title: 'Nutrition panel', reason: `Needed to score this product: with the ingredient list, Purrbi still needs the ${later}.` }, true);
   return out;
 }

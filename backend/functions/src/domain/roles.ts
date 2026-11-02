@@ -37,7 +37,9 @@ const TABLE = ROLES.map((r) => ({
 }));
 
 // Words after the head that only describe it: "water sufficient for processing", "chicken fat preserved with mixed tocopherols".
-const POSTMODIFIER = /\s(?:sufficient\s+for|for\s+processing|(?:naturally\s+)?preserved\s+(?:with|by|using)|(?:as\s+)?an?\s+source\s+of|source\s+of|added\s+for|used\s+as)\b.*$/;
+const POSTMODIFIER = /\s(?:sufficient\s+for|for\s+processing|(?:naturally\s+)?(?:preserved|stabili[sz]ed)\s+(?:with|by|using)|(?:as\s+)?an?\s+source\s+of|source\s+of|added\s+for|used\s+as)\b.*$/;
+/** A normalized ingredient name without the words after its head that only describe it ("animal fat preserved with bha"). */
+export const withoutPostmodifier = (normalized: string) => normalized.replace(POSTMODIFIER, '');
 // "Vitamin E supplement": the nutrient is what it is, "supplement" says only that it was added.
 const SUPPLEMENT = /\s(?:supplements?|supplementation)$/;
 // "huile de saumon", "proteines de volaille": the head comes before "de".

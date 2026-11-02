@@ -24,6 +24,7 @@ import { ingredientNotes, KB_VERSION } from './kb';
 import { aafcoTarget, describeCalories, dryMatterPercent, energyPerKgDm, findNutrient, hasCoreGuaranteedAnalysis } from './nutrition';
 import { nutritionContext, nutritionNotes } from './nutritionContext';
 import { normalizeIngredientName, parseIngredientList, type ParsedIngredient } from './ingredients';
+import { withoutPostmodifier } from './roles';
 import { categoryLabel } from './scope';
 import { assessSupplement } from './supplements';
 import type {
@@ -38,11 +39,13 @@ import type {
   Species,
 } from './types';
 
-export const METHODOLOGY_VERSION = 'purrbi-score-3.0.0';
+export const METHODOLOGY_VERSION = 'purrbi-score-3.0.1';
 /** A documented concern for the product's species caps the score here. */
 export const HAZARD_CAP = 20;
 /** A number is shown only when the parts assessed are worth at least this many points. */
 export const MIN_COVERAGE = 70;
+// What a treat's or topper's ingredient list is worth.
+const TREAT_INGREDIENT_POINTS = 40;
 
 /** AAFCO minimums, % of dry matter (AAFCO Dog and Cat Food Nutrient Profiles). */
 export const AAFCO_MIN: Record<Species, Record<'adult' | 'growth', { protein: number; fat: number }>> = {
@@ -117,8 +120,10 @@ function hazards(notes: IngredientNote[]): IngredientNote[] {
 const speciesNames = (s: ScopeResult['species']) => (s === 'cat' ? 'cats' : s === 'dog' ? 'dogs' : 'cats or dogs');
 
 // Ingredients that are not a source of the food: processing liquids, vitamin and mineral additions and
-// technological additives. Left out when judging how clearly the main ingredients are named.
-const NOT_A_SOURCE = /\b(water|broth|stock|vitamins?|minerals?|mineralstoffe|substances minerales|sels mineraux|sustancias minerales|sostanze minerali|mineralen|premix|supplement|chelate|proteinate|chloride|sulfate|sulphate|phosphate|carbonate|oxide|iodide|iodate|selenite|selenium yeast|taurine|choline|menadione|gum|carrageenan|agar|gelatin|tocopherols?|rosemary extract|citric acid|salt|colou?r)\b/;
+// technological additives (the role table's thickeners, preservatives, emulsifiers, humectants, processing aids and
+// colours). Left out when judging how clearly the main ingredients are named. (Test C, 2026-11-02: "vegetable
+// glycerine", a humectant, was counted as a source that does not name its plant.)
+const NOT_A_SOURCE = /\b(water|broth|stock|vitamins?|minerals?|mineralstoffe|substances minerales|sels mineraux|sustancias minerales|sostanze minerali|mineralen|premix|supplement|chelate|proteinate|chloride|sulfate|sulphate|phosphate|carbonate|oxide|dioxide|iodide|iodate|selenite|selenium yeast|taurine|choline|menadione|gum|carrageenan|agar|gelatine?|pectin|alginate|konjac|modified starch|tocopherols?|rosemary extract|citric acid|bha|bht|ethoxyquin|potassium sorbate|sorbic acid|propionic acid|calcium propionate|sodium nitrite|propyl gallate|ascorbyl palmitate|lecithine?s?|mono-? (?:and|&) diglycerides|polysorbate(?: 80)?|stearates?|silicon dioxide|silica|glycerine?|glycerol|propylene glycol|sorbitol|salt|colou?rs?|colou?rants?|(?:red|yellow|blue) \d+)\b/;
 // Names that do not say which animal or plant the ingredient comes from ("meat by-products", "poultry fat",
 // "fish meal", "natural flavor"). "Chicken by-product meal" names its animal: what part of it is used is not
 // what this checks.
@@ -137,7 +142,8 @@ export function namedSource(name: string): boolean {
 /** The first five source ingredients (label order, blends and additives left out). */
 export function mainSources(ingredients: ParsedIngredient[]): ParsedIngredient[] {
   // "Chicken fat (preserved with mixed tocopherols)" is a fat source: what it is preserved with is not.
-  return ingredients.filter((i) => i.kind !== 'group' && !NOT_A_SOURCE.test(normalizeIngredientName(i.name.replace(/\([^)]*\)|\[[^\]]*\]/g, ' ')))).slice(0, 5);
+  // Only the name's head is tested ("Animal Fat preserved with BHA" is a fat source, not a preservative; review of 3.0.1).
+  return ingredients.filter((i) => i.kind !== 'group' && !NOT_A_SOURCE.test(withoutPostmodifier(normalizeIngredientName(i.name.replace(/\([^)]*\)|\[[^\]]*\]/g, ' '))))).slice(0, 5);
 }
 
 function namedSourcesComponent(ingredients: ParsedIngredient[], max: number): ScoreComponent {
@@ -218,6 +224,18 @@ function whatWouldReach(coverage: number, missing: ScoreComponent[]): string {
   const name = (c: ScoreComponent) => c.label.toLowerCase().replace(/\s*\(.*\)$/, '');
   const say = (set: ScoreComponent[], i: number) => (set.length === 1 ? `${i ? 'the ' : ''}${name(set[0])}` : `both the ${set.map(name).join(' and the ')}`);
   return minimal.length ? minimal.map(say).join(', or ') : missing.map(name).join(' and the ');
+}
+
+/**
+ * For a treat or topper withheld for its missing ingredient list: what it would still need once the list is in, so one
+ * round of photos asks for both (review of 2.5.1). The scorer names the coverage shortfall only once no essential part
+ * is missing. Null when the list alone would bring the coverage to the minimum.
+ */
+export function stillNeededOnceListed(a: Pick<GeneralAssessment, 'category' | 'missingForScore' | 'components' | 'scoreCoverage'>): string | null {
+  if ((a.category !== 'treat' && a.category !== 'complementary') || !a.missingForScore.includes('ingredient list')) return null;
+  const coverage = (a.scoreCoverage ?? 0) + TREAT_INGREDIENT_POINTS;
+  if (coverage >= MIN_COVERAGE) return null;
+  return whatWouldReach(coverage, a.components.filter((c) => c.status === 'unverified'));
 }
 
 function extraGuaranteesComponent(facts: ProductFacts, max: number): ScoreComponent {
@@ -381,7 +399,7 @@ export function assessGeneral(facts: ProductFacts, scope: ScopeResult): GeneralA
   } else {
     // treat or complementary
     if (!hasIngredients) missingForScore.push('ingredient list');
-    else components.push(namedSourcesComponent(ingredients, 40));
+    else components.push(namedSourcesComponent(ingredients, TREAT_INGREDIENT_POINTS));
     components.push(caloriesComponent(facts, 30, 'which helps keep treats and toppers under about 10% of daily calories'));
     components.push(
       adequacy && adequacy.type !== 'unclear'

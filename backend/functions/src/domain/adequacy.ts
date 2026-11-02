@@ -15,6 +15,16 @@ const EU_COMPLETE = /\b(aliment complet|alleinfutter(mittel)?|(alimento|pienso|m
 const EU_COMPLEMENTARY = /\b(aliment complementaire|erganzungsfutter(mittel)?|(alimento|pienso) complementario|(alimento|mangime) complementare|alimento complementar|aanvullend(e)? (dier)?voe(der|ding))\b/;
 const INTERMITTENT =
   /\b(intermittent|supplemental feeding|for supplemental|complementary (pet )?(food|feed)|complementary feedingstuff|not (a )?complete (and balanced )?(diet|food|meal)|not (a )?substitute for (a )?complete (pet )?(food|feed|diet)|as with all treats)\b/;
+// A treat's own way of saying it is not a complete diet ("Not intended as a meal replacement", "not meant to replace a
+// complete and balanced diet"; test C, 2026-11-02, under "Feeding guidelines"). Read only when the text makes no
+// substantiated claim: "… formulated to meet … for adult maintenance. Not intended as the sole diet for kittens." is a
+// complete food's statement (review of 3.0.1).
+const TREAT_NOT_COMPLETE =
+  /\bnot (?:intended|meant|designed) (?:as|to be (?:fed|used) as|to replace) (?:an? |the )?(?:(?:meal|diet) replacement|(?:(?:complete|sole|main|whole)(?:,? (?:and|&) balanced|, balanced)?) (?:diet|food|meal|source of nutrition))\b|\bnot (?:intended|meant|designed) to replace (?:an? |the |your pet'?s? )?(?:regular )?meals?\b|\bnot an? (?:meal|diet) replacement\b/;
+const SUBSTANTIATED = /\b(formulated to meet|nutritional levels established|animal feeding tests|substantiat\w*)\b/;
+// An analysis footnote names the AAFCO profiles without being a statement ("*Not recognized as an essential nutrient by
+// the AAFCO Cat Food Nutrient Profiles."; review of 3.0.1).
+const NOT_ESSENTIAL_FOOTNOTE = /\bnot (?:recogni[sz]ed|considered) (?:as )?an essential nutrient\b/;
 // A negated claim says the product is not complete: "not formulated to meet …", "does not meet …".
 const NEGATED = /\b(not (formulated|intended|designed) to meet|(does|do) not meet|not complete and balanced|not nutritionally complete)\b/;
 const COMPLETE =
@@ -51,7 +61,9 @@ export function parseAdequacyStatement(raw: string | null | undefined): Adequacy
   const t = norm(text);
 
   let type: AdequacyStatement['type'] = 'unclear';
-  if (INTERMITTENT.test(t) || EU_COMPLEMENTARY.test(t) || NEGATED.test(t)) type = 'intermittent';
+  if (NOT_ESSENTIAL_FOOTNOTE.test(t) && !SUBSTANTIATED.test(t)) type = 'unclear';
+  else if (INTERMITTENT.test(t) || EU_COMPLEMENTARY.test(t) || NEGATED.test(t)) type = 'intermittent';
+  else if (TREAT_NOT_COMPLETE.test(t) && !SUBSTANTIATED.test(t)) type = 'intermittent';
   else if (COMPLETE.test(t) || EU_COMPLETE.test(t)) type = 'complete';
   // Marketing copy ("complete and balanced nutrition for everyday feeding") is not an adequacy statement:
   // a real one names the species or the life stage, or the standard it was substantiated against. An EU
