@@ -72,15 +72,43 @@ describe('grounded label reading', () => {
     const glare: RawPanel = { ...clearPanel, legibility: 'partial', heading: '[?] analytiques', text: rows.replace('Humidité 10%', 'Humidité [?]') };
     const label = combineReadings(read([clearPanel]), read([glare], {}, 'model-b'), GTIN);
     expect(label.guaranteedAnalysis.map((g) => `${g.nutrient}:${g.value}`)).toEqual(['crude_protein:10', 'crude_fiber:1', 'crude_fat:8', 'ash:5.5']);
-    expect(label.rejected.at(-1)).toBe('readings: model-a: guaranteed_analysis; 5 rows [crude_protein 10%, crude_fiber 1%, crude_fat 8%, ash 5.5%, moisture 10%] / model-b: guaranteed_analysis (not clear: guaranteed_analysis); 4 rows [crude_protein 10%, crude_fiber 1%, crude_fat 8%, ash 5.5%]');
+    expect(label.rejected.at(-1)).toBe('readings: model-a: guaranteed_analysis; 5 rows [crude_protein 10%, crude_fiber 1%, crude_fat 8%, ash 5.5%, moisture 10%]; name "ultima Nature" / model-b: guaranteed_analysis (not clear: guaranteed_analysis); 4 rows [crude_protein 10%, crude_fiber 1%, crude_fat 8%, ash 5.5%]; name "ultima Nature"');
   });
   it('says the photo is unreadable when the readings share nothing', () => {
     const blurry: RawPanel = { kind: 'ingredients', legibility: 'partial', heading: null, text: 'COMPOSITION: Dinde [?] (22%), [?]' };
     const label = combineReadings(read([blurry], { product_name: null }), read([blurry], { product_name: null }, 'model-b'), GTIN);
-    expect(label).toMatchObject({ status: 'unreadable', reason: 'No label details were readable in this photo. Retake it closer to the panel you need.' });
+    // The panel both readings found but could not read in full is named (2.4.0). Its brand and species do not make a
+    // back-panel photo "read": only a front photo's do.
+    expect(label).toMatchObject({ status: 'unreadable', reason: 'The ingredient list is in the photo but not fully readable (cut off at an edge, curved or too small). Take it straight on, with the whole panel filling the frame.' });
     expect(label.uncertainFields).toEqual(['ingredients']);
     // What each reading saw is kept for tracing, even when nothing was read.
     expect(label.rejected).toEqual(['readings: model-a: ingredients (not clear: ingredients); 0 rows / model-b: ingredients (not clear: ingredients); 0 rows']);
+  });
+  // The owner's photos of test A (Whole Paws salmon pâté, 2026-11-02): one of three readings of the same front photo
+  // dropped the name, and the photo was called unreadable though both readings agreed on brand and species; the
+  // barcode side's ingredient panel is cut off at the photo's edge.
+  it('a front photo’s name agrees when one reading adds the brand or a type line; its agreed brand and species are read', () => {
+    const front: RawPanel = { kind: 'front', legibility: 'clear', heading: 'WHOLE PAWS', text: 'WHOLE PAWS\nBY WHOLE FOODS MARKET\nPREMIUM CAT FOOD\nGRAIN FREE\nSALMON PÂTÉ\nLOAF RECIPE\nNET WT 5.5 OZ (156g)' };
+    const ident = { brand: 'WHOLE PAWS', species_claim: 'cat' as const, product_type_claim: 'PREMIUM CAT FOOD' };
+    const withBrand = combineReadings(read([front], { ...ident, product_name: 'WHOLE PAWS GRAIN FREE SALMON PÂTÉ LOAF RECIPE' }), read([front], { ...ident, product_name: 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE' }, 'model-b'), GTIN);
+    expect(withBrand).toMatchObject({ status: 'processed', productName: 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE', brand: 'WHOLE PAWS', species: 'cat' });
+    const withType = combineReadings(read([front], { ...ident, product_name: 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE PREMIUM CAT FOOD' }), read([front], { ...ident, product_name: 'Grain Free Salmon Pâté Loaf Recipe' }, 'model-b'), GTIN);
+    expect(withType.productName).toBe('Grain Free Salmon Pâté Loaf Recipe');
+    // Names that are not the same name are not kept, but the front's agreed brand and species still are.
+    const other = combineReadings(read([front], { ...ident, product_name: 'SALMON' }), read([front], { ...ident, product_name: 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE' }, 'model-b'), GTIN);
+    expect(other).toMatchObject({ status: 'processed', productName: null, brand: 'WHOLE PAWS', species: 'cat', productTypeClaim: 'PREMIUM CAT FOOD' });
+    expect(combineReadings(read([front], { ...ident, product_name: 'CHICKEN FEAST' }), read([front], { ...ident, product_name: 'SALMON PÂTÉ LOAF' }, 'model-b'), GTIN).productName).toBeNull();
+    // Nothing agreed on a front photo: still unreadable.
+    const none = combineReadings(read([front], { product_name: 'A', brand: 'B', species_claim: 'not_visible', product_type_claim: null }), read([front], { product_name: 'C', brand: 'D', species_claim: 'not_visible', product_type_claim: null }, 'model-b'), GTIN);
+    expect(none.status).toBe('unreadable');
+  });
+  it('a photo whose needed panel is cut off says which panel to retake', () => {
+    const barcode: RawPanel = { kind: 'barcode', legibility: 'clear', heading: null, text: '0 99482 48108 7' };
+    const side: RawPanel = { kind: 'other', legibility: 'clear', heading: null, text: 'DISTRIBUTED BY: WHOLE FOODS MARKET\nAUSTIN, TX 78703' };
+    const cutList: RawPanel = { kind: 'ingredients', legibility: 'partial', heading: null, text: '[?] Guar Gum, Salt, [?] Amino Acid Chelate, [?]' };
+    const cutGuide: RawPanel = { kind: 'feeding_directions', legibility: 'partial', heading: 'Feeding Guidelines', text: 'For adult cats, [?]' };
+    const label = combineReadings(read([barcode, side], { product_name: null, brand: null, species_claim: 'not_visible', product_type_claim: null, barcode_digits: '099482481087' }), read([barcode, side, cutGuide, cutList], { product_name: null, brand: null, species_claim: 'not_visible', product_type_claim: null, barcode_digits: '099482481087' }, 'model-b'), '00099482481087');
+    expect(label).toMatchObject({ status: 'unreadable', reason: 'The feeding guide and ingredient list are in the photo but not fully readable (cut off at an edge, curved or too small). Take it straight on, with the whole panel filling the frame.' });
   });
   it('two readings agree whether a model kept the printed lines of an inline analysis or put one row per line', () => {
     // As on a real French bag (Purina ONE chat stérilisé): one model kept the printed lines, the other did not.

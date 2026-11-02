@@ -17,12 +17,12 @@ import { chatJson } from './openai';
 
 export { analysisRows };
 
-export const LABEL_EXTRACTION_VERSION = 'label-extract-2.3.0'; // 2.2.0: analyses printed inline ("Protéine 37 %, Matières grasses 13 %") are read row by row; 2.3.0: an adequacy line is read from a partly legible panel too
+export const LABEL_EXTRACTION_VERSION = 'label-extract-2.4.0'; // 2.2.0: analyses printed inline ("Protéine 37 %, Matières grasses 13 %") are read row by row; 2.3.0: an adequacy line is read from a partly legible panel too; 2.4.0: a front photo's name agrees when one reading adds the brand or a type line, and its agreed brand and species count as read; a panel seen but not fully readable is said as such
 /**
  * Readings still used: by 2.2.0 as they were saved (2.3.0 only reads an adequacy line 2.2.0 left out); by
  * 2.1.0 as the current rules use them (`readingInUse`), so owners are not asked for their photos again.
  */
-export const LABEL_READINGS_IN_USE: ReadonlySet<string> = new Set(['label-extract-2.1.0', 'label-extract-2.2.0', LABEL_EXTRACTION_VERSION]);
+export const LABEL_READINGS_IN_USE: ReadonlySet<string> = new Set(['label-extract-2.1.0', 'label-extract-2.2.0', 'label-extract-2.3.0', LABEL_EXTRACTION_VERSION]);
 
 // Food-level bounds for minor nutrients: above them, 2.1.0 probably dropped a leading point (".09%" read as 9).
 const MINOR_BOUND: Partial<Record<NutrientKey, number>> = { magnesium: 1, taurine: 1, sodium: 3, calcium: 6, phosphorus: 5, omega_3: 5, omega_6: 10, dha: 3, epa: 3 };
@@ -279,10 +279,49 @@ export function parseReading(raw: RawLabelExtraction, model: string): Reading {
 
 const agreeText = (a: string | null, b: string | null, min: number) => !!a && !!b && wordAgreement(a, b) >= min;
 
+/**
+ * The product name two readings agree on. One reading may put the brand in front ("WHOLE PAWS GRAIN FREE SALMON PÂTÉ
+ * LOAF RECIPE") or the type line after it ("… LOAF RECIPE PREMIUM CAT FOOD"): the words both share are the name, when
+ * they are at least three and half of the longer reading's (the owner's photo of test A, 2026-11-02: one of three
+ * readings of the same front photo dropped its name, and with it the whole photo).
+ */
+function agreedName(a: string | null, b: string | null, brand: string | null): string | null {
+  if (!a || !b) return null;
+  if (wordAgreement(a, b) >= 0.8) return a;
+  const withoutBrand = (n: string) => {
+    if (!brand) return n;
+    const want = words(brand).join(' ');
+    const tokens = n.split(/\s+/).filter(Boolean);
+    const seen: string[] = [];
+    for (let k = 0; k < tokens.length; k++) {
+      seen.push(...words(tokens[k]));
+      if (seen.join(' ') === want) return tokens.slice(k + 1).join(' ') || n;
+      if (seen.length >= want.split(' ').length) break;
+    }
+    return n;
+  };
+  const [sa, sb] = [withoutBrand(a), withoutBrand(b)];
+  if (wordAgreement(sa, sb) >= 0.8) return sa.length <= sb.length ? sa : sb;
+  const [short, long] = words(sa).length <= words(sb).length ? [sa, sb] : [sb, sa];
+  const n = words(short).length;
+  return n >= 3 && n * 2 >= words(long).length && wordAgreement(short, long, true) >= 0.9 ? short : null;
+}
+
+/** What each panel kind is called when a photo shows it but it could not be read in full. */
+const PANEL_NAMES: Record<string, string> = {
+  ingredients: 'ingredient list',
+  active_ingredients: 'active ingredients',
+  guaranteed_analysis: 'guaranteed analysis',
+  adequacy_statement: 'feeding statement',
+  calorie_statement: 'calorie statement',
+  feeding_directions: 'feeding guide',
+};
+
 /** What one reading saw, for tracing a disagreement: panels, the ones not fully legible, analysis rows. */
 function describeReading(r: Reading): string {
   const rows = r.analysis.map((e) => `${e.nutrient === 'other' ? e.label.slice(0, 12) : e.nutrient} ${e.value}${e.unit}`).join(', ');
-  return `${r.model.replace(/-\d{4}-\d{2}-\d{2}$/, '')}: ${r.panels.join('+') || 'no panels'}${r.unclear.length ? ` (not clear: ${r.unclear.join('+')})` : ''}; ${r.analysis.length} rows${rows ? ` [${rows.slice(0, 120)}]` : ''}`;
+  const name = r.productName ? `; name "${r.productName.slice(0, 40)}"` : '';
+  return `${r.model.replace(/-\d{4}-\d{2}-\d{2}$/, '')}: ${r.panels.join('+') || 'no panels'}${r.unclear.length ? ` (not clear: ${r.unclear.join('+')})` : ''}; ${r.analysis.length} rows${rows ? ` [${rows.slice(0, 120)}]` : ''}${name}`;
 }
 
 /** Keeps only what both readings say; everything else is listed in `rejected`. */
@@ -351,17 +390,26 @@ export function combineReadings(a: Reading, b: Reading, scanGtin14: string): Val
   if (a.actives.length + b.actives.length > 0 && out.activeIngredients.length < Math.max(a.actives.length, b.actives.length)) rejected.push('active ingredients: not every line was read the same way twice');
 
   out.feedingDirections = agreeText(a.feeding, b.feeding, 0.85) ? a.feeding : null;
-  out.productName = agreeText(a.productName, b.productName, 0.8) ? a.productName : null;
   out.brand = agreeText(a.brand, b.brand, 0.8) ? a.brand : null;
+  out.productName = agreedName(a.productName, b.productName, out.brand ?? a.brand ?? b.brand);
   out.productTypeClaim = agreeText(a.productTypeClaim, b.productTypeClaim, 0.8) ? a.productTypeClaim : null;
   out.species = a.species === b.species ? a.species : 'unknown';
   out.rejected = rejected;
 
-  const anything = out.ingredients.length || out.guaranteedAnalysis.length || out.calories.length || out.adequacy || out.productName || out.activeIngredients.length;
+  // A front photo's identity agreed by both readings (brand, who it is for, product type) is read too, with or
+  // without the name: it is what the front is asked for.
+  const frontPhoto = a.panels.includes('front') && b.panels.includes('front');
+  const identity = frontPhoto && (!!out.brand || out.species !== 'unknown' || !!out.productTypeClaim);
+  const anything = out.ingredients.length || out.guaranteedAnalysis.length || out.calories.length || out.adequacy || out.productName || out.activeIngredients.length || identity;
   if (!anything) {
+    // A panel both readings found but could not read in full is named: the owner can see what to retake.
+    const seenNotClear = [...new Set([...a.unclear, ...b.unclear])].filter((k) => PANEL_NAMES[k] && a.panels.concat(b.panels).includes(k)).map((k) => PANEL_NAMES[k]);
+    const list = (xs: string[]) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}` : xs[0]);
     const reason = rejected.length
       ? 'Parts of the label could not be read reliably. Retake the photo closer, in good light and straight on.'
-      : 'No label details were readable in this photo. Retake it closer to the panel you need.';
+      : seenNotClear.length
+        ? `The ${list(seenNotClear)} ${seenNotClear.length > 1 ? 'are' : 'is'} in the photo but not fully readable (cut off at an edge, curved or too small). Take it straight on, with the whole panel filling the frame.`
+        : 'No label details were readable in this photo. Retake it closer to the panel you need.';
     // What each reading saw, so a photo that gave nothing can be traced (panels, legibility, rows).
     const seen = rejected.some((r) => r.startsWith('readings: ')) ? [] : [`readings: ${describeReading(a)} / ${describeReading(b)}`];
     return { ...base, rejected: [...rejected, ...seen], reason };
