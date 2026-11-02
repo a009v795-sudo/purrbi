@@ -8,6 +8,11 @@
 //                and only the backend does that;
 //   disputed     it conflicts with this barcode's public record (another recipe, another analysis):
 //                its details are not used, and the owner is asked to check the package.
+// A photo whose barcode is the scanned one shows this package, so when its only conflict is one analysis row whose last
+// digit reads differently (26% vs 28%: glare, a stylised digit), the record and the photo read that digit differently,
+// unless its name, statement or calorie content differs from the record too (another formula on the same barcode). It is
+// verified for the rest: none of its analysis is used (the record's stays), it is used for this owner only, and it is
+// never added to the shared record. Any other conflict (another recipe, a tens digit or a wider gap) still disputes it.
 import type { ValidatedLabel } from '../ai/labelExtract';
 import { normalizeIngredientName } from '../domain/ingredients';
 import { findNutrient } from '../domain/nutrition';
@@ -26,6 +31,22 @@ export interface Corroboration {
 const PUBLIC = new Set(['database', 'database_image', 'manufacturer', 'retailer_or_web', 'verified_label']);
 const words = (s: string) => new Set(s.toLowerCase().normalize('NFKD').replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter((w) => w.length > 1));
 
+// Digits glare or a stylised typeface lets both readings take for each other (both ways).
+const CONFUSABLE = new Set(['3:8', '6:8', '5:6', '0:8', '1:7', '5:8', '6:9', '8:9', '0:6', '0:9']);
+/**
+ * A misread of one printed digit: the two values written to the same decimals (3 and 3.8 as 3.0 and 3.8) differ only in
+ * their last digit, and those two digits are within 2 of each other or look alike (26 and 28, 10 and 12, 3.5 and 3.8).
+ * A tens digit (10 and 20) or a wider gap (1 and 9) is not a misread.
+ */
+function oneDigitApart(x: number, y: number): boolean {
+  const decimals = (v: number) => (String(v).split('.')[1] ?? '').length;
+  const d = Math.max(decimals(x), decimals(y));
+  const [s, t] = [x.toFixed(d), y.toFixed(d)];
+  if (s.length !== t.length || s.slice(0, -1) !== t.slice(0, -1)) return false;
+  const [p, q] = [Number(s.slice(-1)), Number(t.slice(-1))];
+  return p !== q && (Math.abs(p - q) <= 2 || CONFUSABLE.has(`${Math.min(p, q)}:${Math.max(p, q)}`));
+}
+
 export function corroborateLabel(label: ValidatedLabel, record: ProductFacts | null | undefined): Corroboration {
   const agreements: string[] = [];
   const conflicts: string[] = [];
@@ -34,6 +55,9 @@ export function corroborateLabel(label: ValidatedLabel, record: ProductFacts | n
   let compared = 0;
   let agreeing = 0;
   let partly = 0;
+  // One analysis row read one digit apart from the record, and nothing else differing (see the header).
+  let misread = 0;
+  let misreadOnly = false;
   if (label.barcodeMatch) {
     agreements.push('the barcode on the photo is the scanned one');
     tied = true;
@@ -66,20 +90,25 @@ export function corroborateLabel(label: ValidatedLabel, record: ProductFacts | n
       const b = findNutrient(label.guaranteedAnalysis, k);
       if (!a || !b || a.unit !== b.unit) continue;
       (Math.abs(a.value - b.value) <= 0.5 ? same : differ).push(`${k.replace('crude_', '')} ${b.value}% vs ${a.value}%`);
+      if (Math.abs(a.value - b.value) > 0.5 && oneDigitApart(a.value, b.value)) misread++;
     }
     if (differ.length) conflicts.push(`its guaranteed analysis differs from this barcode’s record (${differ.join(', ')})`);
     else if (same.length >= 2) agreements.push('its guaranteed analysis matches this barcode’s record');
+    misreadOnly = differ.length === 1 && misread === 1;
     if (same.length || differ.length) {
       compared++;
       if (!differ.length) agreeing++;
     }
   }
 
+  // Another name, statement or calorie content than the record's: another formula, never a misread digit.
+  let otherDiffers = false;
   const name = pub(record?.productName);
   if (name && label.productName) {
     const [a, b] = [words(name), words(label.productName)];
     const shared = [...b].filter((w) => a.has(w)).length;
     if (b.size && shared / Math.min(a.size, b.size) >= 0.6) agreements.push('its product name matches this barcode’s record');
+    else otherDiffers = true;
     compared++;
   }
 
@@ -89,11 +118,13 @@ export function corroborateLabel(label: ValidatedLabel, record: ProductFacts | n
     compared++;
     const stages = (x: { lifeStages: string[] }) => [...x.lifeStages].sort().join();
     if (adequacy.type === label.adequacy.type && adequacy.species === label.adequacy.species && stages(adequacy) === stages(label.adequacy)) agreeing++;
+    else otherDiffers = true;
   }
   const calories = pub(record?.calories);
   if (calories?.length && label.calories.length) {
     compared++;
     if (label.calories.some((c) => calories.some((d) => d.per === c.per && Math.abs(d.kcal - c.kcal) <= Math.max(1, d.kcal * 0.01)))) agreeing++;
+    else if (label.calories.some((c) => calories.some((d) => d.per === c.per))) otherDiffers = true;
   }
   const actives = pub(record?.activeIngredients);
   if (actives?.length && label.activeIngredients.length) {
@@ -102,6 +133,10 @@ export function corroborateLabel(label: ValidatedLabel, record: ProductFacts | n
     if (label.activeIngredients.every((x) => names.has(normalizeIngredientName(x.name)))) agreeing++;
   }
 
+  if (label.barcodeMatch && conflicts.length === 1 && misreadOnly && !otherDiffers) {
+    const rows = conflicts[0].replace(/^its guaranteed analysis differs from this barcode’s record \((.*)\)$/, '$1');
+    return { stage: 'verified', agreements, conflicts, note: `Matched by its barcode. Its analysis reads differently (${rows}); the saved analysis is kept.` };
+  }
   if (conflicts.length) {
     // A glare or a fold can make both readings misread the same digit, so a retake is the other way out.
     return { stage: 'disputed', agreements, conflicts, note: `Not used: ${conflicts[0]}. Check that the photo shows this package; if it does, retake it straight on, in good light.` };

@@ -24,6 +24,8 @@ export async function chatJson<T>(opts: {
   format: JsonSchemaFormat;
   timeoutMs: number;
   maxTokens?: number;
+  /** Tries after the first on a timeout, a rate limit or a server error (default 1). */
+  retries?: number;
 }): Promise<{ data: T; model: string; usage: unknown }> {
   const reasoning = isReasoningModel(opts.model);
   const body = {
@@ -46,7 +48,7 @@ export async function chatJson<T>(opts: {
     headers: { Authorization: `Bearer ${requireKey(opts.apiKey)}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
     timeoutMs: opts.timeoutMs,
-    retries: 1,
+    retries: opts.retries ?? 1,
   });
   const choice = json?.choices?.[0];
   if (choice?.message?.refusal) throw new SourceError('OpenAI', 'parse', `model refused: ${choice.message.refusal.slice(0, 200)}`);

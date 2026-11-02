@@ -4,7 +4,7 @@
 // full analysis, adequacy statement and calorie content that the photo does not show.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { gs1CheckDigit } from '../../src/domain/barcode';
-import { analysisRows, combineReadings, extractLabel, LABEL_EXTRACTION_VERSION, panelsReadDifferentlySince, parseReading, readingInUse, type RawLabelExtraction, type RawPanel, type ValidatedLabel } from '../../src/ai/labelExtract';
+import { analysisRows, combineReadings, extractLabel, LABEL_EXTRACTION_VERSION, panelsReadDifferentlySince, parseReading, readingInUse, THIRD_READING_AFTER_MS, THIRD_READING_MS, thirdReadingModel, type RawLabelExtraction, type RawPanel, type ValidatedLabel } from '../../src/ai/labelExtract';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -403,7 +403,8 @@ describe('grounded label reading', () => {
     expect(readingInUse(clean)).toBe(clean); // unchanged, so it is not compared with the record again
   });
   it('after a new reader, the database label images it reads differently are read once more', () => {
-    expect([...panelsReadDifferentlySince('label-extract-2.3.0')]).toEqual(['front']);
+    expect([...panelsReadDifferentlySince('label-extract-2.4.0')]).toEqual(['nutrition']);
+    expect([...panelsReadDifferentlySince('label-extract-2.3.0')].sort()).toEqual(['front', 'nutrition']);
     expect([...panelsReadDifferentlySince('label-extract-2.2.0')].sort()).toEqual(['front', 'nutrition']);
     expect([...panelsReadDifferentlySince('label-extract-2.1.0')].sort()).toEqual(['front', 'nutrition']);
     expect([...panelsReadDifferentlySince(LABEL_EXTRACTION_VERSION)]).toEqual([]);
@@ -492,5 +493,250 @@ describe('two independent readings', () => {
     expect(gpt5.reasoning_effort).toBe('low'); // reasoning models take no temperature
     expect(gpt5.temperature).toBeUndefined();
     expect(label).toMatchObject({ status: 'processed', model: 'gpt-4.1-mini (read twice)' });
+  });
+});
+
+// Label reader 2.5.0, modelled on test A's can side (TEST FIXTURE wording): the adequacy statement wraps over two printed
+// lines and runs on into the calorie content, in one paragraph above the ingredient list.
+describe('label reader 2.5.0: the adequacy statement, and a third reading', () => {
+  const WP = { product_name: null, brand: null, species_claim: 'cat' as const, product_type_claim: null };
+  const STATEMENT_1 = 'TEST FIXTURE Salmon Pâté Loaf Recipe Cat Food is formulated to meet the nutritional levels established by the';
+  const STATEMENT_2 = 'AAFCO Cat Food Nutrient profiles for maintenance. Calorie Content (ME, Calculated): 1181kcal/kg; 184kcal/can';
+  const LIST = 'Salmon, Chicken, Chicken Liver, Salmon Broth, Carrots, Peas, Natural Flavor, Guar Gum, Salt, Potassium Chloride';
+  const PARAGRAPH: RawPanel = { kind: 'calorie_statement', legibility: 'clear', heading: null, text: `${STATEMENT_1}\n${STATEMENT_2}` };
+  const INGREDIENTS: RawPanel = { kind: 'ingredients', legibility: 'clear', heading: 'Ingredients', text: LIST };
+  const OWN: RawPanel = { kind: 'adequacy_statement', legibility: 'clear', heading: null, text: `${STATEMENT_1} AAFCO Cat Food Nutrient profiles for maintenance.` };
+
+  it('reads a statement printed over two lines as one sentence, with the life stage on its second line', () => {
+    const r = read([PARAGRAPH, INGREDIENTS], WP);
+    expect(r.adequacy).toMatchObject({ type: 'complete', species: 'cat', lifeStages: ['adult_maintenance'], method: 'formulation', style: 'aafco' });
+    expect(r.adequacy!.text).toBe(`${STATEMENT_1} AAFCO Cat Food Nutrient profiles for maintenance.`);
+    expect(r.calories.map((c) => `${c.kcal}/${c.per}`)).toEqual(['1181/kg', '184/can']);
+    // The reading that gave the statement as its own panel and the one that ran it into the calorie paragraph agree.
+    const label = combineReadings(read([OWN, INGREDIENTS], WP, 'model-b'), r, GTIN, 'ingredients');
+    expect(label.adequacy).toMatchObject({ lifeStages: ['adult_maintenance'] });
+    expect(label.rejected).toEqual(['calorie statement: the two readings differ']); // only one reading shows the calorie line
+  });
+  it('does not join a front’s separate lines into a statement, and a [?] leaves out only its own sentence', () => {
+    const front: RawPanel = { kind: 'front', legibility: 'clear', heading: null, text: 'Complete and balanced\nfor adult cats\nNet wt 3 oz' };
+    expect(read([front], WP).adequacy).toBeNull();
+    const marked: RawPanel = { kind: 'other', legibility: 'partial', heading: null, text: `Made in [?]. ${STATEMENT_1}\n${STATEMENT_2}` };
+    expect(read([marked], WP).adequacy).toMatchObject({ lifeStages: ['adult_maintenance'] });
+  });
+  it('keeps a statement only one of two readings gave when a third reading agrees with it', () => {
+    const without = read([{ kind: 'calorie_statement', legibility: 'clear', heading: null, text: 'Calorie Content (ME, Calculated): 1181kcal/kg; 184kcal/can' }, INGREDIENTS], WP, 'gpt-4.1-mini-2025-04-14');
+    const withIt = read([OWN, INGREDIENTS], WP, 'gpt-5-mini-2025-08-07');
+    const two = combineReadings(without, withIt, GTIN, 'ingredients');
+    expect(two.adequacy).toBeNull();
+    expect(two.rejected).toEqual(expect.arrayContaining([expect.stringMatching(/^adequacy statement: the two readings differ \("none" \/ /)]));
+    expect(thirdReadingModel(without, withIt, two, ['gpt-4.1-mini', 'gpt-5-mini'])).toBe('gpt-4.1-mini'); // the model whose reading lacked it
+    const third = read([PARAGRAPH, INGREDIENTS], WP, 'gpt-4.1-mini-2025-04-14');
+    const label = combineReadings(without, withIt, GTIN, 'ingredients', third);
+    expect(label.adequacy).toMatchObject({ type: 'complete', species: 'cat', lifeStages: ['adult_maintenance'] });
+    expect(label.rejected.some((x) => x.startsWith('adequacy'))).toBe(false);
+    expect(label.settled).toEqual(['adequacy statement: the third reading (gpt-4.1-mini) agrees with the second']);
+    expect(label.model).toBe('gpt-4.1-mini-2025-04-14 + gpt-5-mini-2025-08-07; third reading gpt-4.1-mini-2025-04-14');
+    // A third reading that gives another statement (or none) settles nothing.
+    const growth = read([{ ...OWN, text: OWN.text!.replace('maintenance', 'growth') }, INGREDIENTS], WP, 'gpt-4.1-mini-2025-04-14');
+    const unsettled = combineReadings(without, withIt, GTIN, 'ingredients', growth);
+    expect(unsettled.adequacy).toBeNull();
+    expect(unsettled.settled).toEqual([expect.stringMatching(/^adequacy statement: the third reading \(gpt-4\.1-mini\) agrees with neither/)]);
+    expect(combineReadings(without, withIt, GTIN, 'ingredients', read([INGREDIENTS], WP)).settled).toEqual(['adequacy statement: the third reading (model-a) found none']);
+  });
+  it('keeps the ingredient list two of three readings give alike, never one alone', () => {
+    const a = read([INGREDIENTS], WP, 'model-a');
+    const b = read([{ ...INGREDIENTS, text: 'Salmon, Chickpeas, Lentils, Beef Broth, Rice, Corn, Wheat, Soy, Barley, Oats' }], WP, 'model-b');
+    expect(combineReadings(a, b, GTIN, 'ingredients').ingredientsText).toBeNull();
+    const c = read([{ ...INGREDIENTS, text: LIST.replace('Carrots', 'Carrots,') }], WP, 'model-c');
+    const label = combineReadings(a, b, GTIN, 'ingredients', c);
+    expect(label.ingredientsText).toBe(LIST);
+    expect(label.settled).toEqual(['ingredients: the third reading (model-c) agrees with the first']);
+    // Only one reading found a list and the third finds none: still not kept, and the photo says what to retake.
+    const none = read([{ kind: 'other', legibility: 'clear', heading: null, text: 'Made in USA' }], WP, 'model-b');
+    const alone = combineReadings(a, none, GTIN, 'ingredients', read([], WP, 'model-c'));
+    expect(alone.ingredientsText).toBeNull();
+    expect(alone.status).toBe('unreadable');
+    expect(alone.settled).toEqual(['ingredients: the third reading (model-c) found no printed list']);
+  });
+  it('asks for a third reading only for a contested list or statement, by the model that missed it', () => {
+    const a = read([OWN, INGREDIENTS], WP, 'x');
+    const b = read([OWN, INGREDIENTS], WP, 'y');
+    const both = combineReadings(a, b, GTIN, 'ingredients');
+    expect(thirdReadingModel(a, b, both, ['m1', 'm2'])).toBeNull(); // they agree
+    const noList = read([OWN], WP, 'y');
+    expect(thirdReadingModel(a, noList, combineReadings(a, noList, GTIN), ['m1', 'm2'])).toBe('m2');
+    expect(thirdReadingModel(noList, a, combineReadings(noList, a, GTIN), ['m1', 'm2'])).toBe('m1');
+    const other = read([OWN, INGREDIENTS], { ...WP, barcode_digits: '0012345678905' }, 'y');
+    const otherBarcode = read([OWN, INGREDIENTS], { ...WP, barcode_digits: '0012345678905' }, 'x');
+    const different = combineReadings(otherBarcode, other, GTIN);
+    expect(different.status).toBe('different_product');
+    expect(thirdReadingModel(otherBarcode, other, different, ['m1', 'm2'])).toBeNull();
+  });
+  it('makes the third reading only for an owner’s photo, and keeps the two readings’ result when it fails', async () => {
+    const reply = (panels: RawPanel[]) => JSON.stringify(raw(panels, WP));
+    const run = async (third: boolean, failThird = false) => {
+      const asked: string[] = [];
+      vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+        const body = JSON.parse(String(init.body));
+        asked.push(body.model);
+        if (failThird && asked.length >= 3) return new Response('{"error":{"message":"bad request"}}', { status: 400 });
+        const panels = body.model === 'gpt-5-mini' ? [OWN, INGREDIENTS] : asked.filter((m) => m === 'gpt-4.1-mini').length === 1 ? [INGREDIENTS] : [PARAGRAPH, INGREDIENTS];
+        return new Response(JSON.stringify({ model: body.model, choices: [{ message: { content: reply(panels) }, finish_reason: 'stop' }] }), { status: 200 });
+      }));
+      const label = await extractLabel({ apiKey: 'k', model: 'gpt-4.1-mini,gpt-5-mini', imageBase64: 'AAAA', mimeType: 'image/jpeg', purpose: 'the ingredient list', panel: 'ingredients', scanGtin14: GTIN, third });
+      vi.unstubAllGlobals();
+      return { asked, label };
+    };
+    const db = await run(false); // a database image: two readings
+    expect(db.asked.sort()).toEqual(['gpt-4.1-mini', 'gpt-5-mini']);
+    expect(db.label.adequacy).toBeNull();
+    const owner = await run(true);
+    expect(owner.asked.sort()).toEqual(['gpt-4.1-mini', 'gpt-4.1-mini', 'gpt-5-mini']);
+    expect(owner.label.adequacy).toMatchObject({ lifeStages: ['adult_maintenance'] });
+    expect(owner.label.ingredientsText).toBe(LIST);
+    const failed = await run(true, true);
+    expect(failed.label.adequacy).toBeNull();
+    expect(failed.label.ingredientsText).toBe(LIST);
+    expect(failed.label.settled).toEqual(['third reading (gpt-4.1-mini): not made, the model did not answer']);
+  });
+  it('is a new reader: a database nutrition image read by 2.4.0 is read once more, an ingredient image is not', () => {
+    expect(LABEL_EXTRACTION_VERSION).toBe('label-extract-2.5.0');
+    expect([...panelsReadDifferentlySince('label-extract-2.4.0')]).toEqual(['nutrition']);
+  });
+});
+
+// Review of label reader 2.5.0 (2026-11-02): each case below failed, or was at risk, on the first 2.5.0 draft.
+describe('label reader 2.5.0: review cases', () => {
+  const WP = { product_name: null, brand: null, species_claim: 'cat' as const, product_type_claim: null };
+  const S = 'TEST FIXTURE Chicken Pate is formulated to meet the nutritional levels established by the AAFCO Cat Food Nutrient Profiles for maintenance.';
+  const OPEN = S.slice(0, -1); // the same statement without its full stop
+  const GROWTH = OPEN.replace('maintenance', 'growth');
+  const other = (text: string, legibility: RawPanel['legibility'] = 'clear'): RawPanel => ({ kind: 'other', legibility, heading: null, text });
+  const adequacyOf = (panel: RawPanel) => read([panel], WP).adequacy;
+
+  it('reads a wrapped statement forward only: lines around it add no life stage, kind or species', () => {
+    const feeding: RawPanel = { kind: 'feeding_directions', legibility: 'clear', heading: null, text: `FEEDING GUIDE\nKittens: up to 2 cans daily\nAdult cats: 1 can per 3 lbs of body weight\n${S}` };
+    expect(adequacyOf(feeding)).toMatchObject({ type: 'complete', species: 'cat', lifeStages: ['adult_maintenance'] });
+    expect(adequacyOf(other(`${OPEN}\nFeed kittens, pregnant or nursing cats up to twice the adult amount.`))).toMatchObject({ lifeStages: ['adult_maintenance'] });
+    expect(adequacyOf(other(`${S}\n(Kittens, pregnant or nursing cats may need more.)`))).toMatchObject({ lifeStages: ['adult_maintenance'] });
+    expect(adequacyOf(other(`${OPEN}\n• Kittens: feed twice the adult amount`))).toMatchObject({ lifeStages: ['adult_maintenance'] });
+    expect(adequacyOf(other(`${GROWTH}\nAfter 12 months, feed as an adult cat food.`))).toMatchObject({ lifeStages: ['growth'] });
+    expect(adequacyOf(other(`${OPEN}\n${GROWTH}`))).toMatchObject({ lifeStages: ['adult_maintenance'] }); // a variety pack's two statements
+    expect(adequacyOf(other(`${OPEN}\nAlso great as a topper for supplemental feeding of kittens`))).toMatchObject({ type: 'complete', lifeStages: ['adult_maintenance'] });
+    expect(adequacyOf(other(`${OPEN}\nNot for dogs`))).toMatchObject({ species: 'cat' });
+    const partial: RawPanel = { kind: 'adequacy_statement', legibility: 'partial', heading: null, text: `${OPEN}\nFeeding: kittens 2 cans, adults 1 can` };
+    expect(read([partial], WP).adequacy).toMatchObject({ lifeStages: ['adult_maintenance'] });
+  });
+  it('reads a statement wrapped over several lines, also in capitals, and its large-size exception', () => {
+    const caps = other('SALMON RECIPE TREATS ARE FORMULATED TO MEET THE NUTRITIONAL\nLEVELS ESTABLISHED BY THE AAFCO CAT FOOD NUTRIENT\nPROFILES FOR MAINTENANCE.');
+    expect(adequacyOf(caps)).toMatchObject({ type: 'complete', species: 'cat', lifeStages: ['adult_maintenance'] });
+    const dog = other('TEST FIXTURE is formulated to meet the nutritional levels established by the AAFCO Dog Food Nutrient Profiles for All Life Stages\nexcept for growth of large size dogs (70 lb. or more as an adult).');
+    expect(adequacyOf(dog)).toMatchObject({ species: 'dog', lifeStages: ['all_life_stages'], largeSizeGrowth: false });
+  });
+  it('never makes a statement of front callouts or marketing copy, whatever the panel is called', () => {
+    expect(adequacyOf(other('Complete and Balanced\nMeets AAFCO\nfor Adult Cats\nNet Wt 3 oz'))).toBeNull();
+    expect(adequacyOf(other('In palatability feeding\ntrials, 9 out of 10 cats\npreferred TEST FIXTURE.'))).toBeNull();
+    // "in feeding trials" alone was read as a complete statement before 2.5.0 (worth adequacy points): a callout, not a statement.
+    expect(adequacyOf(other('Clinically proven\nin feeding trials\nto reduce hairballs\nAdult 1-6\nIndoor Cat Food'))).toBeNull();
+    expect(adequacyOf({ kind: 'front', legibility: 'clear', heading: null, text: 'Proven in feeding trials' })).toBeNull();
+    // A statement substantiated by feeding tests, in formal words, still is one.
+    expect(adequacyOf(other('Animal feeding tests using AAFCO procedures substantiate that TEST FIXTURE provides complete and balanced nutrition for adult maintenance of cats.'))).toMatchObject({ type: 'complete', method: 'feeding_trial', species: 'cat', lifeStages: ['adult_maintenance'] });
+  });
+  it('reads a negation the wrapped line hides, and never reads a statement past an unreadable word', () => {
+    const negated = other('TEST FIXTURE Treats are not formulated\nto meet the nutritional levels established by the AAFCO Cat Food Nutrient Profiles.\nIntended for intermittent or supplemental feeding only.');
+    expect(adequacyOf(negated)).toMatchObject({ type: 'intermittent' });
+    const marked = other('TEST FIXTURE Treats are [?] formulated to meet the nutritional levels established by the\nAAFCO Cat Food Nutrient Profiles for maintenance.', 'partial');
+    expect(adequacyOf(marked)).toBeNull();
+    // A mark in another sentence before the statement on its line leaves the statement in.
+    expect(adequacyOf(other(`Made in [?]. ${OPEN.replace('established by the AAFCO', 'established by the\nAAFCO')}.`, 'partial'))).toMatchObject({ lifeStages: ['adult_maintenance'] });
+  });
+
+  const LIST = 'Salmon, Chicken, Chicken Liver, Salmon Broth, Carrots, Peas, Natural Flavor, Guar Gum, Salt, Potassium Chloride';
+  const OTHER_LIST = 'Salmon, Chickpeas, Lentils, Beef Broth, Rice, Corn, Wheat, Soy, Barley, Oats';
+  const ing = (text: string): RawPanel => ({ kind: 'ingredients', legibility: 'clear', heading: 'Ingredients', text });
+  const own = (stage: string): RawPanel => ({ kind: 'adequacy_statement', legibility: 'clear', heading: null, text: S.replace('maintenance', stage) });
+
+  it('counts a third reading only with the other model’s reading', () => {
+    // Each of the two readings lacks a different value: one third reading settles the one the photo is taken for.
+    const a = read([own('maintenance')], WP, 'gpt-4.1-mini-2025-04-14'); // statement, no list
+    const b = read([ing(LIST)], WP, 'gpt-5-mini-2025-08-07'); // list, no statement
+    const two = combineReadings(a, b, GTIN, 'ingredients');
+    expect(thirdReadingModel(a, b, two, ['gpt-4.1-mini', 'gpt-5-mini'], 'ingredients')).toBe('gpt-4.1-mini'); // a lacks the list
+    expect(thirdReadingModel(a, b, two, ['gpt-4.1-mini', 'gpt-5-mini'], 'nutrition')).toBe('gpt-5-mini'); // b lacks the statement
+    const bySecond = read([own('maintenance'), ing(LIST)], WP, 'gpt-5-mini-2025-08-07');
+    const viaSecond = combineReadings(a, b, GTIN, 'ingredients', bySecond);
+    expect(viaSecond.ingredientsText).toBeNull(); // the list only gpt-5-mini read, twice
+    expect(viaSecond.adequacy).toMatchObject({ lifeStages: ['adult_maintenance'] }); // gpt-4.1-mini and gpt-5-mini agree
+    expect(viaSecond.settled).toEqual(['ingredients: the third reading (gpt-5-mini) agrees only with the reading by its own model', 'adequacy statement: the third reading (gpt-5-mini) agrees with the first']);
+    // Both gave a value, differently: the third model's agreement with its own reading settles nothing.
+    const m1 = read([own('maintenance'), ing(LIST)], WP, 'gpt-4.1-mini-2025-04-14');
+    const m2 = read([own('growth'), ing(OTHER_LIST)], WP, 'gpt-5-mini-2025-08-07');
+    const again = read([own('growth'), ing(OTHER_LIST)], WP, 'gpt-5-mini-2025-08-07');
+    const same = combineReadings(m1, m2, GTIN, 'ingredients', again);
+    expect(same.adequacy).toBeNull();
+    expect(same.ingredientsText).toBeNull();
+    const cross = combineReadings(m1, m2, GTIN, 'ingredients', read([own('maintenance'), ing(LIST)], WP, 'gpt-5-mini-2025-08-07'));
+    expect(cross.adequacy).toMatchObject({ lifeStages: ['adult_maintenance'] });
+    expect(cross.ingredientsText).toBe(LIST);
+    // One model configured ("read twice"): any two of the three readings agreeing count.
+    const one = combineReadings(read([ing(LIST)], WP, 'm'), read([ing(OTHER_LIST)], WP, 'm'), GTIN, 'ingredients', read([ing(LIST)], WP, 'm'));
+    expect(one.ingredientsText).toBe(LIST);
+  });
+  it('a third reading that calls the label illegible settles nothing; two of three showing another barcode is another product', () => {
+    const a = read([ing(LIST)], WP, 'model-a');
+    const b = read([], WP, 'model-b');
+    const blind = combineReadings(a, b, GTIN, 'ingredients', read([ing(LIST)], { ...WP, legible: false }, 'model-c'));
+    expect(blind.ingredientsText).toBeNull();
+    expect(blind.settled).toEqual(['ingredients: the third reading (model-c) calls the label illegible']);
+    const sibling = { ...WP, barcode_digits: '0012345678905' };
+    const other2 = combineReadings(read([ing(LIST)], sibling, 'model-a'), read([], WP, 'model-b'), GTIN, 'ingredients', read([ing(LIST)], sibling, 'model-c'));
+    expect(other2.status).toBe('different_product');
+    expect(other2.ingredientsText).toBeNull();
+    expect(other2.settled).toEqual(['barcode: the third reading shows the same other barcode as one of the two']);
+  });
+  it('makes no third reading when one model gave both readings, or when the AI budget refuses it', async () => {
+    const run = async (opts: { replace?: boolean; budget?: () => Promise<void> }) => {
+      const asked: string[] = [];
+      let fifth = 0;
+      vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+        const body = JSON.parse(String(init.body));
+        asked.push(body.model);
+        if (opts.replace && body.model === 'gpt-4.1-mini') return new Response(JSON.stringify({ error: { message: 'The model `gpt-4.1-mini` does not exist' } }), { status: 404 });
+        // gpt-5-mini: the first reading gives the list, the next gives none; gpt-4.1-mini gives none.
+        const panels = body.model === 'gpt-5-mini' && fifth++ === 0 ? [ing(LIST)] : [];
+        return new Response(JSON.stringify({ model: body.model, choices: [{ message: { content: JSON.stringify(raw(panels, WP)) }, finish_reason: 'stop' }] }), { status: 200 });
+      }));
+      const label = await extractLabel({ apiKey: 'k', model: 'gpt-4.1-mini,gpt-5-mini', imageBase64: 'AAAA', mimeType: 'image/jpeg', purpose: 'the ingredient list', panel: 'ingredients', scanGtin14: GTIN, third: true, ...(opts.budget ? { beforeThird: opts.budget } : {}) });
+      vi.unstubAllGlobals();
+      return { asked, label };
+    };
+    const replaced = await run({ replace: true });
+    expect(replaced.asked).toEqual(['gpt-4.1-mini', 'gpt-5-mini', 'gpt-5-mini']);
+    expect(replaced.label.ingredientsText).toBeNull();
+    expect(replaced.label.settled).toEqual(['third reading (gpt-5-mini): not made, one model gave both readings']);
+    const refused = await run({ budget: async () => { throw new Error('quota'); } });
+    expect(refused.asked).toHaveLength(2);
+    expect(refused.label.settled).toEqual(['third reading (gpt-4.1-mini): not made, the AI budget is used up']);
+  });
+  it('makes the third reading only with time left, as one try of at most 60 s', async () => {
+    const asked: Record<string, unknown>[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body));
+      asked.push(body);
+      const panels = body.model === 'gpt-5-mini' ? [own('maintenance'), ing(LIST)] : [ing(LIST)];
+      return new Response(JSON.stringify({ model: body.model, choices: [{ message: { content: JSON.stringify(raw(panels, WP)) }, finish_reason: 'stop' }] }), { status: 200 });
+    }));
+    const t = 1_000_000;
+    const clock = vi.spyOn(Date, 'now').mockReturnValueOnce(t).mockReturnValue(t + THIRD_READING_AFTER_MS + 1);
+    const late = await extractLabel({ apiKey: 'k', model: 'gpt-4.1-mini,gpt-5-mini', imageBase64: 'AAAA', mimeType: 'image/jpeg', purpose: 'the ingredient list', panel: 'ingredients', scanGtin14: GTIN, third: true });
+    clock.mockRestore();
+    expect(asked).toHaveLength(2);
+    expect(late.adequacy).toBeNull();
+    expect(late.settled).toEqual(['third reading (gpt-4.1-mini): not made, the first two took too long']);
+    asked.length = 0;
+    const onTime = await extractLabel({ apiKey: 'k', model: 'gpt-4.1-mini,gpt-5-mini', imageBase64: 'AAAA', mimeType: 'image/jpeg', purpose: 'the ingredient list', panel: 'ingredients', scanGtin14: GTIN, third: true });
+    expect(asked.map((b) => b.model)).toEqual(['gpt-4.1-mini', 'gpt-5-mini', 'gpt-4.1-mini']);
+    expect(onTime.settled).toEqual(['adequacy statement: the third reading (gpt-4.1-mini) found none']);
+    expect(THIRD_READING_MS).toBe(60000);
   });
 });

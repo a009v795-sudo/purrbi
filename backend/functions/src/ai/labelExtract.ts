@@ -17,19 +17,20 @@ import { chatJson } from './openai';
 
 export { analysisRows };
 
-export const LABEL_EXTRACTION_VERSION = 'label-extract-2.4.0'; // 2.2.0: analyses printed inline ("Protéine 37 %, Matières grasses 13 %") are read row by row; 2.3.0: an adequacy line is read from a partly legible panel too; 2.4.0: brand, type and species only when both readings give them and a transcription prints them; a name of the same words, printed as lines with nothing left out between them and no life stage, texture or flavour it leaves out beside them; a front's grounded identity counts as read by purpose; reasons by purpose, in the app's two lines
+export const LABEL_EXTRACTION_VERSION = 'label-extract-2.5.0'; // 2.2.0: analyses printed inline ("Protéine 37 %, Matières grasses 13 %") are read row by row; 2.3.0: an adequacy line is read from a partly legible panel too; 2.4.0: brand, type and species only when both readings give them and a transcription prints them; a name of the same words, printed as lines with nothing left out between them and no life stage, texture or flavour it leaves out beside them; a front's grounded identity counts as read by purpose; reasons by purpose, in the app's two lines; 2.5.0: the adequacy statement is asked for as its own panel and read across the printed lines it wraps over; when only one of the two readings gives the ingredient list or the adequacy statement (or they give them differently), a third reading by the other model settles it: two of the three must agree
 /**
  * Readings still used: by 2.2.0 as they were saved (2.3.0 only reads an adequacy line 2.2.0 left out); by
  * 2.1.0 as the current rules use them (`readingInUse`), so owners are not asked for their photos again.
  */
-export const LABEL_READINGS_IN_USE: ReadonlySet<string> = new Set(['label-extract-2.1.0', 'label-extract-2.2.0', 'label-extract-2.3.0', LABEL_EXTRACTION_VERSION]);
+export const LABEL_READINGS_IN_USE: ReadonlySet<string> = new Set(['label-extract-2.1.0', 'label-extract-2.2.0', 'label-extract-2.3.0', 'label-extract-2.4.0', LABEL_EXTRACTION_VERSION]);
 
 /** The readers in use, oldest first, and the database image panels each reads differently from the one before it. */
-const READERS = ['label-extract-2.1.0', 'label-extract-2.2.0', 'label-extract-2.3.0', LABEL_EXTRACTION_VERSION];
+const READERS = ['label-extract-2.1.0', 'label-extract-2.2.0', 'label-extract-2.3.0', 'label-extract-2.4.0', LABEL_EXTRACTION_VERSION];
 const PANELS_READ_DIFFERENTLY: Record<string, string[]> = {
   'label-extract-2.2.0': ['nutrition'], // analyses printed inline
   'label-extract-2.3.0': ['nutrition'], // an adequacy line on a partly legible panel
-  [LABEL_EXTRACTION_VERSION]: ['front'], // 2.4.0: a front's brand, species and type, grounded, count as read
+  'label-extract-2.4.0': ['front'], // a front's brand, species and type, grounded, count as read
+  [LABEL_EXTRACTION_VERSION]: ['nutrition'], // 2.5.0: an adequacy statement asked for as its own panel, and read across the lines it wraps over
 };
 /** The database image panels a reader newer than `version` reads differently: read once more after it is deployed. */
 export function panelsReadDifferentlySince(version: string | undefined): Set<string> {
@@ -139,6 +140,7 @@ const SYSTEM = [
   'List every label panel that is visible: its kind; its legibility (clear: every word and number can be read; partial: only some of it; illegible); its printed heading, verbatim; and its text, verbatim, one printed line per line, keeping order, parentheses and percentages.',
   'The ingredient list is the text after a printed heading such as Ingredients, Composition, Zutaten, Ingredientes, Ingredienti, Samenstelling or Ingrédients. Front-of-pack pictures and feature callouts (for example "Fresh turkey" or "Potatoes and peas") are not an ingredient list: give them kind front or other.',
   'In a guaranteed analysis or analytical constituents table, write each row on one line: the row name(s) as printed, then its value as printed, for example "Crude Protein (min) 30.0%" or "Protéine / Proteína / Protein 35%".',
+  'A nutritional adequacy statement (for example "… is formulated to meet the nutritional levels established by the AAFCO Cat Food Nutrient Profiles for maintenance", "… complete and balanced …" or "Aliment complet pour chats") is a panel of kind adequacy_statement: list it, and transcribe the whole statement, also when it is printed in the same paragraph as the calorie content or just before the ingredient list.',
   'species_claim: only from printed words such as "for dogs", "cat food", "chien"; never from pictures of animals. not_visible if no such words are legible.',
   'barcode_digits: the digits printed under a barcode if every digit is legible, otherwise null.',
 ].join(' ');
@@ -161,6 +163,7 @@ export interface ValidatedLabel {
   uncertainFields: string[]; // panels a reading saw but could not read fully
   rejected: string[]; // what was read but not kept, and why
   notKept?: string[]; // on a read photo: identity both readings gave but that was not kept, as each gave it (for tracing)
+  settled?: string[]; // 2.5.0: what a third reading settled, or did not, when only one of the two readings gave it (for tracing)
   barcodeMatch?: boolean; // both readings show the scanned barcode (ties the photo to this product)
   model: string;
   version?: string; // LABEL_EXTRACTION_VERSION; readings without it predate the grounded reader
@@ -246,19 +249,85 @@ function caloriesIn(panels: RawPanel[]): CalorieStatement[] {
   return out;
 }
 
+// A formal adequacy statement that wraps over printed lines ("… is formulated to meet the nutritional levels established
+// by the / AAFCO Cat Food Nutrient Profiles for maintenance. Calorie Content …"), read from the line where it starts
+// ("formulated", "feeding tests") forward through the lines that continue it, up to its first full stop (2.5.0). It never
+// takes text from lines before it. A line runs on only when it stops mid-phrase ("… established by the") or the next
+// line starts in lower case ("except for growth …"); a line that starts another item (a bullet, a bracket, a "Kittens:"
+// row, a heading of up to three words in capitals) ends it; at most three lines are added; a [?] in any of its lines
+// drops it (the word may be "not").
+const STATEMENT_START = /\b(formulated|feeding tests|animal feeding)\b/i;
+const STATEMENT_WORDING = /\b(formulated to meet|animal feeding tests)\b/i;
+const DANGLING = /\b(the|by|of|for|to|and|or|a|an|with|meet|meets|established|levels?|nutrient|nutritional|profiles?|procedures|using|that|provides?|complete|balanced|is|are|formulated|feeding|tests?|aafco|fediaf|cat|dog|food)\s*$/i;
+const NEW_ITEM = /^\s*(?:[•·*\-–—(]|[^\s:]{1,30}:|[\p{Lu}\d&/-]+(?:\s+[\p{Lu}\d&/-]+){0,2}:?\s*$)/u;
+function wrappedStatement(lines: string[]): AdequacyStatement | null {
+  for (let i = 0; i < lines.length; i++) {
+    const first = lines[i];
+    const at = first.search(STATEMENT_START);
+    if (at < 0) continue;
+    // From the sentence the start word is in: after the last full stop before it on its line.
+    const stop = Math.max(...[...first.slice(0, at).matchAll(/[.!?](?=\s)/g)].map((m) => m.index! + 1), 0);
+    let text = first.slice(stop).trim();
+    if (UNSURE.test(text)) continue;
+    const ended = (t: string) => /[.!?](\s|$)/.test(t.slice(Math.max(0, t.search(STATEMENT_START))));
+    let dropped = false;
+    for (let j = i + 1; j < lines.length && j <= i + 3 && !ended(text); j++) {
+      if (!DANGLING.test(text) && !/^\s*\p{Ll}/u.test(lines[j])) break;
+      if (NEW_ITEM.test(lines[j])) break;
+      if (UNSURE.test(lines[j])) {
+        dropped = true;
+        break;
+      }
+      text = `${text} ${lines[j].trim()}`;
+    }
+    if (dropped) continue;
+    const m = /[.!?](\s|$)/.exec(text.slice(text.search(STATEMENT_START)));
+    if (m) text = text.slice(0, text.search(STATEMENT_START) + m.index + 1);
+    if (!STATEMENT_WORDING.test(text)) continue;
+    const a = parseAdequacyStatement(text);
+    if (a && a.type !== 'unclear') return a;
+  }
+  return null;
+}
+
 function adequacyIn(panels: RawPanel[], before: string): AdequacyStatement | null {
   for (const p of panels) if (p.kind === 'adequacy_statement' && clear(p) && !UNSURE.test(textOf(p))) return parseAdequacyStatement(textOf(p));
   // EU labels print it as a line above the composition, often on the same printed line ("Aliment complet pour
   // chat adulte. Composition : …"); fronts may print "complete and balanced". Like an analysis row, a line a
-  // partly legible panel shows in full counts; the composition after it is not part of the statement.
-  const lines = [before, ...panels.filter(readable).flatMap((p) => textOf(p).split(/\n+/))]
+  // partly legible panel shows in full counts; the composition after it is not part of the statement. A line that
+  // continues a line with an unreadable mark (no full stop between them) is not read on its own (2.5.0): the mark
+  // may be "not" ("… are [?] formulated / to meet … Profiles.").
+  const readablePanels = panels.filter(readable);
+  const lines = [
+    before,
+    ...readablePanels.flatMap((p) => {
+      const ls = textOf(p).split(/\n+/);
+      return ls.filter((_, i) => !(i > 0 && UNSURE.test(ls[i - 1]) && !/[.!?]\s*$/.test(ls[i - 1].trim())));
+    }),
+  ]
     .map((l) => l.split(HEADING_IN_LINE)[0].trim())
     .filter((l) => l && !UNSURE.test(l));
+  let line: AdequacyStatement | null = null;
   for (const l of lines) {
     const a = parseAdequacyStatement(l);
-    if (a && a.type !== 'unclear') return a;
+    if (a && a.type !== 'unclear') {
+      line = a;
+      break;
+    }
   }
-  return null;
+  // A statement that wraps (see `wrappedStatement`), from a panel other than the front. It is kept when no line gave a
+  // statement; or when it is that line's statement with more to it: the same kind and species, every life stage the
+  // line gave and another (or the large-size-dog exception); or when it shows a negation the line's part leaves out
+  // ("… are not formulated / to meet …").
+  for (const p of readablePanels.filter((x) => x.kind !== 'front')) {
+    const w = wrappedStatement(textOf(p).split(/\n+/));
+    if (!w) continue;
+    if (!line) return w;
+    if (wordAgreement(line.text, w.text, true) < 0.9) continue;
+    const more = w.type === line.type && w.species === line.species && line.lifeStages.every((x) => w.lifeStages.includes(x)) && (w.lifeStages.length > line.lifeStages.length || (w.largeSizeGrowth !== null && line.largeSizeGrowth === null));
+    if (more || (w.type === 'intermittent' && line.type === 'complete')) return w;
+  }
+  return line;
 }
 
 function activesIn(panels: RawPanel[]): ActiveIngredient[] {
@@ -627,9 +696,11 @@ function describeReading(r: Reading): string {
 /**
  * Keeps only what both readings say; everything else is listed in `rejected`. `purpose` is what the photo was taken for
  * (`front`, `ingredients`, `nutrition`; anything else is a general label photo): a photo that gives nothing says what to
- * retake for that purpose, and a front photo is read for its brand, species and type.
+ * retake for that purpose, and a front photo is read for its brand, species and type. `c` is a third reading (2.5.0,
+ * see `thirdReadingModel`): an ingredient list or adequacy statement the two did not both give alike is kept when the
+ * third agrees with one of them, so two of the three readings always agree on what is kept.
  */
-export function combineReadings(a: Reading, b: Reading, scanGtin14: string, purpose?: string): ValidatedLabel {
+export function combineReadings(a: Reading, b: Reading, scanGtin14: string, purpose?: string, c?: Reading): ValidatedLabel {
   const base: ValidatedLabel = {
     status: 'unreadable',
     reason: '',
@@ -647,7 +718,7 @@ export function combineReadings(a: Reading, b: Reading, scanGtin14: string, purp
     activeIngredients: [],
     uncertainFields: [...new Set([...a.unclear, ...b.unclear])],
     rejected: [],
-    model: a.model === b.model ? `${a.model} (read twice)` : `${a.model} + ${b.model}`,
+    model: `${a.model === b.model ? `${a.model} (read twice)` : `${a.model} + ${b.model}`}${c ? `; third reading ${c.model}` : ''}`,
     version: LABEL_EXTRACTION_VERSION,
   };
   if (!a.legible && !b.legible) return { ...base, reason: 'The label text couldn’t be read. Retake it straight on, in good light.' };
@@ -658,16 +729,38 @@ export function combineReadings(a: Reading, b: Reading, scanGtin14: string, purp
     return n.ok ? n.gtin14 : null;
   };
   const [ba, bb] = [barcode(a), barcode(b)];
-  if (ba && ba === bb && !sameGtin(ba, scanGtin14)) {
-    return { ...base, status: 'different_product', reason: 'This photo’s barcode isn’t the scanned one. Check it shows the same package.' };
+  // With a third reading, any two of the three showing the same other barcode.
+  const bc = c ? barcode(c) : null;
+  const thirdShowsOther = !!bc && (bc === ba || bc === bb) && !sameGtin(bc, scanGtin14);
+  if ((ba && ba === bb && !sameGtin(ba, scanGtin14)) || thirdShowsOther) {
+    return {
+      ...base,
+      status: 'different_product',
+      reason: 'This photo’s barcode isn’t the scanned one. Check it shows the same package.',
+      ...(thirdShowsOther && !(ba && ba === bb) ? { settled: ['barcode: the third reading shows the same other barcode as one of the two'] } : {}),
+    };
   }
 
   const rejected: string[] = [];
+  // What a third reading settled, or did not (2.5.0): tracing only.
+  const settled: string[] = [];
+  const family = (r: Reading) => r.model.replace(/-\d{4}-\d{2}-\d{2}$/, '');
+  const third = c ? `the third reading (${family(c)})` : '';
+  // A third reading counts with a reading of the other model only (when two models are configured), and only when it
+  // calls the label legible: what is kept is then read alike by two different models.
+  const twoModels = family(a) !== family(b);
+  const counts = (x: Reading) => !!c && c.legible && (!twoModels || family(x) !== family(c));
+  const by = (x: Reading) => (x === a ? 'first' : 'second');
   const out = { ...base, barcodeMatch: !!ba && ba === bb && sameGtin(ba, scanGtin14) };
-  if (a.ingredientsText && b.ingredientsText) {
-    if (wordAgreement(a.ingredientsText, b.ingredientsText) >= 0.9) Object.assign(out, { ingredientsText: a.ingredientsText, ingredients: a.ingredients });
-    else rejected.push('ingredients: the two readings differ');
-  } else if (a.ingredientsText || b.ingredientsText) rejected.push('ingredients: only one reading found a printed ingredient list');
+  const sameList = (x: Reading | undefined, y: Reading | undefined) => !!x?.ingredientsText && !!y?.ingredientsText && wordAgreement(x.ingredientsText, y.ingredientsText) >= 0.9;
+  const listFrom = sameList(a, b) ? a : counts(a) && sameList(a, c) ? a : counts(b) && sameList(b, c) ? b : null;
+  if (listFrom) {
+    Object.assign(out, { ingredientsText: listFrom.ingredientsText, ingredients: listFrom.ingredients });
+    if (!sameList(a, b)) settled.push(`ingredients: ${third} agrees with the ${by(listFrom)}`);
+  } else if (a.ingredientsText || b.ingredientsText) {
+    rejected.push(a.ingredientsText && b.ingredientsText ? 'ingredients: the two readings differ' : 'ingredients: only one reading found a printed ingredient list');
+    if (c) settled.push(`ingredients: ${third} ${!c.legible ? 'calls the label illegible' : !c.ingredientsText ? 'found no printed list' : sameList(a, c) || sameList(b, c) ? 'agrees only with the reading by its own model' : 'agrees with neither'}`);
+  }
 
   const twin = (e: GuaranteedAnalysisEntry, list: GuaranteedAnalysisEntry[]) =>
     list.find((f) => f.unit === e.unit && Math.abs(f.value - e.value) < 1e-9 && (e.nutrient !== 'other' ? f.nutrient === e.nutrient : wordAgreement(f.label, e.label) >= 0.8));
@@ -685,9 +778,19 @@ export function combineReadings(a: Reading, b: Reading, scanGtin14: string, purp
 
   // The same statement, possibly with a neighbouring sentence in one reading: the shorter one is kept.
   const sameStages = (x: AdequacyStatement, y: AdequacyStatement) => [...x.lifeStages].sort().join() === [...y.lifeStages].sort().join();
-  const [qa, qb] = [a.adequacy, b.adequacy];
-  if (qa && qb && qa.type === qb.type && qa.species === qb.species && sameStages(qa, qb) && wordAgreement(qa.text, qb.text, true) >= 0.9) out.adequacy = qa.text.length <= qb.text.length ? qa : qb;
-  else if (qa || qb) rejected.push(`adequacy statement: the two readings differ ("${qa?.text.slice(0, 60) ?? 'none'}" / "${qb?.text.slice(0, 60) ?? 'none'}")`);
+  const sameStatement = (x: AdequacyStatement | null | undefined, y: AdequacyStatement | null | undefined) =>
+    !!x && !!y && x.type === y.type && x.species === y.species && sameStages(x, y) && wordAgreement(x.text, y.text, true) >= 0.9;
+  const shorter = (x: AdequacyStatement, y: AdequacyStatement) => (x.text.length <= y.text.length ? x : y);
+  const [qa, qb, qc] = [a.adequacy, b.adequacy, c?.adequacy];
+  const statementFrom = sameStatement(qa, qb) ? null : counts(a) && sameStatement(qa, qc) ? a : counts(b) && sameStatement(qb, qc) ? b : null;
+  if (sameStatement(qa, qb)) out.adequacy = shorter(qa!, qb!);
+  else if (statementFrom) {
+    out.adequacy = shorter(statementFrom.adequacy!, qc!);
+    settled.push(`adequacy statement: ${third} agrees with the ${by(statementFrom)}`);
+  } else if (qa || qb) {
+    rejected.push(`adequacy statement: the two readings differ ("${qa?.text.slice(0, 60) ?? 'none'}" / "${qb?.text.slice(0, 60) ?? 'none'}")`);
+    if (c) settled.push(`adequacy statement: ${third} ${!c.legible ? 'calls the label illegible' : !qc ? 'found none' : sameStatement(qa, qc) || sameStatement(qb, qc) ? 'agrees only with the reading by its own model' : `agrees with neither ("${qc.text.slice(0, 60)}")`}`);
+  }
 
   const sameName = (x: string, y: string) => normalizeIngredientName(x) === normalizeIngredientName(y);
   out.activeIngredients = a.actives.filter((x) => b.actives.some((y) => sameName(x.name, y.name) && x.amount === y.amount && (x.unit ?? '').toLowerCase() === (y.unit ?? '').toLowerCase()));
@@ -752,13 +855,30 @@ export function combineReadings(a: Reading, b: Reading, scanGtin14: string, purp
                 : NOTHING;
     // What each reading saw, so a photo that gave nothing can be traced (panels, legibility, rows).
     const trace = rejected.some((r) => r.startsWith('readings: ')) ? [] : [`readings: ${describeReading(a)} / ${describeReading(b)}`];
-    return { ...base, rejected: [...rejected, ...trace], reason };
+    return { ...base, rejected: [...rejected, ...trace], reason, ...(settled.length ? { settled } : {}) };
   }
   // A name, brand or type both readings gave but not kept on a read photo: traced as each gave it, so a front read
   // without its name can be explained (not in `rejected`, which says what to retake).
   const pairOf = (field: string, x: string | null, y: string | null, kept: string | null) => (x && y && !kept ? [`${field}: "${x.slice(0, 50)}" / "${y.slice(0, 50)}"`] : []);
   const notKept = [...pairOf('name', a.productName, b.productName, out.productName), ...pairOf('brand', a.brand, b.brand, out.brand), ...pairOf('type', a.productTypeClaim, b.productTypeClaim, out.productTypeClaim)];
-  return { ...out, status: 'processed', reason: '', ...(notKept.length ? { notKept } : {}) };
+  return { ...out, status: 'processed', reason: '', ...(notKept.length ? { notKept } : {}), ...(settled.length ? { settled } : {}) };
+}
+
+/**
+ * The model for a third reading of an owner's photo (2.5.0), or null: made when the ingredient list or the adequacy
+ * statement was given by only one of the two readings, or by both differently. It is the model whose reading lacks it,
+ * so a value kept is still read alike by two different models; when both readings gave it, the second model.
+ */
+export function thirdReadingModel(a: Reading, b: Reading, two: ValidatedLabel, models: readonly [string, string], purpose?: string): string | null {
+  if (two.status === 'different_product' || (!a.legible && !b.legible)) return null;
+  const list = { open: !two.ingredientsText && (!!a.ingredientsText || !!b.ingredientsText), has: (r: Reading) => !!r.ingredientsText };
+  const statement = { open: !two.adequacy && (!!a.adequacy || !!b.adequacy), has: (r: Reading) => !!r.adequacy };
+  // One third reading settles one value by agreeing with the other model's reading: the value the photo is taken for first.
+  const field = (purpose === 'nutrition' ? [statement, list] : [list, statement]).find((f) => f.open);
+  if (!field) return null;
+  if (!field.has(a)) return models[0];
+  if (!field.has(b)) return models[1];
+  return models[1];
 }
 
 export async function extractLabel(opts: {
@@ -770,11 +890,16 @@ export async function extractLabel(opts: {
   /** What the photo is taken for (`front`, `ingredients`, `nutrition`), for what a photo that gives nothing should retake. */
   panel?: string;
   scanGtin14: string;
+  /** An owner's photo (2.5.0): a third reading settles an ingredient list or adequacy statement only one reading gave. */
+  third?: boolean;
+  /** Called before the third reading (the AI budget); when it throws, the third reading is not made. */
+  beforeThird?: () => Promise<void>;
 }): Promise<ValidatedLabel> {
+  const started = Date.now();
   const models = opts.model.split(',').map((m) => m.trim()).filter(Boolean);
   const first = models[0] ?? opts.model;
   const second = models[1] ?? first;
-  const read = (model: string) =>
+  const read = (model: string, once = false) =>
     chatJson<RawLabelExtraction>({
       apiKey: opts.apiKey,
       model,
@@ -784,8 +909,9 @@ export async function extractLabel(opts: {
         { type: 'image_url', image_url: { url: `data:${opts.mimeType};base64,${opts.imageBase64}`, detail: 'high' } },
       ],
       format: { name: 'pet_label_transcription', schema: LABEL_SCHEMA as unknown as Record<string, unknown> },
-      timeoutMs: 90000,
+      timeoutMs: once ? THIRD_READING_MS : 90000,
       maxTokens: 12000, // a dense panel (ingredients, analysis, additives, feeding table) is long to transcribe
+      ...(once ? { retries: 0 } : {}),
     });
   const [ra, rb] = await Promise.allSettled([read(first), read(second)]);
   // A reading that fails for its model (cut off, malformed, model not available) is replaced by another
@@ -793,14 +919,42 @@ export async function extractLabel(opts: {
   const recoverable = (err: unknown) => err instanceof SourceError && (err.kind === 'parse' || err.status === 400 || err.status === 404);
   let a = ra.status === 'fulfilled' ? ra.value : null;
   let b = rb.status === 'fulfilled' ? rb.value : null;
+  // The model each reading was asked of, for a third reading by the model whose reading lacks a value.
+  const askedOf: [string, string] = [first, second];
   if (!a && !b) throw (ra as PromiseRejectedResult).reason;
   if (!a) {
     if (!recoverable((ra as PromiseRejectedResult).reason)) throw (ra as PromiseRejectedResult).reason;
     a = await read(second);
+    askedOf[0] = second;
   }
   if (!b) {
     if (!recoverable((rb as PromiseRejectedResult).reason)) throw (rb as PromiseRejectedResult).reason;
     b = await read(first);
+    askedOf[1] = first;
   }
-  return combineReadings(parseReading(a.data, a.model), parseReading(b.data, b.model), opts.scanGtin14, opts.panel);
+  const [pa, pb] = [parseReading(a.data, a.model), parseReading(b.data, b.model)];
+  const two = combineReadings(pa, pb, opts.scanGtin14, opts.panel);
+  const model = opts.third ? thirdReadingModel(pa, pb, two, askedOf, opts.panel) : null;
+  if (!model) return two;
+  // Only with time left in the photo job (300 s): one try, cut off after THIRD_READING_MS. A third reading that is not
+  // made or fails leaves the two readings' result as it is.
+  const notMade = (why: string) => ({ ...two, settled: [...(two.settled ?? []), `third reading (${model}): not made, ${why}`] });
+  // One model gave both readings although two are configured (the other's reading failed): a third by either model
+  // could not be checked against another model's reading.
+  if (first !== second && askedOf[0] === askedOf[1]) return notMade('one model gave both readings');
+  if (Date.now() - started > THIRD_READING_AFTER_MS) return notMade('the first two took too long');
+  if (opts.beforeThird) {
+    try {
+      await opts.beforeThird();
+    } catch {
+      return notMade('the AI budget is used up');
+    }
+  }
+  const c = await read(model, true).catch(() => null);
+  if (!c) return notMade('the model did not answer');
+  return combineReadings(pa, pb, opts.scanGtin14, opts.panel, parseReading(c.data, c.model));
 }
+
+/** The third reading's one try, and how long the first two may have taken for it to be made (the photo job has 300 s). */
+export const THIRD_READING_MS = 60000;
+export const THIRD_READING_AFTER_MS = 150000;

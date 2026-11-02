@@ -884,6 +884,103 @@ describe('label photo stages: submitted → extracted → corroborated → verif
     expect(o.nutritionSource).toBe('A label photo matched to this barcode (read by AI, not reviewed)');
     expect(o.labelEvidenceUsed).toBe(false);
   });
+  it('a photo showing the scanned barcode with one analysis digit read differently is used for the rest, for this owner only', async () => {
+    // Test C on a fixture: the shared record's analysis comes from an earlier verified photo (without calories); another
+    // owner's photo of the same package reads moisture 12% where the record says 10% (one digit apart).
+    labelPatch = { barcodeMatch: true, calories: [] };
+    const first = await newScan('u1', BC.food, 'cat1');
+    await processScan(deps(), 'u1', first.id);
+    await processPhoto(deps(), 'u1', (await photoFor('u1', first.id)).id);
+    const gtin = (await read(first)).gtin;
+    expect((await db.doc(`products/${gtin}`).get()).data()!.facts.calories).toBeUndefined();
+    const ga = [
+      { nutrient: 'crude_protein', label: 'Crude Protein', qualifier: 'min', value: 32, unit: '%' },
+      { nutrient: 'crude_fat', label: 'Crude Fat', qualifier: 'min', value: 15, unit: '%' },
+      { nutrient: 'crude_fiber', label: 'Crude Fiber', qualifier: 'max', value: 4, unit: '%' },
+      { nutrient: 'moisture', label: 'Moisture', qualifier: 'max', value: 12, unit: '%' },
+    ] as ValidatedLabel['guaranteedAnalysis'];
+    labelPatch = { barcodeMatch: true, guaranteedAnalysis: ga };
+    const ref = await newScan('u2', BC.food);
+    await processScan(deps(), 'u2', ref.id);
+    const photo = await photoFor('u2', ref.id);
+    await processPhoto(deps(), 'u2', photo.id);
+    const p = await read(photo);
+    expect(p).toMatchObject({ status: 'processed', stage: 'verified', statusMessage: 'Label read' });
+    expect(p.stageNote).toBe('Matched by its barcode. Its analysis reads differently (moisture 12% vs 10%); the saved analysis is kept.');
+    const s = await read(ref);
+    expect(s.labelEvidenceUsed).toBe(true); // the calories, which the record lacks, come from this owner's photo
+    expect(s.evidenceNotes.join(' ')).toMatch(/Your label photo’s analysis reads differently from the saved one \(moisture 12% vs 10%\); the saved analysis is used\./);
+    // The shared record keeps its analysis and gets nothing from this photo; only the first photo contributed.
+    const product = (await db.doc(`products/${gtin}`).get()).data()!;
+    expect(product.facts.calories).toBeUndefined();
+    expect(product.facts.guaranteedAnalysis.value.find((e: { nutrient: string }) => e.nutrient === 'moisture').value).toBe(10);
+    expect((await db.collection(`products/${gtin}/contributions`).get()).size).toBe(1);
+    const lf = (await db.doc(`users/u2/labelFacts/${gtin}`).get()).data()!;
+    expect(lf.extractions[photo.id]).toMatchObject({ stage: 'verified', conflicts: ['its guaranteed analysis differs from this barcode’s record (moisture 12% vs 10%)'] });
+  });
+  it('a matched photo with a misread digit never replaces a partial saved analysis (review of 2.5.0)', async () => {
+    // The shared record's analysis, from an earlier verified photo, has no fiber row (a partial analysis).
+    const partial = [
+      { nutrient: 'crude_protein', label: 'Crude Protein', qualifier: 'min', value: 32, unit: '%' },
+      { nutrient: 'crude_fat', label: 'Crude Fat', qualifier: 'min', value: 15, unit: '%' },
+      { nutrient: 'moisture', label: 'Moisture', qualifier: 'max', value: 10, unit: '%' },
+    ] as ValidatedLabel['guaranteedAnalysis'];
+    labelPatch = { barcodeMatch: true, guaranteedAnalysis: partial, calories: [] };
+    const first = await newScan('u1', BC.food, 'cat1');
+    await processScan(deps(), 'u1', first.id);
+    await processPhoto(deps(), 'u1', (await photoFor('u1', first.id)).id);
+    const gtin = (await read(first)).gtin;
+    // Another owner's photo of the package gives the full analysis, with moisture read 12% where the record says 10%.
+    labelPatch = { barcodeMatch: true, guaranteedAnalysis: [...partial.map((e) => (e.nutrient === 'moisture' ? { ...e, value: 12 } : e)), { nutrient: 'crude_fiber', label: 'Crude Fiber', qualifier: 'max', value: 4, unit: '%' }] as ValidatedLabel['guaranteedAnalysis'] };
+    const ref = await newScan('u2', BC.food);
+    await processScan(deps(), 'u2', ref.id);
+    const photo = await photoFor('u2', ref.id);
+    await processPhoto(deps(), 'u2', photo.id);
+    expect(await read(photo)).toMatchObject({ stage: 'verified' });
+    const s = await read(ref);
+    expect(s.nutritionSource).toBe('A label photo matched to this barcode (read by AI, not reviewed)'); // the record's, not this photo's
+    expect(JSON.stringify(s)).not.toMatch(/Moisture[^}]*12/);
+    expect(s.evidenceNotes.join(' ')).toMatch(/the saved analysis is used/);
+  });
+  it('compares a reading saved as disputed only for its analysis again, so the owner need not upload it again (review of 2.5.0)', async () => {
+    // The shared record's analysis (moisture 10%, no calories) comes from an earlier verified photo.
+    labelPatch = { barcodeMatch: true, calories: [] };
+    const first = await newScan('u1', BC.food, 'cat1');
+    await processScan(deps(), 'u1', first.id);
+    await processPhoto(deps(), 'u1', (await photoFor('u1', first.id)).id);
+    const gtin = (await read(first)).gtin;
+    // u2's photo of the package was read by 2.4.0 and disputed for moisture 12% vs 10% only.
+    labelPatch = { barcodeMatch: true, guaranteedAnalysis: [
+      { nutrient: 'crude_protein', label: 'Crude Protein', qualifier: 'min', value: 32, unit: '%' },
+      { nutrient: 'crude_fat', label: 'Crude Fat', qualifier: 'min', value: 15, unit: '%' },
+      { nutrient: 'crude_fiber', label: 'Crude Fiber', qualifier: 'max', value: 4, unit: '%' },
+      { nutrient: 'moisture', label: 'Moisture', qualifier: 'max', value: 12, unit: '%' },
+    ] as ValidatedLabel['guaranteedAnalysis'] };
+    const saved = { ...(await sources.extractLabel({ apiKey: 'k', model: 'mock', imageBase64: '', mimeType: 'image/jpeg', purpose: 'the nutrition panel', scanGtin14: gtin })), version: 'label-extract-2.4.0' };
+    labelPatch = null;
+    const before = await newScan('u2', BC.food);
+    const photo = await db.collection('users/u2/photos').add({ scanId: before.id, purpose: 'nutrition', imageUrl: 'https://firebasestorage.googleapis.com/v0/b/x/o/users%2Fu2%2Fuploads%2F9.jpg', status: 'processed', stage: 'disputed', createdAt: Timestamp.fromDate(NOW) });
+    await db.doc(`users/u2/labelFacts/${gtin}`).set({ extractions: { [photo.id]: { scanId: before.id, purpose: 'nutrition', processedAt: Timestamp.fromDate(NOW), label: saved, stage: 'disputed', agreements: ['the barcode on the photo is the scanned one'], conflicts: ['its guaranteed analysis differs from this barcode’s record (moisture 12% vs 10%)'] } } });
+    await processScan(deps(), 'u2', before.id);
+    const p = await read(photo);
+    expect(p).toMatchObject({ stage: 'verified', statusMessage: 'Label read' });
+    expect(p.stageNote).toBe('Matched by its barcode. Its analysis reads differently (moisture 12% vs 10%); the saved analysis is kept.');
+    const s = await read(before);
+    expect(s.labelEvidenceUsed).toBe(true); // the calories, which the record lacks, now come from the photo
+    expect((await db.doc(`users/u2/labelFacts/${gtin}`).get()).data()!.extractions[photo.id].stage).toBe('verified');
+  });
+  it('reads a saved "feeding trials" callout with the current rules before deciding on it (review of 2.5.0)', async () => {
+    const a = await newScan('u1', BC.food);
+    await processScan(deps(), 'u1', a.id);
+    const gtin = (await read(a)).gtin;
+    const old = { text: 'Clinically proven in feeding trials to reduce hairballs in adult cats', type: 'complete', species: 'cat', lifeStages: ['adult_maintenance'], method: 'feeding_trial', largeSizeGrowth: null, style: 'other' };
+    await db.doc(`products/${gtin}`).update({ 'facts.adequacy': { value: old, source: { ...src('opff', BC.food), sourceType: 'manufacturer', sourceName: 'TEST FIXTURE maker page' } } });
+    const b = await newScan('u1', BC.food);
+    await processScan(deps(), 'u1', b.id);
+    const s = await read(b);
+    expect(s.diagnosticNotes.join(' ')).toMatch(/Set aside a sentence from TEST FIXTURE maker page/);
+    expect(s.adequacySummary ?? '').not.toMatch(/Complete and balanced/);
+  });
   it('a photo whose ingredient list differs from this barcode’s record is disputed and not used', async () => {
     labelPatch = { ingredientsText: 'Salmon, potatoes, peas, canola oil, tapioca, salt', ingredients: ['Salmon', 'potatoes', 'peas', 'canola oil', 'tapioca', 'salt'] };
     const ref = await newScan('u1', BC.food, 'cat1');

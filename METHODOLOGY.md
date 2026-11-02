@@ -1,7 +1,7 @@
 # Purrbi assessment methodology
 
 Version: `assessment-3.0.0` overall, made of `purrbi-score-3.0.0` (score), `scope-3.0.0` (classification), `verdict-2.2.0` (verdict),
-`kb-2026-10-28-draft` (ingredient notes), `label-extract-2.4.0` (label reader), `research-2.9.4` (web research), `explain-2.0.0` (claim-checked explanations).
+`kb-2026-10-28-draft` (ingredient notes), `label-extract-2.5.0` (label reader), `research-2.9.4` (web research), `explain-2.0.0` (claim-checked explanations).
 A saved result records `assessmentVersion` and its parts (`scoreVersion`, `kbVersion`, `scopeVersion`); the shared product record its
 classification version; each fact read from a label, page or document its reader's version; each explanation its own. When the app opens
 a result saved under an older `assessmentVersion` it asks for a re-check (section 10), so a known bad classification is corrected without
@@ -282,8 +282,44 @@ Each fact shows where it came from:
 
 Nothing is marked as reviewed by a person unless it was.
 
-**How a label is read** (label photos and database label images; reader `label-extract-2.4.0`, `ai/labelExtract.ts`):
+**How a label is read** (label photos and database label images; reader `label-extract-2.5.0`, `ai/labelExtract.ts`):
 - The model only transcribes each visible panel, word for word, marking anything it cannot read with certainty. Two independent readings are made (two different models where configured); only what both say is kept.
+- An owner's photo gets a third reading (2.5.0) when only one of the two readings gives the ingredient list or the
+  adequacy statement, or both give it differently:
+  - It is made by the model whose reading lacked the value the photo was taken for first (for a nutrition photo the
+    statement, otherwise the list); the second model when both gave it.
+  - With two models configured, it counts only when it agrees with the **other** model's reading, so what is kept is
+    always read alike by two different models. It may settle both values, each that way. A third reading that agrees
+    only with its own model's reading, calls the label illegible, or agrees with neither settles nothing.
+  - With one model configured, any two of the three readings agreeing count. When two models are configured but one
+    gave both readings (the other's reading failed), no third reading is made.
+  - Two of the three readings showing the same other barcode make the photo another product's (the trace says the
+    third reading did).
+  - It is one try of at most 60 s, made only when the first two took at most 150 s (the photo job's limit is 300 s), and
+    it counts against the daily AI budget like the photo itself; when the budget is used up, it is not made.
+  - Not made, failed or unsettled, it changes nothing else, and the photo says what to retake. The photo's trace
+    records the outcome (`settled`).
+  - Database label images keep two readings (the scan's time limit).
+- The adequacy statement is asked for as its own panel, transcribed whole even when it runs on into the calorie content
+  or stands just before the ingredient list (2.5.0). A statement that wraps over printed lines is read from the line where
+  it starts ("… is formulated", "Animal feeding tests …"), forward only:
+  - A line runs on when it stops mid-phrase ("… established by the") or the next line starts in lower case ("except for
+    growth of large size dogs").
+  - It stops at its first full stop, at a line that starts another item (a bullet, a bracket, a "Kittens:" row, a
+    heading of up to three words in capitals), or after three more lines.
+  - It must word the statement formally ("formulated to meet", "animal feeding tests").
+  - It replaces the line-by-line reading only when it is that statement with more to it: the same kind and species, every
+    life stage the line gave and another, or the large-size-dog exception; or when it shows a negation the line's part
+    leaves out ("… are not formulated / to meet …"). So a feeding guide, a note or another statement next to it adds
+    nothing.
+  - An unreadable mark inside it drops it, and a line continuing a line with an unreadable mark is not read on its own
+    (the mark may be "not").
+  - (Test A's can, 2026-11-02: one reading gave no statement and the other the whole one, so the photo was not scored.)
+- "Feeding trials" or "feeding protocols" alone is not an adequacy statement (2.5.0): a callout such as "Clinically
+  proven in feeding trials to reduce hairballs" was read as "complete and balanced" before. A statement substantiated by
+  feeding tests says so in formal words ("Animal feeding tests using AAFCO procedures substantiate …"). A saved record's
+  statement (and analysis) is read again with the current rules as soon as it is loaded, before anything decides whether
+  it is set aside, missing or replaced by a clearer one.
 - The brand, product type and species are kept only when both readings give them, they agree, and they are printed in at
   least one reading's transcription (2.4.0): a value a model gave without either reading transcribing it (a logo it
   guessed, a species from a picture) is not read. A brand printed only in a "BY …" line is the maker or retailer, not the
@@ -348,8 +384,8 @@ Nothing is marked as reviewed by a person unless it was.
 - Readings made by `label-extract-2.3.0` stay in use: their name was agreed under the earlier rule (the same name for 80%
   of its words) and their brand and species without the check that they are printed. A name, brand or type an earlier
   reader kept with an unreadable mark in it is not used.
-- After a new reader, the database label images it reads differently are read once more: the nutrition panel after 2.2.0
-  and 2.3.0, the front after 2.4.0.
+- After a new reader, the database label images it reads differently are read once more: the nutrition panel after 2.2.0,
+  2.3.0 and 2.5.0, the front after 2.4.0. Readings made by `label-extract-2.4.0` stay in use as they are.
 - Readings made by `label-extract-2.2.0` stay in use as they are (2.3.0 only reads an adequacy line 2.2.0 left out); a database label image's nutrition panel is read again once.
 - Readings made by `label-extract-2.1.0` stay in use as the current rules use them: only their plain analysis rows (a row naming one nutrient, with no other number in its name, in %, within food-level bounds for minor nutrients, and no second value for that nutrient), and an ingredient list cut again where its analysis starts. A row set aside that was a required guarantee is asked for again; a reading that was disputed only because of a row now set aside is compared with the public record again (its photo's stage and note change with it). A database label image whose 2.1.0 analysis had a row set aside, or whose nutrition panel 2.1.0 could not read, is read again once, and retried after a technical failure.
 - The same analysis rules read the analysis printed on a manufacturer's or retailer's page (research `research-2.0.0`), from the fetched page that is itself shown to be this product (the one with the barcode, or else the one with the brand and the name): the page's own analysis is used when it gives more than the model's answer, or when the answer disagrees with it, and the result says so only when it uses it.
@@ -362,9 +398,11 @@ An owner's label photo goes through these stages, recorded on the photo (`stage`
 | extracted | Two independent AI readings agreed on the label text. Its note says whether there was anything public to compare it with, whether what it shows agrees so far but too little to confirm it, agrees in part (e.g. a recipe partly the same), or could not be matched yet | The owner's own result |
 | corroborated | An independent public source agrees: this barcode's record has the same analysis (at least two guarantees, ±0.5 points) or the same name | The owner's own result |
 | verified | Also tied to this barcode: the barcode is on the photo, or the photo shows this barcode's recipe (at least 80% of the first 10 ingredients, in order) | The owner's result, **and** gaps in Purrbi's shared record for this barcode |
-| disputed | Conflicts with this barcode's record (another recipe, under 60% match, or another analysis) | Not used; the owner is asked to check the package |
+| verified, with a misread digit | The barcode is on the photo, and its only conflict is one analysis row whose **last digit** differs from the record's (written to the same decimals: 3 and 3.8 as 3.0 and 3.8) by at most 2 or as a look-alike pair (3/8, 6/8, 5/6, 0/8, 1/7, 5/8, 6/9, 8/9, 0/6, 0/9): 26% vs 28%, 30% vs 38%. A tens digit (10% vs 20%) or a wider gap (30% vs 34%) is not a misread. Its name, statement and calorie content must not differ from the record's either (that is another formula on the same barcode) | The owner's result only, for what the record lacks, and **none of its analysis rows** (the record's analysis is kept, even a partial one); nothing is added to the shared record. The photo says "Matched by its barcode. Its analysis reads differently (moisture 28% vs 26%); the saved analysis is kept." A reading saved as disputed only for its analysis is compared again under this rule, so it need not be uploaded again. |
+| disputed | Conflicts with this barcode's record (another recipe, under 60% match, or another analysis: any other difference, more than one row, or a misread digit next to another name, statement or calorie content) | Not used; the owner is asked to check the package |
 
 Promotion rules for verified readings:
+- Only a verified reading without any conflict is promoted (a reading with a misread digit is used for its owner only).
 - They fill only fields the shared record lacks, and never overwrite.
 - They are shown to others as "A label photo matched to this barcode (read by AI, not reviewed)".
 - Each promotion is audited in `products/{gtin}/contributions` with a one-way hash, not the account id. The image itself is never shared.

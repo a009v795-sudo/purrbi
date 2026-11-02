@@ -387,6 +387,9 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   const stored = await readProduct(db, gtin);
   const evidence = await publicEvidence(deps, job, o, stored, now);
   let { facts, origin, fetchedPublic } = evidence;
+  // What a saved statement or analysis says is read with the current rules before anything decides on it (whether it is
+  // set aside, missing or replaced by a clearer one), not only at the end (review of label reader 2.5.0).
+  facts = rederive(facts);
   const notes = evidence.notes;
   // Label images read by an older label reader, and web pages read by an older research method, are dropped
   // and read again below; a run that cannot read sources again (a photo, a pet change) keeps them, and its
@@ -432,9 +435,12 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       .filter((e) => LABEL_READINGS_IN_USE.has(e.label.version ?? ''))
       .map(async (e) => {
         const label = readingInUse(e.label);
-        if (label === e.label) return { ...e, label };
+        // A reading disputed only for its analysis is compared again (2.5.0: a misread digit on a photo of this barcode
+        // no longer disputes the rest), so the owner need not upload it again.
+        const analysisDispute = e.stage === 'disputed' && !!e.conflicts?.length && e.conflicts.every((x) => x.startsWith('its guaranteed analysis differs'));
+        if (label === e.label && !analysisDispute) return { ...e, label };
         const c = corroborateLabel(label, facts);
-        if (c.stage !== e.stage) await restageLabelPhoto(db, o.uid, gtin, e.photoId, { ...c, note: photoNote(e.purpose ?? 'label', label, c) });
+        if (c.stage !== e.stage || JSON.stringify(c.conflicts) !== JSON.stringify(e.conflicts ?? [])) await restageLabelPhoto(db, o.uid, gtin, e.photoId, { ...c, note: photoNote(e.purpose ?? 'label', label, c) });
         return { ...e, label, stage: c.stage, agreements: c.agreements, conflicts: c.conflicts };
       }),
   );
@@ -443,7 +449,9 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   // A reading verified against this barcode fills gaps in the shared record (backend only, no account id).
   const promoted: { photoKey: string; fields: string[]; agreements: string[] }[] = [];
   if (config.promoteLabelPhotos !== false) {
-    for (const e of current.filter((x) => x.stage === 'verified')) {
+    // A verified reading with a conflict (its analysis numbers differ from the record: a misread) is used for this owner
+    // only, never added to the shared record.
+    for (const e of current.filter((x) => x.stage === 'verified' && !x.conflicts?.length)) {
       const photoKey = createHash('sha256').update(`${o.uid}/${e.photoId}`).digest('hex').slice(0, 16);
       const src: SourceRef = { sourceId: `photo:${photoKey}`, sourceType: 'verified_label', sourceName: 'A label photo matched to this barcode', retrievedAt: e.processedAt.toISOString(), matchConfidence: e.label.barcodeMatch ? 'exact_barcode' : 'brand_and_product', readerVersion: e.label.version };
       const merged = fillMissing(facts, labelToFacts(e.label, src));
@@ -789,9 +797,13 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
       job.evidenceNotes.push(`A label photo was not used: ${e.conflicts?.[0] ?? 'it conflicts with this barcode’s record'}. Check that it shows this package; if it does, retake it straight on, in good light.`);
       continue;
     }
-    if (e.stage === 'verified' && config.promoteLabelPhotos !== false) continue; // already in the shared facts above
+    if (e.stage === 'verified' && config.promoteLabelPhotos !== false && !e.conflicts?.length) continue; // already in the shared facts above
+    // A verified reading with a conflict (an analysis digit read differently): none of its analysis is used, so the
+    // saved analysis stays (`fillMissing` replaces a partial one) or the panel is asked for again.
+    const conflicted = !!e.conflicts?.length;
+    if (conflicted && facts.guaranteedAnalysis) job.evidenceNotes.push(`Your label photo’s analysis reads differently from the saved one (${e.conflicts![0].replace(/^its guaranteed analysis differs from this barcode’s record \((.*)\)$/, '$1')}); the saved analysis is used.`);
     const src: SourceRef = { sourceId: `label:${e.photoId}`, sourceType: 'user_label', sourceName: 'Your label photo', retrievedAt: e.processedAt.toISOString(), matchConfidence: e.stage === 'verified' ? 'exact_barcode' : 'none' };
-    const merged = fillMissing(facts, labelToFacts(e.label, src));
+    const merged = fillMissing(facts, labelToFacts(conflicted ? { ...e.label, guaranteedAnalysis: [] } : e.label, src));
     if (merged.filled.length) {
       labelUsed = true;
       if (e.stage !== 'verified') labelTied = false;
@@ -1247,9 +1259,9 @@ async function photoJob(deps: Deps, uid: string, photoId: string): Promise<void>
         await consumeAiBudget(db, config.limits, now);
         if (!deps.readImage) throw new Error('image reader not configured');
         const image = await deps.readImage(String(claimed.photo.imageUrl ?? ''), uid);
-        const label = await deps.sources.extractLabel({ apiKey: config.openaiApiKey(), model: config.visionModel, imageBase64: image.base64, mimeType: image.mimeType, purpose: purposeText(purpose), panel: purpose, scanGtin14: gtin });
+        const label = await deps.sources.extractLabel({ apiKey: config.openaiApiKey(), model: config.visionModel, imageBase64: image.base64, mimeType: image.mimeType, purpose: purposeText(purpose), panel: purpose, scanGtin14: gtin, third: true, beforeThird: () => consumeAiBudget(db, config.limits, now) });
         deps.log.info('label extracted', { traceId, uid, scanId, photoId, status: label.status, panels: label.panels, rejected: label.rejected });
-        job.diagnosticNotes.push(`Label photo (${label.model}): ${label.status}${label.rejected.length ? `; not kept: ${label.rejected.slice(0, 4).join('; ')}` : ''}${label.notKept?.length ? `; not agreed or not printed: ${label.notKept.join('; ')}` : ''}`);
+        job.diagnosticNotes.push(`Label photo (${label.model}): ${label.status}${label.rejected.length ? `; not kept: ${label.rejected.slice(0, 4).join('; ')}` : ''}${label.notKept?.length ? `; not agreed or not printed: ${label.notKept.join('; ')}` : ''}${label.settled?.length ? `; third reading: ${label.settled.join('; ')}` : ''}`);
         if (label.status === 'processed') {
           // How far the reading can be trusted beyond this owner: compared with this barcode's public record.
           const c = corroborateLabel(label, (await readProduct(db, gtin))?.facts);

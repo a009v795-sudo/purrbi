@@ -721,3 +721,79 @@ its list is cut off at the photo's edge.
 - **Physical device:** these photo runs used the real app's release web build on the live backend, not a phone. The APK
   is unchanged (build 10); the owner's device runs the same backend.
 
+
+## Priority list of 2026-11-02 (evening): Issues panel, scan flow, reader 2.5.0
+
+The full issue table, the index reconciliation and the provider audit are in `docs/ISSUES_2026-11-02.md`. Check
+categories are kept apart below:
+- **local:** unit and emulator tests;
+- **FlutterFlow validation:** `fft check` and the push validator;
+- **live:** the real app's release web build on the live backend, as the test users;
+- **device:** not run.
+
+### FlutterFlow repairs (app export `43020cb`)
+
+- **`lastScanRef` removed.** The Scan page passes `scanRefFor(signed-in user, id)` (`users/{uid}/scans/{id}`) to the
+  result page.
+- **Fresh connection check.** `recheckConnection` runs before a scan is refused as offline.
+- **Splash sign-out.** A profile-less account is signed out and sent to Welcome explicitly, with automatic navigation off
+  for that Log Out. It used to stay on the splash screen.
+- **Offline message.** "You’re offline. Connect to the internet and try again."
+- **Commits.** FlutterFlow `ir8O0BCzBv966oJTOhAm` … `VIrKsNlL3IvjCVrV5yZf`; checkpoint branch
+  `checkpoint-pre-phase2-2026-11-02`.
+- **Code checks.** `flutter analyze lib`: 0 errors.
+
+### Live, barcode only (typed entry, release web build of `43020cb`, backend `9d5a0c5`, account `accept`)
+
+| Test | Scan / trace | Status | Result |
+|---|---|---|---|
+| A 099482481087 | `hpkh6mvRREYnav7qyWMk` / `951c667e-624` | needs_photos in 6 s | Name GRAIN FREE SALMON PÂTÉ LOAF RECIPE, brand WHOLE PAWS, for cats (from this account's earlier front photos), complete food; unscored. <br>Not in Open Pet Food Facts or its sister databases (404, both barcode forms). The only page showing the barcode (eBay) turns readers away. <br>Asks for the ingredient list and the nutrition panel. |
+| B 076344886570 | `WR3qEQzgKi0qxesykzGK` / `f99f064b-962` | complete in 3 s | 75/100 Good, for cats; ingredients, analysis and calories from the manufacturer's page |
+| C 099482517243 | `VGQw9Wj1oHx5rsjolViE` / `dc02af98-09d` | needs_photos | SALMON & AVOCADO RECIPE TREATS, Whole Paws, for cats, treat; analysis from a photo matched to this barcode. <br>A page with this name (not this barcode or recipe) was found; its list was not used. <br>Asks for the ingredient list. |
+
+Each scan was created by the app and opened on its own result page through the new reference, with no app errors.
+
+### Live, the owner's new photos (backend `9d5a0c5`, reader 2.4.0): why 2.5.0 was needed
+
+- **A, can side (`4aZUDTpJnPhgeQOP0lcQ`, `cd5faffb-990`).**
+  - First upload: the ingredient list was refused, because the readings disagreed.
+  - Second upload of the same photo: the full list was read ("Salmon, Chicken, Chicken Liver, Salmon Broth, Carrots,
+    Peas, … DL-Methionine.") with the analysis (10/6/1/78) and the calories (1181 kcal/kg, 184 kcal/can).
+  - The AAFCO statement was **not kept**: one reading gave none, and the other gave the whole statement. On the can it
+    wraps over two printed lines and runs into the calorie content.
+  - Still unscored.
+- **C, back of the bag (`rOCpdTIIxUapT2ArptzL`, `6ad2c509-3b0`).**
+  - Read well, despite the glare: SALMON, VEGETABLE GLYCERINE, PEA FLOUR, AVOCADO, PEA PROTEIN, ROSEMARY EXTRACT;
+    42/12/3; 3300 kcal/kg and 1.7 kcal per treat; the barcode on the photo is the scanned one.
+  - Both readings misread "Moisture (Max.) 26%" as 28%. The saved record (from an earlier photo) says 26%, so the whole
+    photo was disputed, including the correct list.
+  - Still unscored.
+
+### Live fault and state checks (release web build of `43020cb`)
+
+| Check | Result |
+|---|---|
+| Camera button on web | "Camera scanning needs the Android or iOS app. Type the barcode number below instead.", no scan |
+| Invalid number (12345) | "Check the number: …", no scan |
+| Tap while offline (after the 30 s flag turned offline) | "You’re offline. Connect to the internet and try again.", no scan, still on the Scan page |
+| Tap at once after reconnecting (flag still offline) | The fresh check let it through: the scan was created in 1.2 s and the result page opened |
+| Three rapid taps on "Look up" | One scan |
+| Fresh browser → sign in (account 1) → My scans → Profile → Log out → sign in (account 2) → My scans | Lands on Welcome after Log out; each history shows only its own account's scans (no product name unique to the other account) |
+
+**Not run here:**
+- the physical camera, a denied permission and a cancelled scan (they need a phone);
+- an expired session;
+- an interrupted upload;
+- switching pets.
+
+Provider time-outs and malformed answers are covered by unit tests only, not live.
+
+### Android APK, build 11
+
+- **Built from:** commit `43020cb` (the FlutterFlow export above), run 41508153499, artifact `purrbi-android-apk-11`.
+- **APK:** `app-release.apk`, 113,130,790 bytes.
+- **SHA-256:** `6d2930ade346b5ea650f350c744e2a6c5c5067e2accafcf318a493f8c60949a1`.
+- **Version:** versionName 1.0.0, versionCode 11.
+- **App id:** `com.mycompany.purrbiv2development`.
+- **Signed with:** the development key (not for store upload).
+- **Install:** not installed here (no device).

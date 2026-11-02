@@ -25,6 +25,10 @@ const GROWTH = /\b(growth|growing|pupp(y|ies)|kittens?|junior|croissance|chatons
 const REPRODUCTION = /\b(gestation|lactation|reproduction|pregnant|nursing|gestantes?|allaitantes?|trachtig(e|en)?|saugend(e|en)?|gestacion|lactancia|gestazione|allattamento|dracht(ig)?|zogend(e)?|gestacao|lactacao)\b/;
 const ADULT = /\b(adult maintenance|maintenance of adult|maintenance|adults?|senior|mature|adultes?|adultos?|adulti|ausgewachsene?n?|erwachsene?n?|volwassen(en)?)\b/;
 const FEEDING_TRIAL = /\b(animal feeding tests|feeding (trials?|tests|protocols))\b/;
+// "Feeding trials" or "feeding protocols" alone is marketing ("Clinically proven in feeding trials to reduce hairballs"):
+// a statement substantiated by feeding tests also says so in formal words (2.5.0 review).
+const TRIAL_WORDS_ONLY = /\bfeeding (trials?|protocols)\b/;
+const FORMAL_WORDS = /\b(animal feeding tests|complete and balanced|substantiat\w*|aafco|fediaf|nutrient profiles?|nutritional levels|formulated to meet|complete (pet |dry |wet )?(food|feed)|complete feedingstuff)\b/;
 const FORMULATION = /\b(formulated to meet|nutrient profiles?|nutritional levels established)\b/;
 
 // English plus the label languages most common in Open Pet Food Facts (fr, de, es, it, nl, pt).
@@ -53,6 +57,7 @@ export function parseAdequacyStatement(raw: string | null | undefined): Adequacy
   // a real one names the species or the life stage, or the standard it was substantiated against. An EU
   // label's feed-type declaration ("Alimento completo para cães") is the regulated statement itself.
   if (type === 'complete' && !EU_COMPLETE.test(t) && detectSpecies(t) === 'unknown' && !ALL_STAGES.test(t) && !GROWTH.test(t) && !REPRODUCTION.test(t) && !ADULT.test(t) && !FORMULATION.test(t) && !FEEDING_TRIAL.test(t) && !/\b(aafco|fediaf)\b/.test(t)) type = 'unclear';
+  if (type === 'complete' && TRIAL_WORDS_ONLY.test(t) && !FORMAL_WORDS.test(t) && !EU_COMPLETE.test(t)) type = 'unclear';
 
   let method: AdequacyStatement['method'] = 'unknown';
   if (type === 'complete') {

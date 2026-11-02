@@ -50,6 +50,40 @@ describe('label photo stages', () => {
     expect(d.stage).toBe('disputed'); // a conflict outweighs the barcode
     expect(d.conflicts[0]).toMatch(/protein 22% vs 30%/);
   });
+  it('a photo showing the scanned barcode with one analysis row read one digit apart is verified for the rest', () => {
+    // Test C: both readings saw "Moisture (Max.) 26%" as 28% under glare; the barcode on the photo is the scanned one.
+    const misread = GA_FULL.map((e) => (e.nutrient === 'moisture' ? { ...e, value: e.value + 2 } : e));
+    const moisture = GA_FULL.find((e) => e.nutrient === 'moisture')!.value;
+    expect(String(moisture + 2)).toHaveLength(String(moisture).length); // one digit apart in this fixture
+    const v = corroborateLabel(reading({ barcodeMatch: true, guaranteedAnalysis: misread, ingredients: RECIPE.slice(0, 2) }), facts());
+    expect(v.stage).toBe('verified');
+    expect(v.conflicts).toEqual([`its guaranteed analysis differs from this barcode’s record (moisture ${moisture + 2}% vs ${moisture}%)`]);
+    expect(v.note).toBe(`Matched by its barcode. Its analysis reads differently (moisture ${moisture + 2}% vs ${moisture}%); the saved analysis is kept.`);
+    // Without the barcode on the photo, or with two rows apart, or a row further apart: disputed, as before.
+    expect(corroborateLabel(reading({ guaranteedAnalysis: misread }), facts()).stage).toBe('disputed');
+    const two = misread.map((e) => (e.nutrient === 'crude_fat' ? { ...e, value: e.value + 1 } : e));
+    expect(corroborateLabel(reading({ barcodeMatch: true, guaranteedAnalysis: two }), facts()).stage).toBe('disputed');
+    const far = GA_FULL.map((e) => (e.nutrient === 'moisture' ? { ...e, value: e.value + 12 } : e));
+    expect(corroborateLabel(reading({ barcodeMatch: true, guaranteedAnalysis: far }), facts()).stage).toBe('disputed');
+    // Another recipe on the same barcode with the same misread: disputed.
+    expect(corroborateLabel(reading({ barcodeMatch: true, guaranteedAnalysis: misread, ingredients: ['Salmon', 'potatoes', 'peas', 'canola oil', 'tapioca', 'salt'] }), facts()).stage).toBe('disputed');
+  });
+  it('takes only a last digit that glare explains for a misread, and not when anything else differs (review of 2.5.0)', () => {
+    const stage = (nutrient: string, value: number, over: Partial<ValidatedLabel> = {}) =>
+      corroborateLabel(reading({ barcodeMatch: true, guaranteedAnalysis: GA_FULL.map((e) => (e.nutrient === nutrient ? { ...e, value } : e)), ...over }), facts()).stage;
+    expect(stage('moisture', 12)).toBe('verified'); // 10 vs 12: last digit, 2 apart
+    expect(stage('crude_protein', 38)).toBe('verified'); // 30 vs 38: 0 and 8 look alike
+    expect(stage('crude_fiber', 4.8)).toBe('verified'); // 4 vs 4.8, compared as 4.0 and 4.8: 0 and 8 look alike
+    expect(stage('moisture', 20)).toBe('disputed'); // a tens digit
+    expect(stage('crude_fat', 25)).toBe('disputed'); // 15 vs 25: a tens digit
+    expect(stage('crude_fiber', 9)).toBe('disputed'); // 4 vs 9: neither close nor alike
+    expect(stage('crude_protein', 34)).toBe('disputed'); // 30 vs 34: 4 apart, not alike
+    // Another name, statement or calorie content: another formula on the same barcode, not a misread.
+    expect(stage('moisture', 12, { calories: [{ kcal: 3300, per: 'kg' }] })).toBe('disputed');
+    expect(stage('moisture', 12, { calories: [{ kcal: 3800, per: 'kg' }] })).toBe('verified');
+    expect(stage('moisture', 12, { productName: 'Kitten Ocean Fish Formula' })).toBe('disputed');
+    expect(stage('moisture', 12, { adequacy: { text: 'TEST FIXTURE is formulated to meet the nutritional levels established by the AAFCO Cat Food Nutrient Profiles for growth.', type: 'complete', species: 'cat', lifeStages: ['growth'], method: 'formulation', largeSizeGrowth: null, style: 'aafco' } })).toBe('disputed');
+  });
   it('never compares against the owner’s own private facts', () => {
     const own = facts();
     own.ingredients = { value: ['Salmon', 'peas', 'potatoes', 'tapioca', 'salt'], source: { ...own.ingredients!.source, sourceType: 'user_label' } };
