@@ -13,13 +13,12 @@ import 'package:flutter/material.dart' hide RepeatMode;
 
 import 'dart:async';
 
-import '/app_state.dart';
 import '/auth/firebase_auth/auth_util.dart';
 
 // Creates the scan request the backend worker picks up (users/{uid}/scans/{id}, status "queued"), with
-// exactly the fields the security rules accept for a new scan. It returns the new document's id and keeps its
-// reference in app state (lastScanRef: a FlutterFlow custom action cannot return a document reference), so the
-// Scan page opens it. It never throws: when the request cannot be created (signed out, refused by the rules, a
+// exactly the fields the security rules accept for a new scan. It returns the new document's id; the Scan page
+// opens users/{uid}/scans/{id} through scanRefFor (no app-state reference to go stale or cross accounts).
+// It never throws: when the request cannot be created (signed out, refused by the rules, a
 // Firestore error) it returns '' after tracing why, so the Scan page can release its "creating" guard and say
 // so. A server confirmation that has not come within 10 s (a weak connection) does not hold the page:
 // Firestore keeps the write and sends it when it can, and the result page shows the request from its local
@@ -55,6 +54,5 @@ Future<String> createScanRequest(
     await traceScan('create_failed', '', '', 'error');
     return '';
   }
-  FFAppState().lastScanRef = ref;
   return ref.id;
 }

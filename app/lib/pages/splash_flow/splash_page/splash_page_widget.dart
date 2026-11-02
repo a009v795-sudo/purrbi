@@ -55,57 +55,55 @@ class _SplashPageWidgetState extends State<SplashPageWidget>
         }
       }
 
-      while (true) {
-        if (FFAppState().connected) {
-          _model.packageName = await actions.getPackageName();
-          FFAppState().packageName = _model.packageName!;
-          safeSetState(() {});
-          FFAppState().isIntro = true;
-          safeSetState(() {});
-          _model.accountNow = await actions.accountState();
-          _model.accountStatus = _model.accountNow;
-          safeSetState(() {});
-          if (loggedIn) {
-            if (_model.accountStatus == 'no_profile') {
-              GoRouter.of(context).prepareAuthEvent();
-              await authManager.signOut();
-              GoRouter.of(context).clearRedirectLocation();
-
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                    'This account has no Purrbi profile any more. Sign in again or create an account.',
-                    style: TextStyle(),
-                  ),
-                  duration: Duration(milliseconds: 4000),
-                ),
-              );
-            } else {
-              _model.me =
-                  await UsersRecord.getDocumentOnce(currentUserReference!);
-              if (_model.me!.onboardingComplete) {
-                context.goNamedAuth(
-                    HomeMainPageWidget.routeName, context.mounted);
-              } else {
-                context.goNamedAuth(
-                    PetOnboardingPageWidget.routeName, context.mounted);
-              }
-            }
-          } else {
-            context.goNamedAuth(
-                WelcomeScreenPageWidget.routeName, context.mounted);
-          }
-
-          break;
-        } else {
-          await Future.delayed(
-            Duration(
-              milliseconds: 2000,
-            ),
-          );
+      while (!FFAppState().connected) {
+        await Future.delayed(
+          Duration(
+            milliseconds: 2000,
+          ),
+        );
+        await actions.recheckConnection();
+        if (!FFAppState().connected) {
           await action_blocks.internetSnackbar(context);
           safeSetState(() {});
         }
+      }
+      _model.packageName = await actions.getPackageName();
+      FFAppState().packageName = _model.packageName!;
+      safeSetState(() {});
+      FFAppState().isIntro = true;
+      safeSetState(() {});
+      _model.accountNow = await actions.accountState();
+      _model.accountStatus = _model.accountNow;
+      safeSetState(() {});
+      if (loggedIn) {
+        if (_model.accountStatus == 'no_profile') {
+          await action_blocks.dataClearBlock(context);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'This account has no Purrbi profile any more. Sign in again or create an account.',
+                style: TextStyle(),
+              ),
+              duration: Duration(milliseconds: 4000),
+            ),
+          );
+          GoRouter.of(context).prepareAuthEvent();
+          await authManager.signOut();
+          GoRouter.of(context).clearRedirectLocation();
+
+          context.goNamedAuth(
+              WelcomeScreenPageWidget.routeName, context.mounted);
+        } else {
+          _model.me = await UsersRecord.getDocumentOnce(currentUserReference!);
+          if (_model.me!.onboardingComplete) {
+            context.goNamedAuth(HomeMainPageWidget.routeName, context.mounted);
+          } else {
+            context.goNamedAuth(
+                PetOnboardingPageWidget.routeName, context.mounted);
+          }
+        }
+      } else {
+        context.goNamedAuth(WelcomeScreenPageWidget.routeName, context.mounted);
       }
     });
 

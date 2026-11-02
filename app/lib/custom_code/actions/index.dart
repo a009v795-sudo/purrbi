@@ -11,3 +11,4 @@ export '/custom_code/actions/trace_scan.dart' show traceScan;
 export '/custom_code/actions/add_label_photo.dart' show addLabelPhoto;
 export '/custom_code/actions/create_scan_request.dart' show createScanRequest;
 export '/custom_code/actions/account_state.dart' show accountState;
+export '/custom_code/actions/recheck_connection.dart' show recheckConnection;

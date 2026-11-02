@@ -294,15 +294,20 @@ class _IdentifierPageWidgetState extends State<IdentifierPageWidget> {
                                           return;
                                         }
                                         if (!isWeb) {
-                                          if (!FFAppState().connected) {
-                                            await action_blocks
-                                                .internetSnackbar(context);
-                                            if (_shouldSetState)
-                                              safeSetState(() {});
-                                            return;
-                                          }
                                           _model.creating = true;
                                           safeSetState(() {});
+                                          if (!FFAppState().connected) {
+                                            await actions.recheckConnection();
+                                            if (!FFAppState().connected) {
+                                              _model.creating = false;
+                                              safeSetState(() {});
+                                              await action_blocks
+                                                  .internetSnackbar(context);
+                                              if (_shouldSetState)
+                                                safeSetState(() {});
+                                              return;
+                                            }
+                                          }
                                           await actions.traceScan(
                                             'camera_open',
                                             '',
@@ -423,7 +428,9 @@ class _IdentifierPageWidgetState extends State<IdentifierPageWidget> {
                                                 ScanResultPageWidget.routeName,
                                                 queryParameters: {
                                                   'scanRef': serializeParam(
-                                                    FFAppState().lastScanRef,
+                                                    functions.scanRefFor(
+                                                        currentUserReference,
+                                                        _model.cameraRequest),
                                                     ParamType.DocumentReference,
                                                   ),
                                                   'scanId': serializeParam(
@@ -799,12 +806,6 @@ class _IdentifierPageWidgetState extends State<IdentifierPageWidget> {
                                       if (_shouldSetState) safeSetState(() {});
                                       return;
                                     }
-                                    if (!FFAppState().connected) {
-                                      await action_blocks
-                                          .internetSnackbar(context);
-                                      if (_shouldSetState) safeSetState(() {});
-                                      return;
-                                    }
                                     _model.lastScan = functions.cleanBarcode(
                                         _model.manualBarcodeFieldTextController
                                             .text);
@@ -833,6 +834,18 @@ class _IdentifierPageWidgetState extends State<IdentifierPageWidget> {
                                     } else {
                                       _model.creating = true;
                                       safeSetState(() {});
+                                      if (!FFAppState().connected) {
+                                        await actions.recheckConnection();
+                                        if (!FFAppState().connected) {
+                                          _model.creating = false;
+                                          safeSetState(() {});
+                                          await action_blocks
+                                              .internetSnackbar(context);
+                                          if (_shouldSetState)
+                                            safeSetState(() {});
+                                          return;
+                                        }
+                                      }
                                       await actions.traceScan(
                                         'create_start',
                                         '',
@@ -879,7 +892,9 @@ class _IdentifierPageWidgetState extends State<IdentifierPageWidget> {
                                           ScanResultPageWidget.routeName,
                                           queryParameters: {
                                             'scanRef': serializeParam(
-                                              FFAppState().lastScanRef,
+                                              functions.scanRefFor(
+                                                  currentUserReference,
+                                                  _model.manualRequest),
                                               ParamType.DocumentReference,
                                             ),
                                             'scanId': serializeParam(

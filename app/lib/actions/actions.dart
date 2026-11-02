@@ -9,7 +9,7 @@ import 'package:google_fonts/google_fonts.dart';
 Future internetSnackbar(BuildContext context) async {
   await action_blocks.mainSanckbar(
     context,
-    title: 'Please turn on internet...',
+    title: 'You’re offline. Connect to the internet and try again.',
   );
 }
 

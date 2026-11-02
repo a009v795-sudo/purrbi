@@ -23,3 +23,4 @@ export '/custom_code/functions/photo_stage_label.dart';
 export '/custom_code/functions/is_scan_cancelled.dart';
 export '/custom_code/functions/is_older_assessment.dart';
 export '/custom_code/functions/is_refresh_failure.dart';
+export '/custom_code/functions/scan_ref_for.dart';
