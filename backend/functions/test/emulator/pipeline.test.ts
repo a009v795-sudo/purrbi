@@ -579,6 +579,19 @@ describe('classification by evidence, not by database (regression: 099482480882)
     expect(s.evidenceNotes.join(' ')).toMatch(/Read the front of the package from a label image in Open Food Facts/);
     expect(s.missingInfo).not.toContain('front'); // no photo of the front is asked for
   });
+  // After label reader 2.4.0 (which reads a front's brand, species and type): a front image an earlier reader could not
+  // read is read once more; one this reader could not read is not read again within the freshness window.
+  for (const [version, reads] of [['label-extract-2.3.0', 1], [LABEL_EXTRACTION_VERSION, 0]] as const) {
+    it(`a database front image left unread by ${version} is read ${reads ? 'once more' : 'no more'}`, async () => {
+      const gtin = BC.misfiledFront.padStart(14, '0');
+      const twoDaysAgo = Timestamp.fromDate(new Date(NOW.getTime() - 2 * 86400000));
+      await db.doc(`productMeta/${gtin}`).set({ gtin, labelImageUrls: {}, enrichment: { databaseImagesAt: twoDaysAgo, databaseImages: { read: [], skipped: ['front: unreadable (TEST FIXTURE)'], failed: [], version } } });
+      const ref = await newScan('u1', BC.misfiledFront, 'cat1');
+      await processScan(deps(), 'u1', ref.id);
+      expect(calls.dbImages ?? 0).toBe(reads);
+      expect((await read(ref)).missingInfo.includes('front')).toBe(!reads); // the owner is asked for the front only when it stays unread
+    });
+  }
   it('a rate-limited database is a specific, retryable failure, never "not found" or "unknown"', async () => {
     const ref = await newScan('u1', BC.offDown);
     await processScan(deps(), 'u1', ref.id);
@@ -841,7 +854,7 @@ describe('label photo stages: submitted → extracted → corroborated → verif
     await processPhoto(deps(), 'u1', photo.id);
     const p = await read(photo);
     expect(p).toMatchObject({ status: 'processed' });
-    expect(p.stageNote).toMatch(/^The nutrition panel wasn’t read from this photo\. Retake it straight on, with the whole panel in the frame\. \S/);
+    expect(p.stageNote).toBe('The nutrition panel wasn’t read from this photo. Retake it straight on, with the whole panel in the frame.');
     expect(p.fieldsFound).toEqual(['product name', 'brand', 'species']);
   });
   it('a photo showing the scanned barcode is verified and fills the shared record without any account id', async () => {

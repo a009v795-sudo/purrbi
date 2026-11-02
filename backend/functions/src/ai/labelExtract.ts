@@ -17,12 +17,25 @@ import { chatJson } from './openai';
 
 export { analysisRows };
 
-export const LABEL_EXTRACTION_VERSION = 'label-extract-2.4.0'; // 2.2.0: analyses printed inline ("Protéine 37 %, Matières grasses 13 %") are read row by row; 2.3.0: an adequacy line is read from a partly legible panel too; 2.4.0: a name, brand, product type or species is kept only when both readings give it and it is printed in both transcriptions; a name agrees word for word once the agreed brand in front or type line after it is left out; a front photo's grounded identity counts as read; a needed panel seen but not read in full is named
+export const LABEL_EXTRACTION_VERSION = 'label-extract-2.4.0'; // 2.2.0: analyses printed inline ("Protéine 37 %, Matières grasses 13 %") are read row by row; 2.3.0: an adequacy line is read from a partly legible panel too; 2.4.0: brand, type and species only when both readings give them and a transcription prints them; a name of the same words, printed as lines in each reading's transcription with nothing left out between them or a life stage beside them; a front's grounded identity counts as read by purpose; reasons by purpose, short enough for the app
 /**
  * Readings still used: by 2.2.0 as they were saved (2.3.0 only reads an adequacy line 2.2.0 left out); by
  * 2.1.0 as the current rules use them (`readingInUse`), so owners are not asked for their photos again.
  */
 export const LABEL_READINGS_IN_USE: ReadonlySet<string> = new Set(['label-extract-2.1.0', 'label-extract-2.2.0', 'label-extract-2.3.0', LABEL_EXTRACTION_VERSION]);
+
+/** The readers in use, oldest first, and the database image panels each reads differently from the one before it. */
+const READERS = ['label-extract-2.1.0', 'label-extract-2.2.0', 'label-extract-2.3.0', LABEL_EXTRACTION_VERSION];
+const PANELS_READ_DIFFERENTLY: Record<string, string[]> = {
+  'label-extract-2.2.0': ['nutrition'], // analyses printed inline
+  'label-extract-2.3.0': ['nutrition'], // an adequacy line on a partly legible panel
+  [LABEL_EXTRACTION_VERSION]: ['front'], // 2.4.0: a front's brand, species and type, grounded, count as read
+};
+/** The database image panels a reader newer than `version` reads differently: read once more after it is deployed. */
+export function panelsReadDifferentlySince(version: string | undefined): Set<string> {
+  const at = READERS.indexOf(version ?? '');
+  return new Set(at < 0 ? [] : READERS.slice(at + 1).flatMap((v) => PANELS_READ_DIFFERENTLY[v] ?? []));
+}
 
 // Food-level bounds for minor nutrients: above them, 2.1.0 probably dropped a leading point (".09%" read as 9).
 const MINOR_BOUND: Partial<Record<NutrientKey, number>> = { magnesium: 1, taurine: 1, sodium: 3, calcium: 6, phosphorus: 5, omega_3: 5, omega_6: 10, dha: 3, epa: 3 };
@@ -57,6 +70,12 @@ export function ingredientsInUse(text: string): { text: string; ingredients: str
 
 /** A saved reading as the current rules use it: a 2.1.0 reading without the rows it may have misread, its ingredient list cut again. */
 export function readingInUse(label: ValidatedLabel): ValidatedLabel {
+  // A name, brand or type an earlier reader kept with an unreadable mark in it ("Grain Free [?] Pâté") is not used: 2.4.0
+  // never keeps one (review of label reader 2.4.0).
+  const marked = (v: string | null) => !!v && /\[\?\]/.test(v);
+  if (label.version !== LABEL_EXTRACTION_VERSION && (marked(label.productName) || marked(label.brand) || marked(label.productTypeClaim))) {
+    label = { ...label, productName: marked(label.productName) ? null : label.productName, brand: marked(label.brand) ? null : label.brand, productTypeClaim: marked(label.productTypeClaim) ? null : label.productTypeClaim };
+  }
   if (label.version !== 'label-extract-2.1.0') return label;
   const guaranteedAnalysis = rowsInUse21(label.guaranteedAnalysis);
   const list = label.ingredientsText ? ingredientsInUse(label.ingredientsText) : null;
@@ -278,7 +297,7 @@ export function parseReading(raw: RawLabelExtraction, model: string): Reading {
     productTypeClaim: raw.product_type_claim?.trim() || null,
     barcodeDigits: raw.barcode_digits?.replace(/\D/g, '') ?? '',
     panels: [...new Set(panels.map((p) => p.kind))],
-    unclear: [...new Set(panels.filter((p) => p.legibility !== 'clear').map((p) => p.kind))],
+    unclear: [...new Set(panels.filter((p) => p.legibility !== 'clear' || UNSURE.test(`${p.heading ?? ''} ${p.text ?? ''}`)).map((p) => p.kind))],
     ingredientsText: ingredients.length ? found!.list : null,
     ingredients,
     analysis: validateGuaranteedAnalysis(analysis).valid,
@@ -292,29 +311,141 @@ export function parseReading(raw: RawLabelExtraction, model: string): Reading {
 
 const agreeText = (a: string | null, b: string | null, min: number) => !!a && !!b && wordAgreement(a, b) >= min;
 
-/** Connecting words two readings may print either way ("Tuna & Salmon", "Tuna and Salmon", "Tuna w/ Salmon"). */
-const CONNECTORS = new Set(['and', 'with', 'w']);
+/**
+ * Connecting words two readings may print either way ("Tuna & Salmon", "Tuna and Salmon", "Tuna w/ Salmon", "Thon et
+ * Saumon", "Rind und Kartoffeln", "Kip met Rijst").
+ */
+const CONNECTORS = new Set(['and', 'with', 'w', 'et', 'avec', 'und', 'mit', 'y', 'con', 'e', 'en', 'met']);
 const keyWords = (t: string) => allWords(t).filter((w) => !CONNECTORS.has(w));
-const nameKey = (t: string) => keyWords(t).join(' ');
 
 /**
- * Whether a value is printed on the photo as a reading transcribed it: its words, together and in order, in that
- * reading's panels (line breaks and connecting words aside). A value a model gave without transcribing it (a logo it
- * guessed, a name with a word left out: "Flaked Tuna Feast" on a panel printing "FLAKED TUNA & MACKEREL FEAST") is not.
+ * Words that say what kind of product it is, not which one ("Premium Cat Food", "Cat Treats", "Recipe"): two readings'
+ * names may differ in them, and a printed line of only these may stand between a name's lines. Never a life stage, a
+ * flavour, a texture or a format (kitten, adult, in gravy, dry): those tell sibling products apart.
  */
-function printedIn(value: string, r: Reading): boolean {
-  const want = nameKey(value);
-  return !!want && ` ${nameKey(r.text)} `.includes(` ${want} `);
+const KIND_WORDS = new Set(['cat', 'cats', 'dog', 'dogs', 'feline', 'canine', 'food', 'foods', 'pet', 'pets', 'treat', 'treats', 'snack', 'snacks', 'premium', 'recipe', 'formula', 'for', 'the', 'chat', 'chats', 'chien', 'chiens', 'pour', 'aliment']);
+const distinct = (t: string) => keyWords(t).filter((w) => !KIND_WORDS.has(w));
+
+/** A transcription's lines, an unreadable mark kept as a word that matches nothing ("TENDER [?] & CHICKEN FEAST"). */
+const transcribedLines = (r: Reading) => r.text.replace(/\[\?\]/g, ' unreadablemark ').split(/\n|\s[|•·]\s/).slice(0, 200);
+// A printed line that says who makes or sells the product ("BY WHOLE FOODS MARKET", "Distributed by …").
+const MAKER_LINE = /^\s*(?:by|from|made (?:by|for)|distributed by|manufactured (?:by|for)|produced by|exclusively (?:at|for|by))\b/i;
+
+/**
+ * Whether a value is printed in a reading's transcription: its words together and in order (line breaks and connecting
+ * words aside), never across an unreadable mark. `outsideMaker`: not only in a line saying who makes or sells it (a
+ * retailer's "BY WHOLE FOODS MARKET" does not make Whole Foods Market the brand).
+ */
+function printedIn(value: string, r: Reading, outsideMaker = false): boolean {
+  const want = keyWords(value).join(' ');
+  const text = transcribedLines(r).filter((l) => !outsideMaker || !MAKER_LINE.test(l)).join('\n');
+  return !!want && ` ${keyWords(text).join(' ')} `.includes(` ${want} `);
 }
 
-/** Whether a reading's transcription names the species it claims, and no other ("PREMIUM CAT FOOD", "for adult cats"). */
-function speciesPrinted(species: ProductSpecies, r: Reading): boolean {
-  return species !== 'unknown' && detectSpecies(` ${normalizeIngredientName(r.text)} `) === species;
+// A package size, beside a name or on a line of its own ("NET WT 5.5 OZ (156g)", "12 x 85g"); a number alone is not one ("7+").
+const UNIT = /^(?:\d+(?:g|kg|oz|ml|cl|l|lb|lbs)|g|kg|oz|ml|cl|l|lb|lbs|fl)$/;
+const SIZE_WORD = /^(?:\d+|net|wt|weight|x|poids|netto|peso|neto|inhalt|contenu)$/;
+const sizeOnly = (ws: string[]) => ws.some((w) => UNIT.test(w)) && ws.every((w) => UNIT.test(w) || SIZE_WORD.test(w));
+// A life stage that is not the default adult one: a name printed beside one is another product without it
+// ("KITTEN" above "CLASSIC PÂTÉ CHICKEN FEAST" is the kitten food, not the adult one).
+const LIFE_STAGE = new Set(['kitten', 'kittens', 'puppy', 'puppies', 'junior', 'senior', 'seniors', 'mature', 'chaton', 'chatons', 'chiot', 'chiots', 'katzchen', 'welpe', 'welpen', 'cachorro', 'cachorros', 'gatito', 'gatitos', 'gattini', 'cuccioli']);
+const lifeStageLine = (raw: string) => /^\s*\d+\s*\+\s*$/.test(raw) || (distinct(raw).length > 0 && distinct(raw).every((w) => LIFE_STAGE.has(w)));
+
+/**
+ * Whether a reading's transcription prints a name. The name's words (kind words aside) must be printed lines, or parts of
+ * lines whose other words are only the brand or the package size, in any order: a model may read a badge after the
+ * flavour, or use the largest line as a panel heading. Every line between the first and the last of them must be only
+ * kind words, the brand, the size or who makes it ("PREMIUM CAT FOOD", "BY WHOLE FOODS MARKET"). A word printed on its own
+ * line between them (KITTEN, GRAVY LOVERS) or beside them on their line (& MACKEREL, "TRY NEW …") is never left out, so a
+ * name with a printed word missing is not read, nor one next to a printed life stage it leaves out (KITTEN, SENIOR, 7+),
+ * nor one across an unreadable mark (review of label reader 2.4.0).
+ */
+function namePrinted(name: string, r: Reading, brand: string | null): boolean {
+  const want = distinct(name);
+  if (!want.length) return false;
+  const raw = transcribedLines(r);
+  const lines = raw.map(distinct);
+  const b = brand ? distinct(brand) : [];
+  // What may stand beside a name's words on their line, or alone on a line between them: nothing, the brand, the size.
+  const besides = (ws: string[]) => {
+    if (!ws.length) return true;
+    const at = b.length ? ws.findIndex((_, i) => b.every((w, k) => ws[i + k] === w)) : -1;
+    const rest = at >= 0 ? [...ws.slice(0, at), ...ws.slice(at + b.length)] : ws;
+    return !rest.length || sizeOnly(rest);
+  };
+  const between = (k: number) => besides(lines[k]) || MAKER_LINE.test(raw[k]);
+  let steps = 0;
+  const cover = (i: number, used: number[]): boolean => {
+    if (++steps > 20000) return false;
+    if (i === want.length) {
+      const [lo, hi] = [Math.min(...used), Math.max(...used)];
+      for (let k = lo + 1; k < hi; k++) if (!used.includes(k) && !between(k)) return false;
+      // The nearest lines before and after it that are not the brand, kind words, the size or the maker.
+      let [before, after] = [lo - 1, hi + 1];
+      while (before >= 0 && between(before)) before--;
+      while (after < lines.length && between(after)) after++;
+      return !(before >= 0 && lifeStageLine(raw[before])) && !(after < lines.length && lifeStageLine(raw[after]));
+    }
+    for (let j = 0; j < lines.length; j++) {
+      const l = lines[j];
+      if (used.includes(j)) continue;
+      for (let s = 0; s < l.length; s++) {
+        if (l[s] !== want[i] || !besides(l.slice(0, s))) continue;
+        for (let e = s + 1; e <= l.length && i + e - s <= want.length && l[e - 1] === want[i + e - s - 1]; e++) {
+          if (besides(l.slice(e)) && cover(i + e - s, [...used, j])) return true;
+        }
+      }
+    }
+    return false;
+  };
+  return cover(0, []);
+}
+
+// Species words the shared vocabulary does not have: compounds and other languages (Katzenfutter, Hundefutter,
+// Kattenvoer, Hondenvoer, kattmat, hundmat, "karma dla kotów", "dla psów").
+const CAT_ALSO = /\b(?:katzen|katten)[a-z]+|\bkatte?(?:mat|foder|for|godis|snacks?)\b|\bkot(?:y|ow|a|ek|ki)?\b/;
+const DOG_ALSO = /\bhunde[a-z]*(?:futter|nahrung|snacks?|kuchen|kekse|leckerlis?|knochen)\b|\bhonden[a-z]+|\bhunde?(?:mat|foder|for|godis)\b|\bps(?:a|ow)\b/;
+
+// A species named only to rule it out ("NOT FOR CATS", "ne convient pas aux chats", "nicht für Hunde").
+const NOT_FOR = /\bnot\s+(?:(?:suitable|intended|recommended|safe|meant|made|for use|to be fed|fed|feed|give)\s+)?(?:for|to)\s+(?:(?:adult|young|small|your)\s+)?(?:cats?|dogs?|kittens?|pupp(?:y|ies))\b|\b(?:ne convient pas|pas pour|pas destine)\s+(?:aux?|les?|pour les?)\s+(?:chats?|chiens?|chatons?|chiots?)\b|\bnicht\s+(?:geeignet\s+)?fur\s+(?:katzen?|hunde?|welpen|katzchen)\b/g;
+
+/**
+ * The species a reading's transcription names: cat, dog, both or none. Not from a line with an unreadable mark (the
+ * other species may be the word it hides: "FOR CATS & [?]"), nor from a species named only to rule it out.
+ */
+function namedSpecies(r: Reading): ProductSpecies {
+  const lines = r.text.split('\n').filter((l) => !UNSURE.test(l)).map((l) => normalizeIngredientName(l).replace(NOT_FOR, ' '));
+  const t = ` ${lines.join(' \n ')} `;
+  const s = detectSpecies(t);
+  const cat = s === 'cat' || s === 'cat_and_dog' || CAT_ALSO.test(t);
+  const dog = s === 'dog' || s === 'cat_and_dog' || DOG_ALSO.test(t);
+  return cat && dog ? 'cat_and_dog' : cat ? 'cat' : dog ? 'dog' : 'unknown';
 }
 
 /** Words of a name that say nothing about which product it is ("Premium Cat Food", "Adult Recipe"). */
-const GENERIC_NAME = new Set(['cat', 'cats', 'dog', 'dogs', 'kitten', 'kittens', 'puppy', 'puppies', 'feline', 'canine', 'food', 'foods', 'pet', 'pets', 'premium', 'complete', 'adult', 'senior', 'recipe', 'formula', 'dry', 'wet', 'treat', 'treats', 'the', 'for', 'chat', 'chien', 'aliment', 'nourriture', 'pour']);
-/** A name without the agreed brand printed in front of it, nor the agreed product type printed after it. */
+const GENERIC_NAME = new Set([
+  'cat', 'cats', 'dog', 'dogs', 'kitten', 'kittens', 'puppy', 'puppies', 'feline', 'canine', 'food', 'foods', 'pet', 'pets', 'premium', 'complete', 'adult', 'senior', 'recipe', 'formula', 'dry', 'wet', 'treat', 'treats', 'the', 'for',
+  // fr, de, es, it, nl, pt: "Croquettes pour chat adulte", "Nassfutter für Katzen", "Alimento para Gato Adulto"
+  'chat', 'chats', 'chaton', 'chatons', 'chien', 'chiens', 'chiot', 'chiots', 'aliment', 'nourriture', 'pour', 'croquettes', 'patee', 'adulte', 'adultes', 'complet', 'humide', 'sec',
+  'katze', 'katzen', 'hund', 'hunde', 'fur', 'futter', 'nassfutter', 'trockenfutter', 'alleinfuttermittel', 'kat', 'katten', 'hond', 'honden', 'voer', 'voor',
+  'gato', 'gatos', 'perro', 'perros', 'alimento', 'para', 'pienso', 'comida', 'adulto', 'adultos', 'completo', 'gatto', 'gatti', 'cane', 'cani', 'cibo', 'per', 'crocchette', 'umido', 'secco', 'cao', 'caes', 'racao',
+]);
+
+/** A name without the package size a reading put after it ("… LOAF RECIPE 5.5 OZ", "…, 12 x 85g"). */
+function withoutSize(name: string): string {
+  let n = name.trim();
+  for (let k = 0; k < 3; k++) {
+    const m = /[\s,;–—-]*\(?\s*(?:net\s*wt\.?\s*)?(?:\d+\s*[x×]\s*)?\d+(?:[.,]\d+)?\s*(?:oz|g|kg|lbs|lb|ml|cl|l)\.?\s*\)?\s*$/i.exec(n);
+    if (!m || m.index === 0) break;
+    n = n.slice(0, m.index).trim();
+  }
+  return n;
+}
+
+/**
+ * A name without the agreed brand printed in front of it, nor an agreed type line of kind words only after it ("… –
+ * PREMIUM CAT FOOD"). A type that names a life stage or a texture ("Kitten", "Pâté") stays: it is part of the name.
+ */
 function coreName(name: string, brand: string | null, type: string | null): string {
   let tokens = name.split(/\s+/).filter(Boolean);
   const drop = (from: 'start' | 'end', value: string | null) => {
@@ -333,7 +464,7 @@ function coreName(name: string, brand: string | null, type: string | null): stri
     }
   };
   drop('start', brand);
-  drop('end', type);
+  drop('end', type && keyWords(type).every((w) => KIND_WORDS.has(w)) ? type : null);
   // A dash or bar left between the name and what was dropped ("… LOAF RECIPE – PREMIUM CAT FOOD").
   while (tokens.length > 1 && !allWords(tokens[0]).length) tokens.shift();
   while (tokens.length > 1 && !allWords(tokens[tokens.length - 1]).length) tokens.pop();
@@ -341,32 +472,52 @@ function coreName(name: string, brand: string | null, type: string | null): stri
 }
 
 /**
- * The product name two readings agree on, without the brand both agree on in front of it or the product type both
- * agree on after it: the same words in the same order (connecting words aside), so one reading may add the brand or
- * the type line ("WHOLE PAWS GRAIN FREE SALMON PÂTÉ LOAF RECIPE" / "GRAIN FREE SALMON PÂTÉ LOAF RECIPE": the owner's
- * photo of test A, 2026-11-02). Never a name either reading did not fully read, a name that differs in any other word (a
- * flavour, a variant, a life stage, a pack: "Flaked Tuna & Mackerel Feast" is not "Flaked Tuna Feast", "Kitten Classic
- * Pâté" not "Classic Pâté"), a name of generic words only ("Cat Food"), or one not printed on the photo as each reading
- * transcribed it.
+ * The product name two readings agree on, without the brand both agree on in front of it, the package size after it, or
+ * a type line of kind words after it (unless printed as part of the name). The same words, connecting and kind words
+ * aside, in any order, so one reading may add the brand, the type line or "Recipe", or give two printed lines the other
+ * way round ("WHOLE PAWS GRAIN FREE SALMON PÂTÉ LOAF RECIPE" / "GRAIN FREE SALMON PÂTÉ LOAF RECIPE": the owner's photo of
+ * test A, 2026-11-02). Each reading's name must be printed in its own transcription (`namePrinted`), and the name as a
+ * reading gave it, brand or type line included, in one of them: nothing printed between the brand and the name may be
+ * left out. Never a name either reading did not fully read, one that differs in any other word (a flavour, a variant, a
+ * life stage, a pack: "Flaked Tuna & Mackerel Feast" is not "Flaked Tuna Feast", "Kitten Classic Pâté" is not "Classic
+ * Pâté"), nor one of generic words only ("Cat Food", "Croquettes pour chat adulte").
  */
 function agreedName(a: Reading, b: Reading, brand: string | null, type: string | null): string | null {
-  const [na, nb] = [a.productName, b.productName];
+  const [na, nb] = [a.productName, b.productName].map((n) => (n ? withoutSize(n) : null));
   if (!na || !nb || UNSURE.test(na) || UNSURE.test(nb)) return null;
-  const [ca, cb] = [coreName(na, brand, type), coreName(nb, brand, type)];
-  const key = nameKey(ca);
-  if (!key || key !== nameKey(cb) || !keyWords(ca).some((w) => !GENERIC_NAME.has(w))) return null;
-  if (!printedIn(ca, a) || !printedIn(cb, b)) return null;
-  // The same words either way; the one not printed in capitals only reads better.
+  // The type line is left out only where it is not printed as part of the name ("SALMON & AVOCADO RECIPE TREATS" keeps it).
+  const core = (n: string) => {
+    const noBrand = coreName(n, brand, null);
+    const noType = coreName(noBrand, null, type);
+    return noType !== noBrand && (printedIn(noBrand, a) || printedIn(noBrand, b)) ? noBrand : noType;
+  };
+  const [ca, cb] = [core(na), core(nb)];
+  // The same words, in any order: two printed lines given either way round ("Savory Salmon Feast Classic Pâté").
+  const key = distinct(ca).sort().join(' ');
+  if (!key || key !== distinct(cb).sort().join(' ') || !keyWords(ca).some((w) => !GENERIC_NAME.has(w))) return null;
+  if (!namePrinted(ca, a, brand) || !namePrinted(cb, b, brand)) return null;
+  const whole = (n: string, c: string) => n === c || namePrinted(n, a, brand) || namePrinted(n, b, brand);
+  if (!whole(na, ca) || !whole(nb, cb)) return null;
+  // Shown as printed: a name printed word for word first, the fuller of two such ("… LOAF RECIPE" over "… LOAF"), else the
+  // one with fewer kind words added ("… RECIPE" over "… RECIPE TREATS" taken from a "CAT TREATS" line); then the one not
+  // in capitals, which only reads better.
+  const rank = (c: string) => (printedIn(c, a) || printedIn(c, b) ? 1000 + keyWords(c).length : 1000 - keyWords(c).length);
+  if (rank(ca) !== rank(cb)) return rank(ca) > rank(cb) ? ca : cb;
   return /\p{Ll}/u.test(ca) || !/\p{Ll}/u.test(cb) ? ca : cb;
 }
 
-/** The panels Purrbi asks a photo for, by what they are called when a photo shows one it could not read in full. */
+/** The panels Purrbi asks a photo for, and what the owner knows each by when one could not be read. */
 const NEEDED_PANELS: Record<string, string> = {
   ingredients: 'ingredient list',
-  active_ingredients: 'active ingredients',
-  guaranteed_analysis: 'guaranteed analysis',
-  adequacy_statement: 'feeding statement',
-  calorie_statement: 'calorie statement',
+  active_ingredients: 'ingredient list',
+  guaranteed_analysis: 'nutrition panel',
+  adequacy_statement: 'nutrition panel',
+  calorie_statement: 'nutrition panel',
+};
+/** The panels each owner photo is taken for (the app's photo requests). */
+const PURPOSE_PANELS: Record<string, string[]> = {
+  ingredients: ['ingredients', 'active_ingredients'],
+  nutrition: ['guaranteed_analysis', 'adequacy_statement', 'calorie_statement'],
 };
 
 /** What one reading saw, for tracing a disagreement: panels, the ones not fully legible, analysis rows. */
@@ -376,8 +527,12 @@ function describeReading(r: Reading): string {
   return `${r.model.replace(/-\d{4}-\d{2}-\d{2}$/, '')}: ${r.panels.join('+') || 'no panels'}${r.unclear.length ? ` (not clear: ${r.unclear.join('+')})` : ''}; ${r.analysis.length} rows${rows ? ` [${rows.slice(0, 120)}]` : ''}${name}`;
 }
 
-/** Keeps only what both readings say; everything else is listed in `rejected`. */
-export function combineReadings(a: Reading, b: Reading, scanGtin14: string): ValidatedLabel {
+/**
+ * Keeps only what both readings say; everything else is listed in `rejected`. `purpose` is what the photo was taken for
+ * (`front`, `ingredients`, `nutrition`; anything else is a general label photo): a photo that gives nothing says what to
+ * retake for that purpose, and a front photo is read for its brand, species and type.
+ */
+export function combineReadings(a: Reading, b: Reading, scanGtin14: string, purpose?: string): ValidatedLabel {
   const base: ValidatedLabel = {
     status: 'unreadable',
     reason: '',
@@ -398,7 +553,7 @@ export function combineReadings(a: Reading, b: Reading, scanGtin14: string): Val
     model: a.model === b.model ? `${a.model} (read twice)` : `${a.model} + ${b.model}`,
     version: LABEL_EXTRACTION_VERSION,
   };
-  if (!a.legible && !b.legible) return { ...base, reason: 'The label text could not be read. Retake the photo in good light, straight on, filling the frame.' };
+  if (!a.legible && !b.legible) return { ...base, reason: 'The label text couldn’t be read. Retake it straight on, in good light.' };
   // Another product only when both readings show the same other valid barcode (correct check digit).
   // Packs also print internal codes and batch numbers, and one reading can misread a digit.
   const barcode = (r: Reading) => {
@@ -407,7 +562,7 @@ export function combineReadings(a: Reading, b: Reading, scanGtin14: string): Val
   };
   const [ba, bb] = [barcode(a), barcode(b)];
   if (ba && ba === bb && !sameGtin(ba, scanGtin14)) {
-    return { ...base, status: 'different_product', reason: 'The barcode in this photo doesn’t match the scanned product. Make sure the photo shows the same package.' };
+    return { ...base, status: 'different_product', reason: 'This photo’s barcode isn’t the scanned one. Check it shows the same package.' };
   }
 
   const rejected: string[] = [];
@@ -442,43 +597,61 @@ export function combineReadings(a: Reading, b: Reading, scanGtin14: string): Val
   if (a.actives.length + b.actives.length > 0 && out.activeIngredients.length < Math.max(a.actives.length, b.actives.length)) rejected.push('active ingredients: not every line was read the same way twice');
 
   out.feedingDirections = agreeText(a.feeding, b.feeding, 0.85) ? a.feeding : null;
-  // Identity details both readings agree on and that are printed on the photo as each transcribed it (2.4.0).
-  const grounded = (x: string | null, y: string | null) => agreeText(x, y, 0.8) && !UNSURE.test(x!) && !UNSURE.test(y!) && printedIn(x!, a) && printedIn(y!, b);
-  out.brand = grounded(a.brand, b.brand) ? a.brand : null;
+  // Identity details both readings give, that agree, and that are printed in at least one transcription (2.4.0): a value
+  // a model gave without either reading transcribing it (a logo it guessed, a species from a picture) is not read.
+  const shown = (outsideMaker: boolean, ...vs: string[]) => vs.some((v) => printedIn(v, a, outsideMaker) || printedIn(v, b, outsideMaker));
+  const grounded = (x: string | null, y: string | null, outsideMaker = false) => agreeText(x, y, 0.8) && !UNSURE.test(x!) && !UNSURE.test(y!) && shown(outsideMaker, x!, y!);
+  out.brand = grounded(a.brand, b.brand, true) ? a.brand : null;
   out.productTypeClaim = grounded(a.productTypeClaim, b.productTypeClaim) ? a.productTypeClaim : null;
   out.productName = agreedName(a, b, out.brand, out.productTypeClaim);
-  out.species = a.species === b.species && speciesPrinted(a.species, a) && speciesPrinted(b.species, b) ? a.species : 'unknown';
+  // Who it is for: the species both readings claim, named in at least one transcription, and no other species in either.
+  const named = [namedSpecies(a), namedSpecies(b)];
+  out.species = a.species !== 'unknown' && a.species === b.species && named.includes(a.species) && named.every((x) => x === 'unknown' || x === a.species) ? a.species : 'unknown';
   out.rejected = rejected;
 
-  // A front photo's identity (brand, who it is for, product type), agreed and printed, is read too, with or without the
-  // name: it is what a front photo is asked for. Only a front photo: both readings legible, both saw the front, and
-  // neither saw a panel a back photo is taken for (a logo band above an ingredient list does not make it a front).
+  // A front photo's identity (brand, who it is for, product type) is read too, with or without the name: it is what a
+  // front photo is asked for. Both readings must call the photo legible and see the front. A photo taken of the front
+  // counts with any of the three. A photo taken of a panel counts only when no panel a back photo is taken for is in
+  // view (it is a front: a logo band above an ingredient list does not make one), so a panel it could not read is
+  // said as such. A general photo counts that way too, or with the front clear in both readings, no such panel read
+  // clearly by either (a sliver at a can's edge) and an agreed species or type.
   const content = (r: Reading) => r.panels.some((k) => NEEDED_PANELS[k]);
-  const frontOnly = a.legible && b.legible && a.panels.includes('front') && b.panels.includes('front') && !content(a) && !content(b);
-  const identity = frontOnly && (!!out.brand || out.species !== 'unknown' || !!out.productTypeClaim);
+  const readContent = (r: Reading) => r.panels.some((k) => NEEDED_PANELS[k] && !r.unclear.includes(k));
+  const bothFront = a.legible && b.legible && a.panels.includes('front') && b.panels.includes('front');
+  const agreed = !!out.brand || out.species !== 'unknown' || !!out.productTypeClaim;
+  const kind = out.species !== 'unknown' || !!out.productTypeClaim;
+  const frontOnly = !content(a) && !content(b) && agreed;
+  const withSliver = !a.unclear.includes('front') && !b.unclear.includes('front') && !readContent(a) && !readContent(b) && kind;
+  const identity = bothFront && (purpose === 'front' ? agreed : PURPOSE_PANELS[purpose ?? ''] ? frontOnly : frontOnly || withSliver);
   const anything = out.ingredients.length || out.guaranteedAnalysis.length || out.calories.length || out.adequacy || out.productName || out.activeIngredients.length || identity;
   if (!anything) {
-    // A needed panel the photo shows but that could not be read in full is named, so the owner knows what to retake:
-    // first one both readings saw, then the front both saw, then one a single reading saw.
+    // What to retake, short enough for the app's two lines, without guessing a cause (an edge, a curve, glare). For a
+    // photo of a panel: that panel, if a reading saw it but could not read it in full (first one both saw), or that it
+    // was not found. For a front: the front. For a general photo: a needed panel, else the front if nothing else is in it.
     const unclear = new Set([...a.unclear, ...b.unclear]);
-    const needed = (both: boolean) => Object.keys(NEEDED_PANELS).filter((k) => unclear.has(k) && (both ? a.panels.includes(k) && b.panels.includes(k) : a.panels.includes(k) || b.panels.includes(k))).map((k) => NEEDED_PANELS[k]);
-    const list = (xs: string[]) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}` : xs[0]);
-    // Short: the app shows two lines of a photo's message. The cause is not guessed (an edge, a curve, glare).
-    const named = (xs: string[]) => `The ${list(xs)} couldn’t be read in full. Retake ${xs.length > 1 ? 'them' : 'it'} straight on, in good light, with all of it in the frame.`;
-    const both = needed(true);
-    const one = needed(false);
+    const sought = PURPOSE_PANELS[purpose ?? ''];
+    const seen = (both: boolean) => [...new Set((sought ?? Object.keys(NEEDED_PANELS)).filter((k) => unclear.has(k) && (both ? a.panels.includes(k) && b.panels.includes(k) : a.panels.includes(k) || b.panels.includes(k))).map((k) => NEEDED_PANELS[k]))];
+    const named = (xs: string[]) => (xs.length > 1 ? `Couldn’t read all of the ${xs.join(' and ')}. Retake them straight on.` : `Couldn’t read all of the ${xs[0]}. Retake it straight on, in good light.`);
+    const [both, one] = [seen(true), seen(false)];
+    const frontSeen = a.panels.includes('front') && b.panels.includes('front');
+    const FRONT = 'Couldn’t read the name or who it is for. Retake the front straight on, in good light.';
+    const NOTHING = 'No label details were readable in this photo. Retake it closer to the panel you need.';
     const reason = rejected.length
-      ? 'Parts of the label could not be read reliably. Retake the photo closer, in good light and straight on.'
-      : both.length
-        ? named(both)
-        : a.panels.includes('front') && b.panels.includes('front')
-          ? 'The name and brand couldn’t be read reliably. Retake the front straight on, in good light.'
+      ? 'Parts of the label couldn’t be read reliably. Retake it closer, in good light.'
+      : purpose === 'front'
+        ? frontSeen ? FRONT : NOTHING
+        : both.length
+          ? named(both)
           : one.length
             ? named(one)
-            : 'No label details were readable in this photo. Retake it closer to the panel you need.';
+            : sought
+              ? `No ${NEEDED_PANELS[sought[0]]} was found in this photo. Photograph that panel, straight on.`
+              : frontSeen && !content(a) && !content(b)
+                ? FRONT
+                : NOTHING;
     // What each reading saw, so a photo that gave nothing can be traced (panels, legibility, rows).
-    const seen = rejected.some((r) => r.startsWith('readings: ')) ? [] : [`readings: ${describeReading(a)} / ${describeReading(b)}`];
-    return { ...base, rejected: [...rejected, ...seen], reason };
+    const trace = rejected.some((r) => r.startsWith('readings: ')) ? [] : [`readings: ${describeReading(a)} / ${describeReading(b)}`];
+    return { ...base, rejected: [...rejected, ...trace], reason };
   }
   return { ...out, status: 'processed', reason: '' };
 }
@@ -489,6 +662,8 @@ export async function extractLabel(opts: {
   imageBase64: string;
   mimeType: string;
   purpose: string;
+  /** What the photo is taken for (`front`, `ingredients`, `nutrition`), for what a photo that gives nothing should retake. */
+  panel?: string;
   scanGtin14: string;
 }): Promise<ValidatedLabel> {
   const models = opts.model.split(',').map((m) => m.trim()).filter(Boolean);
@@ -522,5 +697,5 @@ export async function extractLabel(opts: {
     if (!recoverable((rb as PromiseRejectedResult).reason)) throw (rb as PromiseRejectedResult).reason;
     b = await read(first);
   }
-  return combineReadings(parseReading(a.data, a.model), parseReading(b.data, b.model), opts.scanGtin14);
+  return combineReadings(parseReading(a.data, a.model), parseReading(b.data, b.model), opts.scanGtin14, opts.panel);
 }

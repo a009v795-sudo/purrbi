@@ -8,7 +8,7 @@
 // is recorded (sanitized) under the job's trace id.
 import { createHash, randomUUID } from 'node:crypto';
 import type { Firestore } from 'firebase-admin/firestore';
-import { extractLabel as extractLabelImpl, LABEL_EXTRACTION_VERSION, LABEL_READINGS_IN_USE, readingInUse, type ValidatedLabel } from '../ai/labelExtract';
+import { extractLabel as extractLabelImpl, LABEL_EXTRACTION_VERSION, LABEL_READINGS_IN_USE, panelsReadDifferentlySince, readingInUse, type ValidatedLabel } from '../ai/labelExtract';
 import { checkVerdict, ruleVerdict, verdictInput, verdictKey, withPetName, writeVerdict as verdictImpl } from '../ai/verdict';
 import { parseAdequacyStatement } from '../domain/adequacy';
 import { brandCovers, hasOtherScriptLetters, latinBrand } from '../domain/script';
@@ -485,14 +485,16 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   // Due per panel: a panel never tried (e.g. the front, once it is unresolved what the product is) is read
   // even when other panels were read recently.
   // A technical failure (download error, AI error or budget) is tried again after 6 hours, not left for 30 days.
-  // After a new label reader still compatible with the last one, only the nutrition panel (whose reading
-  // changed) is tried again; what the earlier reader read is kept. Only needed panels that have an image are
-  // ever due, so a needed panel without one never makes the others due again.
+  // After a new label reader still compatible with the last one, only the panels whose reading changed since
+  // (`panelsReadDifferentlySince`: a nutrition panel after 2.2.0 and 2.3.0, a front after 2.4.0) are tried again;
+  // what the earlier reader read is kept. Only needed panels that have an image are ever due, so a needed panel
+  // without one never makes the others due again.
   const panelOf = (x: string) => x.split(/[,:]/)[0].trim();
   const images = meta.enrichment.databaseImages;
   const lastImages = images && LABEL_READINGS_IN_USE.has(images.version ?? '') ? images : undefined;
-  const earlierReader = !!lastImages && lastImages.version !== LABEL_EXTRACTION_VERSION;
-  const tried = new Set([...(lastImages?.read ?? []), ...(lastImages?.skipped ?? []).map(panelOf)].filter((p) => !(earlierReader && p === 'nutrition')));
+  // The panels a newer reader reads differently (2.2.0 and 2.3.0 a nutrition panel, 2.4.0 a front) are tried once more.
+  const reread = lastImages ? panelsReadDifferentlySince(lastImages.version) : new Set<string>();
+  const tried = new Set([...(lastImages?.read ?? []), ...(lastImages?.skipped ?? []).map(panelOf)].filter((p) => !reread.has(p)));
   const failedRecently = new Set(ageDays(meta.enrichment.databaseImagesAt, now) * 24 < 6 ? (lastImages?.failed ?? []).map(panelOf) : []);
   const allDue = ageDays(meta.enrichment.databaseImagesAt, now) > config.productFreshDays || !lastImages;
   const duePanels = () => panelNeeds().filter((p) => !!meta.labelImageUrls[p] && (allDue || (!tried.has(p) && !failedRecently.has(p))));
@@ -519,7 +521,7 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
     // Definitive outcomes of earlier attempts are kept, so a panel already found unreadable is not read again.
     // Outcomes of earlier attempts are kept, except the earlier reader's nutrition panel (read again by this one,
     // and retried after a technical failure like any other panel).
-    const keep = (prev: string[] | undefined, next: string[]) => [...new Set([...(prev ?? []).filter((x) => !next.some((y) => panelOf(y) === panelOf(x)) && !(earlierReader && panelOf(x) === 'nutrition')), ...next])];
+    const keep = (prev: string[] | undefined, next: string[]) => [...new Set([...(prev ?? []).filter((x) => !next.some((y) => panelOf(y) === panelOf(x)) && !reread.has(panelOf(x))), ...next])];
     meta.enrichment.databaseImages = { read: keep(lastImages?.read, r.read), skipped: keep(lastImages?.skipped, r.skipped), failed: r.failed ?? [], version: LABEL_EXTRACTION_VERSION };
     job.diagnosticNotes.push(...r.skipped.slice(0, 4).map((x) => `Database label image ${x}`), ...(r.failed ?? []).slice(0, 2).map((x) => `Database label image not read (tried again later): ${x}`));
     metaChanged = true;
@@ -1245,7 +1247,7 @@ async function photoJob(deps: Deps, uid: string, photoId: string): Promise<void>
         await consumeAiBudget(db, config.limits, now);
         if (!deps.readImage) throw new Error('image reader not configured');
         const image = await deps.readImage(String(claimed.photo.imageUrl ?? ''), uid);
-        const label = await deps.sources.extractLabel({ apiKey: config.openaiApiKey(), model: config.visionModel, imageBase64: image.base64, mimeType: image.mimeType, purpose: purposeText(purpose), scanGtin14: gtin });
+        const label = await deps.sources.extractLabel({ apiKey: config.openaiApiKey(), model: config.visionModel, imageBase64: image.base64, mimeType: image.mimeType, purpose: purposeText(purpose), panel: purpose, scanGtin14: gtin });
         deps.log.info('label extracted', { traceId, uid, scanId, photoId, status: label.status, panels: label.panels, rejected: label.rejected });
         job.diagnosticNotes.push(`Label photo (${label.model}): ${label.status}${label.rejected.length ? `; not kept: ${label.rejected.slice(0, 4).join('; ')}` : ''}`);
         if (label.status === 'processed') {
@@ -1285,7 +1287,7 @@ async function photoJob(deps: Deps, uid: string, photoId: string): Promise<void>
       err instanceof QuotaError
         ? 'Today’s photo limit has been reached.'
         : parse
-          ? 'The label couldn’t be read in one go. Try a closer photo of just the panel that is asked for.'
+          ? 'The label couldn’t be read in one go. Photograph just the panel asked for.'
           : 'The photo couldn’t be processed. Try again or retake it.';
     deps.log.error('photo failed', { traceId, uid, scanId, photoId, error: (err as Error).message });
     job.diagnosticNotes.push(`Label photo not processed: ${err instanceof QuotaError ? err.kind : errorDetail((err as Error).message)}`);

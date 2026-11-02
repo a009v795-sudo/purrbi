@@ -60,7 +60,7 @@ export async function readDatabaseLabelImages(opts: {
   gtin14: string;
   userAgent: string;
   now: Date;
-  extract: (o: { imageBase64: string; mimeType: string; purpose: string; scanGtin14: string }) => Promise<ValidatedLabel>;
+  extract: (o: { imageBase64: string; mimeType: string; purpose: string; panel: string; scanGtin14: string }) => Promise<ValidatedLabel>;
   beforeAiCall: () => Promise<void>;
 }): Promise<DatabaseImageOutcome> {
   const result: DatabaseImageOutcome = { facts: [], read: [], skipped: [], failed: [] };
@@ -74,7 +74,7 @@ export async function readDatabaseLabelImages(opts: {
         continue;
       }
       await opts.beforeAiCall();
-      const label = await opts.extract({ imageBase64: file.bytes.toString('base64'), mimeType, purpose: PURPOSE_TEXT[img.purpose], scanGtin14: opts.gtin14 });
+      const label = await opts.extract({ imageBase64: file.bytes.toString('base64'), mimeType, purpose: PURPOSE_TEXT[img.purpose], panel: img.purpose, scanGtin14: opts.gtin14 });
       if (label.status !== 'processed') {
         result.skipped.push(`${img.purpose}: ${label.status}${label.rejected.length ? ` (${label.rejected.slice(0, 3).join('; ')})` : ''}`);
         continue;

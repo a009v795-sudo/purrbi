@@ -119,9 +119,10 @@ export function corroborateLabel(label: ValidatedLabel, record: ProductFacts | n
 }
 
 /**
- * What the owner reads under a read photo: first, when the reading did not give what the photo was taken for, that it
- * was not read, so a photo read only for its name does not look like a read ingredient list (review of label reader
- * 2.4.0); then how far the reading is confirmed. A disputed reading's note comes first: none of it is used.
+ * What the owner reads under a read photo. When the reading did not give what the photo was taken for, that it was not
+ * read and what to retake (a photo read only for its name must not look like a read ingredient list; review of label
+ * reader 2.4.0), alone: it fits the app's three lines, and the stage label above it already says how far the photo is
+ * matched. Otherwise, or for a disputed reading (none of it is used), how far the reading is confirmed.
  */
 export function photoNote(purpose: string, label: ValidatedLabel, c: Corroboration): string {
   const missing =
@@ -129,8 +130,8 @@ export function photoNote(purpose: string, label: ValidatedLabel, c: Corroborati
       ? 'The ingredient list wasn’t read from this photo. Retake it straight on, with the whole list in the frame.'
       : purpose === 'nutrition' && !label.guaranteedAnalysis.length && !label.calories.length && !label.adequacy
         ? 'The nutrition panel wasn’t read from this photo. Retake it straight on, with the whole panel in the frame.'
-        : purpose === 'front' && !label.productName && !label.brand && label.species === 'unknown' && !label.productTypeClaim
-          ? 'The name and brand weren’t read from this photo. Retake the front straight on, in good light.'
+        : purpose === 'front' && label.species === 'unknown' && !label.productTypeClaim
+          ? 'Who it is for wasn’t read from this photo. Retake the front where it says “for cats” or “dog food”.'
           : '';
-  return missing && c.stage !== 'disputed' ? `${missing} ${c.note}` : c.note;
+  return missing && c.stage !== 'disputed' ? missing : c.note;
 }

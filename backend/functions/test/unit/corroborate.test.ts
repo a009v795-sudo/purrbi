@@ -87,20 +87,24 @@ describe('ingredient roles in one vocabulary', () => {
 
 describe('a read photo’s note', () => {
   // Review of label reader 2.4.0: a photo read only for its name looked like a read ingredient list.
-  it('says first when the panel the photo was taken for was not read, so the owner retakes it', () => {
-    const nameOnly = reading({ productName: 'Grain Free Salmon Pâté Loaf Recipe', panels: ['front', 'ingredients'] });
+  it('says, alone, when the panel the photo was taken for was not read, so the owner retakes it', () => {
+    const nameOnly = reading({ productName: 'Grain Free Salmon Pâté Loaf Recipe', brand: 'Whole Paws', panels: ['front', 'ingredients'] });
     const c = corroborateLabel(nameOnly, null);
-    expect(photoNote('ingredients', nameOnly, c)).toBe(`The ingredient list wasn’t read from this photo. Retake it straight on, with the whole list in the frame. ${c.note}`);
-    expect(photoNote('nutrition', nameOnly, c)).toMatch(/^The nutrition panel wasn’t read from this photo\. /);
-    expect(photoNote('front', nameOnly, c)).toBe(c.note); // the name is what a front photo is for
+    expect(photoNote('ingredients', nameOnly, c)).toBe('The ingredient list wasn’t read from this photo. Retake it straight on, with the whole list in the frame.');
+    expect(photoNote('nutrition', nameOnly, c)).toBe('The nutrition panel wasn’t read from this photo. Retake it straight on, with the whole panel in the frame.');
+    // A front read for its name but not for who it is for: the front request stays, so the note says why.
+    expect(photoNote('front', nameOnly, c)).toBe('Who it is for wasn’t read from this photo. Retake the front where it says “for cats” or “dog food”.');
+    expect(photoNote('front', { ...nameOnly, species: 'cat' }, c)).toBe(c.note);
+    expect(photoNote('front', { ...nameOnly, productTypeClaim: 'Premium Cat Food' }, c)).toBe(c.note);
     expect(photoNote('label', nameOnly, c)).toBe(c.note); // a general label photo: anything read is what it is for
     const backOnly = reading({ ingredients: ['Salmon', 'water'], panels: ['ingredients'] });
-    expect(photoNote('front', backOnly, corroborateLabel(backOnly, null))).toMatch(/^The name and brand weren’t read from this photo\. /);
     expect(photoNote('ingredients', backOnly, corroborateLabel(backOnly, null))).toBe(corroborateLabel(backOnly, null).note);
     const actives = reading({ activeIngredients: [{ name: 'Glucosamine', amount: 500, unit: 'mg' }] as ValidatedLabel['activeIngredients'] });
     expect(photoNote('ingredients', actives, corroborateLabel(actives, null))).toBe(corroborateLabel(actives, null).note);
     // A disputed reading is not used at all: its note is the one said.
     const disputed = { stage: 'disputed' as const, agreements: [], conflicts: ['x'], note: 'Not used: x.' };
     expect(photoNote('ingredients', nameOnly, disputed)).toBe('Not used: x.');
+    // Every note fits the app's three lines (about 43 characters a line), except a dispute's, whose start says it.
+    for (const n of ['ingredients', 'nutrition', 'front'].map((p) => photoNote(p, reading({}), c))) expect(n.length, n).toBeLessThanOrEqual(129);
   });
 });
