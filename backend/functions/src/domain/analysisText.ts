@@ -297,12 +297,32 @@ function sectionRows(text: string, percentHeader: boolean): GuaranteedAnalysisEn
   return out;
 }
 
+// A row whose value wraps onto the next printed line ("…, Moisture (Max.)" / "78%, Taurine (Min.) 0.05%") is one row: a
+// line whose last row names one nutrient and has no number is joined to a next line that starts with a value (2.5.1;
+// test A's can, where one reading lost the moisture guarantee this way).
+const WRAPPED_VALUE = /^\s*\d+(?:[.,]\d+)?\s*(?:%|mg\b|g\b|iu\b|ui\b|kcal\b|ppm\b)/i;
+export function joinWrappedValues(text: string): string {
+  const out: string[] = [];
+  for (const line of text.split('\n')) {
+    const prev = out[out.length - 1];
+    if (prev !== undefined && WRAPPED_VALUE.test(line)) {
+      const last = prev.split(/[,;]/).pop()!.trim();
+      if (last && !/\d/.test(last) && nutrientKeysIn(last).length === 1) {
+        out[out.length - 1] = `${prev.trimEnd()} ${line.trim()}`;
+        continue;
+      }
+    }
+    out.push(line);
+  }
+  return out.join('\n');
+}
+
 /**
  * Analysis rows from a panel's or page's text. `inAnalysis`: whether the text starts inside the analysis
  * (the analysis panel itself) or only after an analysis heading (any other panel, a web page).
  */
 export function analysisRows(text: string, percentHeader: boolean, inAnalysis = true): GuaranteedAnalysisEntry[] {
-  const body = text.slice(0, 8000);
+  const body = joinWrappedValues(text.slice(0, 8000));
   const out: GuaranteedAnalysisEntry[] = [];
   let mode: 'rows' | 'skip' = inAnalysis ? 'rows' : 'skip';
   let percent = percentHeader;

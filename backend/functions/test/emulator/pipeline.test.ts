@@ -984,6 +984,21 @@ describe('label photo stages: submitted → extracted → corroborated → verif
     expect(s.diagnosticNotes.join(' ')).toMatch(/Set aside a sentence from TEST FIXTURE maker page/);
     expect(s.adequacySummary ?? '').not.toMatch(/Complete and balanced/);
   });
+  it('a complete food whose analysis lacks only moisture asks for the nutrition panel, never ends unscored with nothing to add (2.5.1)', async () => {
+    labelPatch = { guaranteedAnalysis: [
+      { nutrient: 'crude_protein', label: 'Crude Protein', qualifier: 'min', value: 10, unit: '%' },
+      { nutrient: 'crude_fat', label: 'Crude Fat', qualifier: 'min', value: 6, unit: '%' },
+      { nutrient: 'crude_fiber', label: 'Crude Fiber', qualifier: 'max', value: 1, unit: '%' },
+    ] as ValidatedLabel['guaranteedAnalysis'] };
+    const ref = await newScan('u1', BC.food, 'cat1');
+    await processScan(deps(), 'u1', ref.id);
+    await processPhoto(deps(), 'u1', (await photoFor('u1', ref.id)).id);
+    const s = await read(ref);
+    expect(s.scoreAvailable).toBe(false);
+    expect(s.status).toBe('needs_photos');
+    expect(s.photoRequests).toEqual([expect.objectContaining({ purpose: 'nutrition', title: 'Guaranteed analysis, with moisture' })]);
+    expect(s.photoRequests[0].reason).toMatch(/The moisture guarantee wasn’t read\. Needed to compare protein and fat as dry matter, and to score it\.$/);
+  });
   it('a photo the label reader cannot take (no AI credits, rate limit) says so, without asking for a retake', async () => {
     extractThrows = new SourceError('OpenAI', 'rate_limited', 'no credits remaining', 429);
     const ref = await newScan('u1', BC.food, 'cat1');

@@ -1,6 +1,7 @@
 // Merging product facts from several sources and deciding what is still missing.
 import { ingredientsInUse, rowsInUse21, type ValidatedLabel } from '../ai/labelExtract';
-import { hasCoreGuaranteedAnalysis } from '../domain/nutrition';
+import { CORE_GA, dryMatterPercent, findNutrient, hasCoreGuaranteedAnalysis } from '../domain/nutrition';
+import type { GuaranteedAnalysisEntry } from '../domain/types';
 import type { ProductCategory, ProductFacts, ScopeResult, SourceRef } from '../domain/types';
 
 type FactKey = 'productName' | 'brand' | 'imageUrl' | 'ingredientsText' | 'ingredients' | 'guaranteedAnalysis' | 'calories' | 'adequacy' | 'feedingDirections' | 'activeIngredients' | 'packageSize';
@@ -12,11 +13,30 @@ export const FACT_KEYS: FactKey[] = ['productName', 'brand', 'imageUrl', 'ingred
  * gives way to a fuller one, so a partial reading never blocks the label photo that completes it; and a
  * feeding statement that names no species, life stage or standard gives way to one that does.
  */
+/** A moisture guarantee in % that a dry-matter comparison can use (the scorer needs it for a complete food). */
+export function hasUsableMoisture(ga: GuaranteedAnalysisEntry[] | undefined): boolean {
+  const m = findNutrient(ga, 'moisture');
+  return m?.unit === '%' && dryMatterPercent(10, m.value) !== null;
+}
+
 export function fillMissing(base: ProductFacts, extra: Partial<ProductFacts>): { facts: ProductFacts; filled: string[] } {
   const facts: ProductFacts = { ...base, classificationSignals: [...base.classificationSignals], sources: [...base.sources] };
   const filled: string[] = [];
   const partialAnalysis = (ga: ProductFacts['guaranteedAnalysis']) => !!ga && !hasCoreGuaranteedAnalysis(ga.value);
-  const fuller = partialAnalysis(facts.guaranteedAnalysis) && !!extra.guaranteedAnalysis && (hasCoreGuaranteedAnalysis(extra.guaranteedAnalysis.value) || extra.guaranteedAnalysis.value.length > facts.guaranteedAnalysis!.value.length);
+  // An analysis without a usable moisture guarantee gives way to one with it that has the protein, fat and fiber
+  // guarantees and agrees with it on each of them (2.5.1: one reading of a can lost the wrapped "Moisture (Max.) / 78%"
+  // row and blocked a fuller reading of the same label, so the food could not be scored).
+  const agreesOnCore = (a: GuaranteedAnalysisEntry[], b: GuaranteedAnalysisEntry[]) =>
+    CORE_GA.every((k) => {
+      const [x, y] = [findNutrient(a, k), findNutrient(b, k)];
+      return !x || !y || (x.unit === y.unit && Math.abs(x.value - y.value) <= 0.5);
+    });
+  const addsMoisture =
+    !!facts.guaranteedAnalysis && !!extra.guaranteedAnalysis && !hasUsableMoisture(facts.guaranteedAnalysis.value) && hasUsableMoisture(extra.guaranteedAnalysis.value) &&
+    hasCoreGuaranteedAnalysis(extra.guaranteedAnalysis.value) && agreesOnCore(facts.guaranteedAnalysis.value, extra.guaranteedAnalysis.value);
+  const fuller =
+    (partialAnalysis(facts.guaranteedAnalysis) && !!extra.guaranteedAnalysis && (hasCoreGuaranteedAnalysis(extra.guaranteedAnalysis.value) || extra.guaranteedAnalysis.value.length > facts.guaranteedAnalysis!.value.length)) ||
+    addsMoisture;
   for (const k of FACT_KEYS) {
     const v = extra[k];
     const clearer = k === 'adequacy' && facts.adequacy?.value.type === 'unclear' && !!extra.adequacy && extra.adequacy.value.type !== 'unclear';
@@ -324,15 +344,45 @@ export function missingInfo(facts: ProductFacts, scope: ScopeResult, category: P
   if (!facts.ingredients?.value.length) {
     out.push({ purpose: 'ingredients', title: 'Ingredient list', reason: 'Needed to check ingredients and any allergies you recorded.' });
   }
+  // A complete food is scored on protein and fat as dry matter, which needs the moisture guarantee (2.5.1: it was not
+  // asked for, so a food missing only moisture stayed unscored with nothing to add).
+  const onlyMoisture =
+    category === 'complete_food' && !!facts.adequacy && hasCoreGuaranteedAnalysis(facts.guaranteedAnalysis?.value) && !hasUsableMoisture(facts.guaranteedAnalysis?.value);
   const needsNutrition =
-    (category === 'complete_food' && (!facts.adequacy || !hasCoreGuaranteedAnalysis(facts.guaranteedAnalysis?.value))) ||
+    (category === 'complete_food' && (!facts.adequacy || !hasCoreGuaranteedAnalysis(facts.guaranteedAnalysis?.value) || onlyMoisture)) ||
     ((category === 'treat' || category === 'complementary') && !hasCoreGuaranteedAnalysis(facts.guaranteedAnalysis?.value));
   if (needsNutrition) {
     out.push({
       purpose: 'nutrition',
-      title: category === 'complete_food' ? 'Guaranteed analysis and "complete and balanced" statement' : 'Guaranteed analysis',
-      reason: category === 'complete_food' ? 'Needed to check what the food is complete and balanced for, and to score it.' : 'Needed to score this product.',
+      title: onlyMoisture ? 'Guaranteed analysis, with moisture' : category === 'complete_food' ? 'Guaranteed analysis and "complete and balanced" statement' : 'Guaranteed analysis',
+      reason: onlyMoisture
+        ? 'The moisture guarantee wasn’t read. Needed to compare protein and fat as dry matter, and to score it.'
+        : category === 'complete_food'
+          ? 'Needed to check what the food is complete and balanced for, and to score it.'
+          : 'Needed to score this product.',
     });
+  }
+  return out;
+}
+
+/**
+ * No dead end: when the score is withheld for something no photo request covers, the request that would supply it
+ * (2.5.1). The scorer and `missingInfo` decide separately, and a gap between them left a result unscored with nothing
+ * to add.
+ */
+export function requestsForWithheldScore(assessment: { score: number | null; missingForScore?: string[] }, scope: ScopeResult, requests: PhotoRequest[]): PhotoRequest[] {
+  if (assessment.score !== null || !assessment.missingForScore?.length || scope.status !== 'supported') return [];
+  const have = new Set(requests.map((r) => r.purpose));
+  const out: PhotoRequest[] = [];
+  const add = (r: PhotoRequest) => {
+    if (have.has(r.purpose)) return;
+    have.add(r.purpose);
+    out.push(r);
+  };
+  for (const m of assessment.missingForScore) {
+    if (/ingredient/i.test(m)) add({ purpose: 'ingredients', title: 'Ingredient list', reason: 'Needed to check ingredients and to score this product.' });
+    else if (/product type/i.test(m)) add({ purpose: 'front', title: 'Front of the package', reason: 'To confirm the product name, brand, species and product type.' });
+    else add({ purpose: 'nutrition', title: 'Nutrition panel', reason: `Needed to score this product: Purrbi still needs the ${m}.` });
   }
   return out;
 }

@@ -17,20 +17,21 @@ import { chatJson } from './openai';
 
 export { analysisRows };
 
-export const LABEL_EXTRACTION_VERSION = 'label-extract-2.5.0'; // 2.2.0: analyses printed inline ("Protéine 37 %, Matières grasses 13 %") are read row by row; 2.3.0: an adequacy line is read from a partly legible panel too; 2.4.0: brand, type and species only when both readings give them and a transcription prints them; a name of the same words, printed as lines with nothing left out between them and no life stage, texture or flavour it leaves out beside them; a front's grounded identity counts as read by purpose; reasons by purpose, in the app's two lines; 2.5.0: the adequacy statement is asked for as its own panel and read across the printed lines it wraps over; when only one of the two readings gives the ingredient list or the adequacy statement (or they give them differently), a third reading by the other model settles it: two of the three must agree
+export const LABEL_EXTRACTION_VERSION = 'label-extract-2.5.1'; // 2.2.0: analyses printed inline ("Protéine 37 %, Matières grasses 13 %") are read row by row; 2.3.0: an adequacy line is read from a partly legible panel too; 2.4.0: brand, type and species only when both readings give them and a transcription prints them; a name of the same words, printed as lines with nothing left out between them and no life stage, texture or flavour it leaves out beside them; a front's grounded identity counts as read by purpose; reasons by purpose, in the app's two lines; 2.5.0: the adequacy statement is asked for as its own panel and read across the printed lines it wraps over; when only one of the two readings gives the ingredient list or the adequacy statement (or they give them differently), a third reading by the other model settles it: two of the three must agree; 2.5.1: an analysis row whose value wraps onto the next printed line is one row
 /**
  * Readings still used: by 2.2.0 as they were saved (2.3.0 only reads an adequacy line 2.2.0 left out); by
  * 2.1.0 as the current rules use them (`readingInUse`), so owners are not asked for their photos again.
  */
-export const LABEL_READINGS_IN_USE: ReadonlySet<string> = new Set(['label-extract-2.1.0', 'label-extract-2.2.0', 'label-extract-2.3.0', 'label-extract-2.4.0', LABEL_EXTRACTION_VERSION]);
+export const LABEL_READINGS_IN_USE: ReadonlySet<string> = new Set(['label-extract-2.1.0', 'label-extract-2.2.0', 'label-extract-2.3.0', 'label-extract-2.4.0', 'label-extract-2.5.0', LABEL_EXTRACTION_VERSION]);
 
 /** The readers in use, oldest first, and the database image panels each reads differently from the one before it. */
-const READERS = ['label-extract-2.1.0', 'label-extract-2.2.0', 'label-extract-2.3.0', 'label-extract-2.4.0', LABEL_EXTRACTION_VERSION];
+const READERS = ['label-extract-2.1.0', 'label-extract-2.2.0', 'label-extract-2.3.0', 'label-extract-2.4.0', 'label-extract-2.5.0', LABEL_EXTRACTION_VERSION];
 const PANELS_READ_DIFFERENTLY: Record<string, string[]> = {
   'label-extract-2.2.0': ['nutrition'], // analyses printed inline
   'label-extract-2.3.0': ['nutrition'], // an adequacy line on a partly legible panel
   'label-extract-2.4.0': ['front'], // a front's brand, species and type, grounded, count as read
-  [LABEL_EXTRACTION_VERSION]: ['nutrition'], // 2.5.0: an adequacy statement asked for as its own panel, and read across the lines it wraps over
+  'label-extract-2.5.0': ['nutrition'], // an adequacy statement asked for as its own panel, and read across the lines it wraps over
+  [LABEL_EXTRACTION_VERSION]: ['nutrition'], // 2.5.1: an analysis value wrapped onto the next line
 };
 /** The database image panels a reader newer than `version` reads differently: read once more after it is deployed. */
 export function panelsReadDifferentlySince(version: string | undefined): Set<string> {

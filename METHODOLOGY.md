@@ -1,7 +1,7 @@
 # Purrbi assessment methodology
 
 Version: `assessment-3.0.0` overall, made of `purrbi-score-3.0.0` (score), `scope-3.0.0` (classification), `verdict-2.2.0` (verdict),
-`kb-2026-10-28-draft` (ingredient notes), `label-extract-2.5.0` (label reader), `research-2.9.4` (web research), `explain-2.0.0` (claim-checked explanations).
+`kb-2026-10-28-draft` (ingredient notes), `label-extract-2.5.1` (label reader), `research-2.9.4` (web research), `explain-2.0.0` (claim-checked explanations).
 A saved result records `assessmentVersion` and its parts (`scoreVersion`, `kbVersion`, `scopeVersion`); the shared product record its
 classification version; each fact read from a label, page or document its reader's version; each explanation its own. When the app opens
 a result saved under an older `assessmentVersion` it asks for a re-check (section 10), so a known bad classification is corrected without
@@ -53,6 +53,10 @@ meet", feeding tests). A manufacturer's "AAFCO nutrient profile claim substantia
 
 Essential inputs are required before any number is shown; without them the score is withheld (never estimated) and the result names the exact
 missing requirement while still showing what was found. A number is also shown only when the parts assessed are worth at least 70 points.
+A withheld score always asks for the photo that would supply what it needs (2.5.1): a complete food missing only the moisture guarantee asks
+for the nutrition panel "with moisture", and anything else the score needs that no request covers (e.g. a treat with protein, fat and fiber
+but no calorie or feeding statement) asks for the panel that prints it. Before 2.5.1 such a result could end "complete" and unscored with
+nothing to add (test A, account `accept`, trace `36da991d-34a`).
 
 | Category | Essential (no number without) | Optional (coverage only) |
 |---|---|---|
@@ -282,7 +286,7 @@ Each fact shows where it came from:
 
 Nothing is marked as reviewed by a person unless it was.
 
-**How a label is read** (label photos and database label images; reader `label-extract-2.5.0`, `ai/labelExtract.ts`):
+**How a label is read** (label photos and database label images; reader `label-extract-2.5.1`, `ai/labelExtract.ts`):
 - The model only transcribes each visible panel, word for word, marking anything it cannot read with certainty. Two independent readings are made (two different models where configured); only what both say is kept.
 - An owner's photo gets a third reading (2.5.0) when only one of the two readings gives the ingredient list or the
   adequacy statement, or both give it differently:
@@ -315,6 +319,8 @@ Nothing is marked as reviewed by a person unless it was.
   - An unreadable mark inside it drops it, and a line continuing a line with an unreadable mark is not read on its own
     (the mark may be "not").
   - (Test A's can, 2026-11-02: one reading gave no statement and the other the whole one, so the photo was not scored.)
+- Of two analyses of the same product, one without a usable moisture guarantee gives way to one with it that has the protein, fat
+  and fiber guarantees and agrees with it on each of them (2.5.1), as one without those guarantees already gave way to a fuller one.
 - "Feeding trials" or "feeding protocols" alone is not an adequacy statement (2.5.0): a callout such as "Clinically
   proven in feeding trials to reduce hairballs" was read as "complete and balanced" before. A statement substantiated by
   feeding tests says so in formal words ("Animal feeding tests using AAFCO procedures substantiate …"). A saved record's
@@ -380,12 +386,14 @@ Nothing is marked as reviewed by a person unless it was.
   - rows printed one per line or inline as on EU packs ("Protéine : 37,0 %, Matières grasses : 13,0 %, …"); a name printed above its value, a name wrapped inside its brackets, or a unit printed on the next line is joined to it — but not a complete name above (one that ends with its min/max, as in a bilingual table) or a group heading ("Water-soluble vitamins");
   - each row needs a name of its own that names one nutrient (or, for another row, a real word), with no other number in it and balanced brackets, and a printed unit (or a "(%)" heading); a fibre fraction ("total dietary fibre") is not the crude fibre guarantee, and fatty acids ("acidi grassi") are not fat;
   - a min/max printed after the value is the row's own; one wrapped onto the next line ("6.0%\nmin, Crude Fiber") goes to the row before;
+  - a value wrapped onto the next line after its row's name ("…, Moisture (Max.)" / "78%, Taurine (Min.) 0.05%") is that row's (2.5.1:
+    test A's can, where a faithful transcription lost the moisture guarantee);
   - nothing ambiguous is read: a printed line where a value has no name of its own ("1.0% / 1.5%", "30% 28%") or which gives a range is skipped; a section where values are printed before their names ("Minimum: 30% Crude Protein, …") is not read at all; nor are values printed inline without units, a space that may be a thousands separator ("36 900 UI/kg"), one value under two nutrients ("oméga 3 et 6"), anything an unreadable mark touches, and a nutrient given two different values (two recipes, as fed and dry matter); "15,000 IU/kg" is fifteen thousand.
 - Readings made by `label-extract-2.3.0` stay in use: their name was agreed under the earlier rule (the same name for 80%
   of its words) and their brand and species without the check that they are printed. A name, brand or type an earlier
   reader kept with an unreadable mark in it is not used.
 - After a new reader, the database label images it reads differently are read once more: the nutrition panel after 2.2.0,
-  2.3.0 and 2.5.0, the front after 2.4.0. Readings made by `label-extract-2.4.0` stay in use as they are.
+  2.3.0, 2.5.0 and 2.5.1, the front after 2.4.0. Readings made by `label-extract-2.4.0` and `2.5.0` stay in use as they are.
 - Readings made by `label-extract-2.2.0` stay in use as they are (2.3.0 only reads an adequacy line 2.2.0 left out); a database label image's nutrition panel is read again once.
 - Readings made by `label-extract-2.1.0` stay in use as the current rules use them: only their plain analysis rows (a row naming one nutrient, with no other number in its name, in %, within food-level bounds for minor nutrients, and no second value for that nutrient), and an ingredient list cut again where its analysis starts. A row set aside that was a required guarantee is asked for again; a reading that was disputed only because of a row now set aside is compared with the public record again (its photo's stage and note change with it). A database label image whose 2.1.0 analysis had a row set aside, or whose nutrition panel 2.1.0 could not read, is read again once, and retried after a technical failure.
 - The same analysis rules read the analysis printed on a manufacturer's or retailer's page (research `research-2.0.0`), from the fetched page that is itself shown to be this product (the one with the barcode, or else the one with the brand and the name): the page's own analysis is used when it gives more than the model's answer, or when the answer disagrees with it, and the result says so only when it uses it.

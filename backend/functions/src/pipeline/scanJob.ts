@@ -35,7 +35,7 @@ import { SourceError } from '../util/http';
 import { rematchAnalysis } from '../domain/nutrition';
 import { ASSESSMENT_VERSION, MAX_CACHE_LOOKUPS, MAX_NEW_TERMS, olderAssessment, RESEARCH_TIME_LIMIT_MS, SCAN_STATUS, STEP8_LATEST_START_MS, STUCK_AFTER_MS, WORKING_STATUSES, type ErrorCode, type RuntimeConfig } from './config';
 import { corroborateLabel, photoNote } from './corroborate';
-import { barcodeHosts, dropStaleImageReads, enrichmentFacts, fillMissing, labelToFacts, missingInfo, refusalOf, refusingHosts, retrievalStatus, searchStop, supersededIdentity, type PhotoRequest, type RetrievalContext } from './facts';
+import { barcodeHosts, dropStaleImageReads, enrichmentFacts, fillMissing, labelToFacts, missingInfo, refusalOf, requestsForWithheldScore, refusingHosts, retrievalStatus, searchStop, supersededIdentity, type PhotoRequest, type RetrievalContext } from './facts';
 import { explanationFields, highlightFields, ingredientRowFields, jobFields, resultFields, type JobInfo } from './serialize';
 import {
   aiBudgetLeft,
@@ -855,6 +855,12 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   // What a photo would still add. After "Continue without photos" the result is complete, but the requests
   // stay listed (optional), so the owner can add a photo later and the findings so far are kept.
   const requests: PhotoRequest[] = missingInfo(facts, scope, general.category);
+  // No dead end: a score withheld for something no request covers asks for the photo that would supply it.
+  const uncovered = requestsForWithheldScore(general, scope, requests);
+  if (uncovered.length) {
+    requests.push(...uncovered);
+    job.diagnosticNotes.push(`Asked for ${uncovered.map((r) => r.purpose).join(' and ')} too: the score still needs the ${general.missingForScore.join(' and the ')}.`);
+  }
   // Each request says why its information is still missing: not searched, unreachable, not on the sources,
   // unreadable, or rejected by a check.
   // (The current method is the research version and model: a run by another model is not this one's, even when saved.)

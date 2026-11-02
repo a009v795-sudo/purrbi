@@ -599,9 +599,10 @@ describe('label reader 2.5.0: the adequacy statement, and a third reading', () =
     expect(failed.label.ingredientsText).toBe(LIST);
     expect(failed.label.settled).toEqual(['third reading (gpt-4.1-mini): not made, the model did not answer']);
   });
-  it('is a new reader: a database nutrition image read by 2.4.0 is read once more, an ingredient image is not', () => {
-    expect(LABEL_EXTRACTION_VERSION).toBe('label-extract-2.5.0');
+  it('is a new reader: a database nutrition image read by 2.4.0 or 2.5.0 is read once more, an ingredient image is not', () => {
+    expect(LABEL_EXTRACTION_VERSION).toBe('label-extract-2.5.1');
     expect([...panelsReadDifferentlySince('label-extract-2.4.0')]).toEqual(['nutrition']);
+    expect([...panelsReadDifferentlySince('label-extract-2.5.0')]).toEqual(['nutrition']);
   });
 });
 
