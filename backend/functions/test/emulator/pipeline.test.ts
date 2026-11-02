@@ -833,6 +833,17 @@ describe('label photo stages: submitted → extracted → corroborated → verif
     expect(s.verificationStatus).toMatch(/^Label-based assessment with product identity not yet independently verified\./);
     expect((await db.doc(`products/${s.gtin}`).get()).data()!.facts.guaranteedAnalysis).toBeUndefined();
   });
+  it('a photo read only for its name says first that the panel it was taken for was not read (label reader 2.4.0)', async () => {
+    labelPatch = { guaranteedAnalysis: [], calories: [], adequacy: null, productName: 'TEST FIXTURE Chicken Recipe', brand: 'TEST FIXTURE', species: 'cat', panels: ['front', 'guaranteed_analysis'] };
+    const ref = await newScan('u1', BC.food, 'cat1');
+    await processScan(deps(), 'u1', ref.id);
+    const photo = await photoFor('u1', ref.id); // filed as the nutrition panel
+    await processPhoto(deps(), 'u1', photo.id);
+    const p = await read(photo);
+    expect(p).toMatchObject({ status: 'processed' });
+    expect(p.stageNote).toMatch(/^The nutrition panel wasn’t read from this photo\. Retake it straight on, with the whole panel in the frame\. \S/);
+    expect(p.fieldsFound).toEqual(['product name', 'brand', 'species']);
+  });
   it('a photo showing the scanned barcode is verified and fills the shared record without any account id', async () => {
     labelPatch = { barcodeMatch: true };
     const ref = await newScan('u1', BC.food, 'cat1');

@@ -93,7 +93,12 @@ export async function readDatabaseLabelImages(opts: {
       // Identity fields stay with the database record; the image only fills label panels.
       const facts = labelToFacts({ ...label, productName: null, brand: null }, source);
       result.facts.push(facts);
-      result.read.push(img.purpose);
+      // Read for its purpose only when that panel was read: a front image filed as the ingredient image is not an
+      // ingredient list read (review of label reader 2.4.0).
+      const purposeRead =
+        img.purpose === 'ingredients' ? label.ingredients.length > 0 || label.activeIngredients.length > 0 : img.purpose === 'nutrition' ? label.guaranteedAnalysis.length > 0 || label.calories.length > 0 || !!label.adequacy : label.species !== 'unknown' || !!label.productTypeClaim;
+      if (purposeRead) result.read.push(img.purpose);
+      else result.skipped.push(`${img.purpose}: read, but not the panel it is filed as`);
     } catch (err) {
       result.failed.push(`${img.purpose}: ${(err as Error).message.slice(0, 120)}`);
     }

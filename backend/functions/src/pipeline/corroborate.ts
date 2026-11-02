@@ -117,3 +117,20 @@ export function corroborateLabel(label: ValidatedLabel, record: ProductFacts | n
         : 'Read twice, with the same result. What it shows could not be matched to this barcode’s public record yet.';
   return { stage: 'extracted', agreements, conflicts, note };
 }
+
+/**
+ * What the owner reads under a read photo: first, when the reading did not give what the photo was taken for, that it
+ * was not read, so a photo read only for its name does not look like a read ingredient list (review of label reader
+ * 2.4.0); then how far the reading is confirmed. A disputed reading's note comes first: none of it is used.
+ */
+export function photoNote(purpose: string, label: ValidatedLabel, c: Corroboration): string {
+  const missing =
+    purpose === 'ingredients' && !label.ingredients.length && !label.activeIngredients.length
+      ? 'The ingredient list wasn’t read from this photo. Retake it straight on, with the whole list in the frame.'
+      : purpose === 'nutrition' && !label.guaranteedAnalysis.length && !label.calories.length && !label.adequacy
+        ? 'The nutrition panel wasn’t read from this photo. Retake it straight on, with the whole panel in the frame.'
+        : purpose === 'front' && !label.productName && !label.brand && label.species === 'unknown' && !label.productTypeClaim
+          ? 'The name and brand weren’t read from this photo. Retake the front straight on, in good light.'
+          : '';
+  return missing && c.stage !== 'disputed' ? `${missing} ${c.note}` : c.note;
+}

@@ -284,14 +284,31 @@ Nothing is marked as reviewed by a person unless it was.
 
 **How a label is read** (label photos and database label images; reader `label-extract-2.4.0`, `ai/labelExtract.ts`):
 - The model only transcribes each visible panel, word for word, marking anything it cannot read with certainty. Two independent readings are made (two different models where configured); only what both say is kept.
-- A product name is the same name when one reading adds the brand in front or a type line after it ("WHOLE PAWS GRAIN
-  FREE SALMON PÂTÉ LOAF RECIPE" / "GRAIN FREE SALMON PÂTÉ LOAF RECIPE"): the words both share are kept, when they are at
-  least three and half of the longer reading's. On a front photo, the brand, who it is for and the product type both
-  readings agree on count as read, with or without the name (2.4.0; the owner's photo of test A, 2026-11-02: one of
-  three readings of the same front photo dropped its name, and the photo was called unreadable).
-- A photo that shows a needed panel which neither reading could read in full says which ("The ingredient list is in the
-  photo but not fully readable (cut off at an edge, curved or too small)…"); the trace gives each reading's panels and
-  name.
+- The name, brand, product type and species are kept only when both readings give them and each is printed in both
+  readings' transcriptions (2.4.0): its words together and in order, line breaks, "&"/"and"/"with", accents,
+  apostrophes and ™/® aside; a species only when the transcription names that species and no other ("for cats and
+  dogs" is not "for cats"). A value a model gave without transcribing it (a species guessed from a picture, a logo, a
+  name with a word left out) is not read.
+- A name is kept only word for word, once the brand both readings agree on is left out from its front and the product
+  type both agree on from its end ("WHOLE PAWS GRAIN FREE SALMON PÂTÉ LOAF RECIPE" / "GRAIN FREE SALMON PÂTÉ LOAF
+  RECIPE": the owner's photo of test A, 2026-11-02, where one of three readings of the same photo gave the name with the
+  brand). A name that differs in any other word is not kept (a flavour, a variant, a life stage, a pack: "Flaked Tuna &
+  Mackerel Feast" is not "Flaked Tuna Feast", "Kitten Classic Pâté" is not "Classic Pâté"), nor one with an unreadable
+  mark or of generic words only ("Cat Food", "Premium Cat Food").
+- A front photo's brand, species and product type count as read, with or without the name, only when both readings call
+  the photo legible, both saw the front, and neither saw a panel a back photo is taken for (ingredients, analysis,
+  feeding or calorie statement, active ingredients): a logo band above an ingredient list does not make it a front.
+- A photo that gives nothing says what to retake, short enough for the app's two lines: a needed panel both readings saw
+  but could not read in full ("The ingredient list couldn’t be read in full. Retake it straight on, in good light, with
+  all of it in the frame."), else a front both saw ("The name and brand couldn’t be read reliably. Retake the front
+  straight on, in good light."), else a needed panel one reading saw; a feeding guide is not asked for, and no cause is
+  guessed. The trace gives each reading's panels and name.
+- A photo read, but not for what it was taken for (only the name from a photo of the ingredient list), says so first in
+  its note ("The ingredient list wasn’t read from this photo. Retake it straight on, with the whole list in the frame.");
+  a database label image counts as read for its panel only when that panel was read.
+- The first 2.4.0 rules (commit 9614b22, never deployed) kept a name differing in a flavour or variant, a species guessed
+  from an illegible front, and a back photo with a logo band as read; a review found these and the rules above replaced
+  them before any reading was made with them.
 - Purrbi takes the values from the transcription with its own fixed rules (`domain/analysisText.ts` for the analysis):
   - the ingredient list only after a printed "Ingredients"/"Composition" heading;
   - the adequacy statement as printed, also from a line a partly legible panel shows in full (no unreadable mark), without the composition that may follow it on the same line ("Aliment complet pour chat adulte. Composition : …");
@@ -300,8 +317,8 @@ Nothing is marked as reviewed by a person unless it was.
   - each row needs a name of its own that names one nutrient (or, for another row, a real word), with no other number in it and balanced brackets, and a printed unit (or a "(%)" heading); a fibre fraction ("total dietary fibre") is not the crude fibre guarantee, and fatty acids ("acidi grassi") are not fat;
   - a min/max printed after the value is the row's own; one wrapped onto the next line ("6.0%\nmin, Crude Fiber") goes to the row before;
   - nothing ambiguous is read: a printed line where a value has no name of its own ("1.0% / 1.5%", "30% 28%") or which gives a range is skipped; a section where values are printed before their names ("Minimum: 30% Crude Protein, …") is not read at all; nor are values printed inline without units, a space that may be a thousands separator ("36 900 UI/kg"), one value under two nutrients ("oméga 3 et 6"), anything an unreadable mark touches, and a nutrient given two different values (two recipes, as fed and dry matter); "15,000 IU/kg" is fifteen thousand.
-- Readings made by `label-extract-2.3.0` stay in use as they are (2.4.0 keeps more of a front photo and names a panel
-  it could not read in full).
+- Readings made by `label-extract-2.3.0` stay in use as they are: their name was agreed under the earlier rule (the same
+  name for 80% of its words) and their brand and species without the check that they are printed.
 - Readings made by `label-extract-2.2.0` stay in use as they are (2.3.0 only reads an adequacy line 2.2.0 left out); a database label image's nutrition panel is read again once.
 - Readings made by `label-extract-2.1.0` stay in use as the current rules use them: only their plain analysis rows (a row naming one nutrient, with no other number in its name, in %, within food-level bounds for minor nutrients, and no second value for that nutrient), and an ingredient list cut again where its analysis starts. A row set aside that was a required guarantee is asked for again; a reading that was disputed only because of a row now set aside is compared with the public record again (its photo's stage and note change with it). A database label image whose 2.1.0 analysis had a row set aside, or whose nutrition panel 2.1.0 could not read, is read again once, and retried after a technical failure.
 - The same analysis rules read the analysis printed on a manufacturer's or retailer's page (research `research-2.0.0`), from the fetched page that is itself shown to be this product (the one with the barcode, or else the one with the brand and the name): the page's own analysis is used when it gives more than the model's answer, or when the answer disagrees with it, and the result says so only when it uses it.

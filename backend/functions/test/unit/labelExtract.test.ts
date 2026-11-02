@@ -79,7 +79,7 @@ describe('grounded label reading', () => {
     const label = combineReadings(read([blurry], { product_name: null }), read([blurry], { product_name: null }, 'model-b'), GTIN);
     // The panel both readings found but could not read in full is named (2.4.0). Its brand and species do not make a
     // back-panel photo "read": only a front photo's do.
-    expect(label).toMatchObject({ status: 'unreadable', reason: 'The ingredient list is in the photo but not fully readable (cut off at an edge, curved or too small). Take it straight on, with the whole panel filling the frame.' });
+    expect(label).toMatchObject({ status: 'unreadable', reason: 'The ingredient list couldn’t be read in full. Retake it straight on, in good light, with all of it in the frame.' });
     expect(label.uncertainFields).toEqual(['ingredients']);
     // What each reading saw is kept for tracing, even when nothing was read.
     expect(label.rejected).toEqual(['readings: model-a: ingredients (not clear: ingredients); 0 rows / model-b: ingredients (not clear: ingredients); 0 rows']);
@@ -87,28 +87,98 @@ describe('grounded label reading', () => {
   // The owner's photos of test A (Whole Paws salmon pâté, 2026-11-02): one of three readings of the same front photo
   // dropped the name, and the photo was called unreadable though both readings agreed on brand and species; the
   // barcode side's ingredient panel is cut off at the photo's edge.
+  const WP_FRONT: RawPanel = { kind: 'front', legibility: 'clear', heading: 'WHOLE PAWS', text: 'BY WHOLE FOODS MARKET\nPREMIUM CAT FOOD\nGRAIN FREE\nSALMON PÂTÉ\nLOAF RECIPE\nNET WT 5.5 OZ (156g)' };
+  const WP = { brand: 'WHOLE PAWS', species_claim: 'cat' as const, product_type_claim: 'PREMIUM CAT FOOD' };
+  const pair = (panels: RawPanel[], na: string | null, nb: string | null, over: Partial<RawLabelExtraction> = WP, overB: Partial<RawLabelExtraction> = over) =>
+    combineReadings(read(panels, { ...over, product_name: na }), read(panels, { ...overB, product_name: nb }, 'model-b'), GTIN);
   it('a front photo’s name agrees when one reading adds the brand or a type line; its agreed brand and species are read', () => {
-    const front: RawPanel = { kind: 'front', legibility: 'clear', heading: 'WHOLE PAWS', text: 'WHOLE PAWS\nBY WHOLE FOODS MARKET\nPREMIUM CAT FOOD\nGRAIN FREE\nSALMON PÂTÉ\nLOAF RECIPE\nNET WT 5.5 OZ (156g)' };
-    const ident = { brand: 'WHOLE PAWS', species_claim: 'cat' as const, product_type_claim: 'PREMIUM CAT FOOD' };
-    const withBrand = combineReadings(read([front], { ...ident, product_name: 'WHOLE PAWS GRAIN FREE SALMON PÂTÉ LOAF RECIPE' }), read([front], { ...ident, product_name: 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE' }, 'model-b'), GTIN);
-    expect(withBrand).toMatchObject({ status: 'processed', productName: 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE', brand: 'WHOLE PAWS', species: 'cat' });
-    const withType = combineReadings(read([front], { ...ident, product_name: 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE PREMIUM CAT FOOD' }), read([front], { ...ident, product_name: 'Grain Free Salmon Pâté Loaf Recipe' }, 'model-b'), GTIN);
-    expect(withType.productName).toBe('Grain Free Salmon Pâté Loaf Recipe');
-    // Names that are not the same name are not kept, but the front's agreed brand and species still are.
-    const other = combineReadings(read([front], { ...ident, product_name: 'SALMON' }), read([front], { ...ident, product_name: 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE' }, 'model-b'), GTIN);
-    expect(other).toMatchObject({ status: 'processed', productName: null, brand: 'WHOLE PAWS', species: 'cat', productTypeClaim: 'PREMIUM CAT FOOD' });
-    expect(combineReadings(read([front], { ...ident, product_name: 'CHICKEN FEAST' }), read([front], { ...ident, product_name: 'SALMON PÂTÉ LOAF' }, 'model-b'), GTIN).productName).toBeNull();
-    // Nothing agreed on a front photo: still unreadable.
-    const none = combineReadings(read([front], { product_name: 'A', brand: 'B', species_claim: 'not_visible', product_type_claim: null }), read([front], { product_name: 'C', brand: 'D', species_claim: 'not_visible', product_type_claim: null }, 'model-b'), GTIN);
-    expect(none.status).toBe('unreadable');
+    expect(pair([WP_FRONT], 'WHOLE PAWS GRAIN FREE SALMON PÂTÉ LOAF RECIPE', 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE')).toMatchObject({ status: 'processed', productName: 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE', brand: 'WHOLE PAWS', species: 'cat', productTypeClaim: 'PREMIUM CAT FOOD' });
+    // The type line after it, a dash between; the same words, so the one not in capitals is kept.
+    expect(pair([WP_FRONT], 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE – PREMIUM CAT FOOD', 'Grain Free Salmon Pâté Loaf Recipe').productName).toBe('Grain Free Salmon Pâté Loaf Recipe');
+    // Both in capitals, a dash left between: the name without the dash.
+    expect(pair([WP_FRONT], 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE – PREMIUM CAT FOOD', 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE').productName).toBe('GRAIN FREE SALMON PÂTÉ LOAF RECIPE');
+    // Both with the brand: the name without it.
+    expect(pair([WP_FRONT], 'Whole Paws Grain Free Salmon Pâté Loaf Recipe', 'WHOLE PAWS GRAIN FREE SALMON PÂTÉ LOAF RECIPE').productName).toBe('Grain Free Salmon Pâté Loaf Recipe');
+    // A brand printed with a trademark sign and another apostrophe is the same brand, and printed.
+    const hills: RawPanel = { kind: 'front', legibility: 'clear', heading: 'HILL’S™ SCIENCE DIET', text: 'Adult 7+\nIndoor\nChicken Recipe\nCat Food' };
+    expect(combineReadings(read([hills], { brand: "Hill's", product_name: 'Science Diet Adult 7+ Indoor Chicken Recipe', product_type_claim: 'Cat Food' }), read([hills], { brand: 'Hill’s', product_name: "Hill's Science Diet Adult 7+ Indoor Chicken Recipe", product_type_claim: 'Cat Food' }, 'model-b'), GTIN)).toMatchObject({ brand: "Hill's", productName: 'Science Diet Adult 7+ Indoor Chicken Recipe', species: 'cat' });
+    // "&", "and" and "with" printed either way are the same name.
+    const tuna: RawPanel = { kind: 'front', legibility: 'clear', heading: null, text: 'TUNA & SALMON FEAST\nCAT FOOD' };
+    expect(pair([tuna], 'Tuna & Salmon Feast', 'Tuna and Salmon Feast', { brand: null, species_claim: 'cat', product_type_claim: null }).productName).toBe('Tuna & Salmon Feast');
+    // Names that are not the same name are not kept, but the front's agreed, printed brand and species still are.
+    expect(pair([WP_FRONT], 'SALMON', 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE')).toMatchObject({ status: 'processed', productName: null, brand: 'WHOLE PAWS', species: 'cat', productTypeClaim: 'PREMIUM CAT FOOD' });
+    // Nothing agreed on a front photo: unreadable, and the owner is asked to retake the front.
+    expect(pair([WP_FRONT], 'A', 'C', { brand: 'B', species_claim: 'not_visible', product_type_claim: null }, { brand: 'D', species_claim: 'not_visible', product_type_claim: null })).toMatchObject({ status: 'unreadable', reason: 'The name and brand couldn’t be read reliably. Retake the front straight on, in good light.' });
   });
-  it('a photo whose needed panel is cut off says which panel to retake', () => {
+  // Review of label reader 2.4.0 (first version, never deployed): each of these was kept, and none may be.
+  it('never keeps a name that differs in a flavour, variant, life stage or pack, nor two different flavours', () => {
+    const front = (text: string): RawPanel => ({ kind: 'front', legibility: 'clear', heading: null, text });
+    const name = (text: string, na: string, nb: string, brand: string | null = null) => pair([front(text)], na, nb, { brand, species_claim: 'cat', product_type_claim: null }).productName;
+    expect(name('FANCY FEAST\nFLAKED TUNA & MACKEREL FEAST\nGOURMET CAT FOOD', 'Flaked Tuna & Mackerel Feast', 'Flaked Tuna Feast', 'Fancy Feast')).toBeNull();
+    expect(name('Classic Pâté\nTender Liver & Chicken Feast', 'Classic Pâté Tender Liver & Chicken Feast', 'Classic Pâté Chicken Feast')).toBeNull();
+    expect(name('Tuna with Salmon\nin Gravy', 'Tuna with Salmon in Gravy', 'Tuna in Gravy')).toBeNull();
+    expect(name('FANCY FEAST\nKITTEN\nCLASSIC PÂTÉ\nCHICKEN FEAST', 'Fancy Feast Kitten Classic Pâté Chicken Feast', 'Classic Pâté Chicken Feast', 'Fancy Feast')).toBeNull();
+    expect(name('HILL’S SCIENCE DIET\nADULT 7+ INDOOR\nCHICKEN RECIPE', "Hill's Science Diet Adult 7+ Indoor Chicken Recipe", 'Science Diet Adult Indoor Chicken Recipe', "Hill's")).toBeNull();
+    expect(name('Classic Pâté\nPoultry & Beef Feast\nVariety Pack', 'Classic Pâté Poultry & Beef Feast Variety Pack', 'Classic Pâté Beef Feast')).toBeNull();
+    // Both readings leave the same word out: the name they give is not printed on the photo as they transcribed it.
+    expect(name('FLAKED TUNA & MACKEREL FEAST', 'Flaked Tuna Feast', 'Flaked Tuna Feast')).toBeNull();
+    // Chicken against salmon, with or without the brand in one reading, and brands that are not the same brand.
+    const flavours = front('WHOLE PAWS\nGRAIN FREE\nCHICKEN PÂTÉ LOAF RECIPE\nGRAIN FREE SALMON PÂTÉ LOAF RECIPE');
+    expect(pair([flavours], 'WHOLE PAWS GRAIN FREE CHICKEN PÂTÉ LOAF RECIPE', 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE').productName).toBeNull();
+    expect(pair([flavours], 'Grain Free Chicken Pâté Loaf Recipe', 'Grain Free Salmon Pâté Loaf Recipe').productName).toBeNull();
+    expect(pair([flavours], 'Whole Paws Grain Free Salmon Pâté Loaf Recipe', 'Grain Free Salmon Pâté Loaf Recipe', { ...WP, brand: 'Whole Paws' }, { ...WP, brand: 'Whole Foods Market' })).toMatchObject({ brand: null, productName: null });
+    // An unreadable mark in either name, also where both readings marked the same word.
+    expect(pair([WP_FRONT], 'Grain Free [?] Pâté Loaf Recipe', 'Whole Paws Grain Free Salmon Pâté Loaf Recipe Premium Cat Food').productName).toBeNull();
+    const marked: RawPanel = { ...WP_FRONT, text: WP_FRONT.text!.replace('SALMON PÂTÉ', '[?] PÂTÉ') };
+    expect(pair([marked], 'GRAIN FREE [?] PÂTÉ LOAF RECIPE', 'GRAIN FREE [?] PÂTÉ LOAF RECIPE')).toMatchObject({ productName: null, brand: 'WHOLE PAWS' });
+  });
+  it('never keeps a range name, a type line or generic words as the name', () => {
+    const front = (text: string): RawPanel => ({ kind: 'front', legibility: 'clear', heading: null, text });
+    const name = (text: string, na: string, nb: string, brand: string | null = null, type: string | null = null) => pair([front(text)], na, nb, { brand, species_claim: 'cat', product_type_claim: type }).productName;
+    expect(name('PURINA PRO PLAN\nCOMPLETE ESSENTIALS\nADULT CHICKEN & RICE FORMULA', 'Purina Pro Plan Complete Essentials Adult Chicken & Rice Formula', 'Pro Plan Complete Essentials', 'Purina')).toBeNull();
+    expect(name('SALMON PÂTÉ\nPREMIUM CAT FOOD', 'Salmon Pâté Premium Cat Food', 'Premium Cat Food', null, 'Premium Cat Food')).toBeNull();
+    expect(name('PREMIUM CAT FOOD', 'Premium Cat Food', 'Premium Cat Food')).toBeNull();
+    expect(name('ADULT COMPLETE CAT FOOD\nwith Chicken', 'Adult Complete Cat Food with Chicken', 'Adult Complete Cat Food')).toBeNull();
+    expect(name('GRAIN FREE\nSALMON PÂTÉ RECIPE', 'Grain Free Salmon Pâté Recipe', 'Grain Free Recipe')).toBeNull();
+    expect(name('WHISKAS\nCAT FOOD', 'Whiskas Cat Food', 'Cat Food', 'Whiskas')).toBeNull();
+  });
+  it('a species, brand or name not printed in the transcription is not read: a blank front is not a read front', () => {
+    // Nothing legible on the front; the models' species is a guess from the picture.
+    const blank: RawPanel = { kind: 'front', legibility: 'illegible', heading: null, text: null };
+    const guessed = combineReadings(read([blank], { product_name: null, brand: null, species_claim: 'cat', product_type_claim: null }), read([blank], { legible: false, product_name: null, brand: null, species_claim: 'cat', product_type_claim: null }, 'model-b'), GTIN);
+    expect(guessed).toMatchObject({ status: 'unreadable', species: 'unknown' });
+    const marks: RawPanel = { kind: 'front', legibility: 'partial', heading: '[?]', text: '[?] [?]\n[?]' };
+    expect(combineReadings(read([marks], { product_name: null, brand: 'Rex', species_claim: 'dog', product_type_claim: null }), read([marks], { product_name: null, brand: 'Rex', species_claim: 'dog', product_type_claim: null }, 'model-b'), GTIN)).toMatchObject({ status: 'unreadable', species: 'unknown', brand: null });
+    // A product type both readings give but neither transcribed is not read; the brand they transcribed is.
+    const plain: RawPanel = { kind: 'front', legibility: 'clear', heading: 'WHOLE PAWS', text: 'GRAIN FREE\nSALMON PÂTÉ\nLOAF RECIPE' };
+    expect(pair([plain], null, null, { brand: 'WHOLE PAWS', species_claim: 'not_visible', product_type_claim: 'Premium Cat Food' })).toMatchObject({ status: 'processed', productTypeClaim: null, brand: 'WHOLE PAWS', species: 'unknown' });
+    // The species the panel prints, and only that one: "for cats and dogs" is not "for cats".
+    const both: RawPanel = { kind: 'front', legibility: 'clear', heading: 'RANCH TREATS', text: 'FOR CATS AND DOGS' };
+    expect(pair([both], null, null, { brand: null, species_claim: 'cat', product_type_claim: null }).species).toBe('unknown');
+    expect(pair([both], null, null, { brand: null, species_claim: 'cat_and_dog', product_type_claim: null })).toMatchObject({ status: 'processed', species: 'cat_and_dog' });
+    // A front one reading calls illegible as a whole is not read for its brand and species alone.
+    const half = combineReadings(read([WP_FRONT], { ...WP, product_name: null }), read([WP_FRONT], { ...WP, legible: false, product_name: null }, 'model-b'), GTIN);
+    expect(half.status).toBe('unreadable');
+  });
+  it('a back-panel photo is not read for its brand or a logo band: it says which panel to retake', () => {
+    const band: RawPanel = { kind: 'front', legibility: 'clear', heading: null, text: 'WHOLE PAWS' };
+    const cutList: RawPanel = { kind: 'ingredients', legibility: 'partial', heading: null, text: '[?] Guar Gum, Salt, [?] Amino Acid Chelate, [?]' };
+    const back = combineReadings(read([band, cutList], { product_name: null, brand: 'WHOLE PAWS', species_claim: 'not_visible', product_type_claim: null }), read([band, cutList], { product_name: null, brand: 'WHOLE PAWS', species_claim: 'not_visible', product_type_claim: null }, 'model-b'), GTIN);
+    expect(back).toMatchObject({ status: 'unreadable', reason: 'The ingredient list couldn’t be read in full. Retake it straight on, in good light, with all of it in the frame.' });
+  });
+  it('a photo whose needed panel is cut off says which panel to retake, and only a panel Purrbi asks for', () => {
     const barcode: RawPanel = { kind: 'barcode', legibility: 'clear', heading: null, text: '0 99482 48108 7' };
     const side: RawPanel = { kind: 'other', legibility: 'clear', heading: null, text: 'DISTRIBUTED BY: WHOLE FOODS MARKET\nAUSTIN, TX 78703' };
     const cutList: RawPanel = { kind: 'ingredients', legibility: 'partial', heading: null, text: '[?] Guar Gum, Salt, [?] Amino Acid Chelate, [?]' };
     const cutGuide: RawPanel = { kind: 'feeding_directions', legibility: 'partial', heading: 'Feeding Guidelines', text: 'For adult cats, [?]' };
-    const label = combineReadings(read([barcode, side], { product_name: null, brand: null, species_claim: 'not_visible', product_type_claim: null, barcode_digits: '099482481087' }), read([barcode, side, cutGuide, cutList], { product_name: null, brand: null, species_claim: 'not_visible', product_type_claim: null, barcode_digits: '099482481087' }, 'model-b'), '00099482481087');
-    expect(label).toMatchObject({ status: 'unreadable', reason: 'The feeding guide and ingredient list are in the photo but not fully readable (cut off at an edge, curved or too small). Take it straight on, with the whole panel filling the frame.' });
+    const none = { product_name: null, brand: null, species_claim: 'not_visible' as const, product_type_claim: null, barcode_digits: '099482481087' };
+    const label = combineReadings(read([barcode, side], none), read([barcode, side, cutGuide, cutList], none, 'model-b'), '00099482481087');
+    expect(label).toMatchObject({ status: 'unreadable', reason: 'The ingredient list couldn’t be read in full. Retake it straight on, in good light, with all of it in the frame.' });
+    // A feeding guide is not asked for; nor is a panel only one reading saw named before the front both saw.
+    expect(combineReadings(read([cutGuide], none), read([cutGuide], none, 'model-b'), '00099482481087').reason).toBe('No label details were readable in this photo. Retake it closer to the panel you need.');
+    const blurryFront: RawPanel = { kind: 'front', legibility: 'partial', heading: null, text: '[?] [?]' };
+    const callouts: RawPanel = { kind: 'ingredients', legibility: 'partial', heading: null, text: 'Real salmon [?]' };
+    expect(combineReadings(read([blurryFront], { ...none, barcode_digits: null }), read([blurryFront, callouts], { ...none, barcode_digits: null }, 'model-b'), GTIN).reason).toBe('The name and brand couldn’t be read reliably. Retake the front straight on, in good light.');
   });
   it('two readings agree whether a model kept the printed lines of an inline analysis or put one row per line', () => {
     // As on a real French bag (Purina ONE chat stérilisé): one model kept the printed lines, the other did not.

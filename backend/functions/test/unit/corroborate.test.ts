@@ -1,7 +1,7 @@
 // Label photo stages: what an owner's photo reading is worth beyond the owner's own result.
 import { describe, expect, it } from 'vitest';
 import type { ValidatedLabel } from '../../src/ai/labelExtract';
-import { corroborateLabel } from '../../src/pipeline/corroborate';
+import { corroborateLabel, photoNote } from '../../src/pipeline/corroborate';
 import { facts, GA_FULL } from '../helpers/fixtures';
 
 const reading = (over: Partial<ValidatedLabel> = {}): ValidatedLabel => ({
@@ -82,5 +82,25 @@ describe('ingredient roles in one vocabulary', () => {
     expect(ingredientRole('Blé (14%)')).toBe('Carbohydrate source');
     expect(ingredientRole('Graisses animales')).toBe('Fat source');
     expect(ingredientRole('Pulpe de betterave déshydratée')).toBe('Fibre source');
+  });
+});
+
+describe('a read photo’s note', () => {
+  // Review of label reader 2.4.0: a photo read only for its name looked like a read ingredient list.
+  it('says first when the panel the photo was taken for was not read, so the owner retakes it', () => {
+    const nameOnly = reading({ productName: 'Grain Free Salmon Pâté Loaf Recipe', panels: ['front', 'ingredients'] });
+    const c = corroborateLabel(nameOnly, null);
+    expect(photoNote('ingredients', nameOnly, c)).toBe(`The ingredient list wasn’t read from this photo. Retake it straight on, with the whole list in the frame. ${c.note}`);
+    expect(photoNote('nutrition', nameOnly, c)).toMatch(/^The nutrition panel wasn’t read from this photo\. /);
+    expect(photoNote('front', nameOnly, c)).toBe(c.note); // the name is what a front photo is for
+    expect(photoNote('label', nameOnly, c)).toBe(c.note); // a general label photo: anything read is what it is for
+    const backOnly = reading({ ingredients: ['Salmon', 'water'], panels: ['ingredients'] });
+    expect(photoNote('front', backOnly, corroborateLabel(backOnly, null))).toMatch(/^The name and brand weren’t read from this photo\. /);
+    expect(photoNote('ingredients', backOnly, corroborateLabel(backOnly, null))).toBe(corroborateLabel(backOnly, null).note);
+    const actives = reading({ activeIngredients: [{ name: 'Glucosamine', amount: 500, unit: 'mg' }] as ValidatedLabel['activeIngredients'] });
+    expect(photoNote('ingredients', actives, corroborateLabel(actives, null))).toBe(corroborateLabel(actives, null).note);
+    // A disputed reading is not used at all: its note is the one said.
+    const disputed = { stage: 'disputed' as const, agreements: [], conflicts: ['x'], note: 'Not used: x.' };
+    expect(photoNote('ingredients', nameOnly, disputed)).toBe('Not used: x.');
   });
 });
