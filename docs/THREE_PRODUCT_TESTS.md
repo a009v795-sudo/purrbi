@@ -564,3 +564,9 @@ by source coverage. Neither is a code defect still open.
   `1f58ebdd3d80b0df682a39282d65d9c5438c171bd7acd01a26f746fa838ba65c`.
 - **App:** unchanged since build 9. All changes since are in the backend, live on `purrbi-49c21` (`3d5dfc9`).
 - **Not verified here:** installing on a physical device and scanning with its camera.
+- **Owner's check on a physical Android device (2026-11-01, the owner's report):** build 10 installed and ran.
+  - A: "Not yet confirmed for cats or dogs".
+  - B: 75/100 "Good".
+  - C: unscored and unconfirmed.
+  - All three match the results recorded above. The report does not say whether the barcodes were typed or scanned with
+    the camera.
