@@ -64,12 +64,15 @@ export async function httpRequest(url: string, opts: HttpOptions): Promise<HttpR
       outcome = res.ok ? 'ok' : res.status === 404 ? 'not_found' : res.status === 429 ? 'rate_limited' : 'http_error';
       if (res.ok || opts.acceptStatuses?.includes(res.status)) return { status: res.status, text, headers: res.headers, url: res.url || url };
       detail = errorDetail(text);
+      // A 429 that says the account has no credits (OpenAI: "You have no credits remaining", insufficient_quota) is not a
+      // passing limit: it is said as such and not tried again.
+      if (res.status === 429 && /insufficient_quota|no credits remaining|exceeded your current quota/i.test(text)) throw new SourceError(opts.source, 'rate_limited', 'no credits remaining', 429);
       if (res.status === 429) lastError = new SourceError(opts.source, 'rate_limited', 'rate limited', 429);
       else if (res.status >= 500) lastError = new SourceError(opts.source, 'http', `HTTP ${res.status}`, res.status);
       else throw new SourceError(opts.source, 'http', `HTTP ${res.status}: ${text.slice(0, 200)}`, res.status);
     } catch (err) {
       if (err instanceof SourceError) {
-        if (err.kind === 'http' && (err.status ?? 0) < 500) throw err;
+        if ((err.kind === 'http' && (err.status ?? 0) < 500) || err.message.endsWith(': no credits remaining')) throw err;
         lastError = err;
       } else if ((err as Error).name === 'AbortError') {
         outcome = 'timeout';

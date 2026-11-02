@@ -1295,12 +1295,16 @@ async function photoJob(deps: Deps, uid: string, photoId: string): Promise<void>
     }
   } catch (err) {
     const parse = err instanceof SourceError && err.kind === 'parse';
+    // The label-reading service limiting requests or out of credits is not the photo's fault: no retake is asked for.
+    const unavailable = err instanceof SourceError && err.kind === 'rate_limited';
     const message =
       err instanceof QuotaError
         ? 'Today’s photo limit has been reached.'
         : parse
           ? 'The label couldn’t be read in one go. Photograph just the panel asked for.'
-          : 'The photo couldn’t be processed. Try again or retake it.';
+          : unavailable
+            ? 'Label reading isn’t available right now. Try this photo again later.'
+            : 'The photo couldn’t be processed. Try again or retake it.';
     deps.log.error('photo failed', { traceId, uid, scanId, photoId, error: (err as Error).message });
     job.diagnosticNotes.push(`Label photo not processed: ${err instanceof QuotaError ? err.kind : errorDetail((err as Error).message)}`);
     await photoFail('failed', message);

@@ -40,6 +40,7 @@ let calls: Record<string, number>;
 let opffDown = false;
 let verdictMode: 'ok' | 'invalid' | 'fail' = 'ok';
 let labelPatch: Partial<ValidatedLabel> | null = null; // changes the mocked reading of a label panel
+let extractThrows: Error | null = null; // the label reader fails (e.g. the AI account has no credits)
 let imagesDown = false; // the database's image host fails (technical failure)
 let pagesDown = false; // research names pages that cannot be reached
 let researchThrows = false; // the research model call fails (provider error)
@@ -261,6 +262,7 @@ const sources: Sources = {
   },
   async extractLabel(o): Promise<ValidatedLabel> {
     calls.extract = (calls.extract ?? 0) + 1;
+    if (extractThrows) throw extractThrows;
     if (o.purpose.includes('front')) {
       return { status: 'different_product', reason: 'barcode mismatch (mocked)', panels: ['front', 'barcode'], productName: null, brand: null, species: 'unknown', productTypeClaim: null, ingredientsText: null, ingredients: [], guaranteedAnalysis: [], calories: [], adequacy: null, feedingDirections: null, activeIngredients: [], uncertainFields: [], rejected: [], model: 'mock', version: LABEL_EXTRACTION_VERSION };
     }
@@ -310,6 +312,7 @@ beforeEach(async () => {
   verdictMode = 'ok';
   verdictInputs = [];
   labelPatch = null;
+  extractThrows = null;
   imagesDown = false;
   pagesDown = false;
   researchThrows = false;
@@ -980,6 +983,17 @@ describe('label photo stages: submitted → extracted → corroborated → verif
     const s = await read(b);
     expect(s.diagnosticNotes.join(' ')).toMatch(/Set aside a sentence from TEST FIXTURE maker page/);
     expect(s.adequacySummary ?? '').not.toMatch(/Complete and balanced/);
+  });
+  it('a photo the label reader cannot take (no AI credits, rate limit) says so, without asking for a retake', async () => {
+    extractThrows = new SourceError('OpenAI', 'rate_limited', 'no credits remaining', 429);
+    const ref = await newScan('u1', BC.food, 'cat1');
+    await processScan(deps(), 'u1', ref.id);
+    const photo = await photoFor('u1', ref.id);
+    await processPhoto(deps(), 'u1', photo.id);
+    expect(await read(photo)).toMatchObject({ status: 'failed', statusMessage: 'Label reading isn’t available right now. Try this photo again later.' });
+    const s = await read(ref);
+    expect(s.status).toBe('needs_photos'); // re-assessed, not stuck
+    expect(s.diagnosticNotes.join(' ')).toMatch(/Label photo not processed: .*no credits remaining/);
   });
   it('a photo whose ingredient list differs from this barcode’s record is disputed and not used', async () => {
     labelPatch = { ingredientsText: 'Salmon, potatoes, peas, canola oil, tapioca, salt', ingredients: ['Salmon', 'potatoes', 'peas', 'canola oil', 'tapioca', 'salt'] };

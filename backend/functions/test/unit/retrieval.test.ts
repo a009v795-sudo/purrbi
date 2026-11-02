@@ -9,6 +9,7 @@ import { caloriesForPackage, describeCalories, parseCalorieText, parsePackageSiz
 import { classifyScope, speciesEvidence } from '../../src/domain/scope';
 import { altTextIngredientLists, documentFacts, markupGtins, nameOnPage, nameTokens, nutritionDocLinks, pageText, parseShopifyProduct, shopifyProductUrl } from '../../src/sources/pageEvidence';
 import { ResearchNotStarted, researchProduct } from '../../src/sources/research';
+import { httpJson } from '../../src/util/http';
 
 const WELLNESS_INGREDIENTS =
   'Tuna, Tuna Broth, Water Sufficient for Processing, Mackerel, Salmon, Tapioca Starch, Sunflower Oil, Natural Flavor, Guar Gum, Tricalcium Phosphate, Taurine, Magnesium Sulfate, Vitamins [Vitamin E Supplement, Thiamine Hydrochloride, Niacin, Vitamin A Supplement, Pyridoxine Hydrochloride, d-Calcium Pantothenate, Riboflavin Supplement, Folic Acid, Vitamin D3 Supplement, Biotin, Vitamin B12 Supplement, Potassium Chloride, Choline Chloride, Minerals [Zinc Amino Acid Chelate, Iron Amino Acid Chelate, Manganese Amino Acid Chelate, Copper Amino Acid Chelate, Potassium Iodide, Sodium Selenite], Menadione Sodium Bisulfite Complex (Vitamin K).';
@@ -368,6 +369,17 @@ describe('barcode-only research (tests A/B/C, 2026-10-30)', () => {
     expect(n).toBe(3); // the barcode search, its 13-digit form, then one search by the answer's name; no more
     expect(r.facts).toBeNull();
     expect(r.discarded.filter((d) => d.includes('does not show this product’s barcode'))).toHaveLength(3);
+  });
+});
+
+describe('an AI account without credits (2026-11-02: HTTP 429 "You have no credits remaining")', () => {
+  it('is said as such and not tried again', async () => {
+    const fetch = vi.fn(async () => new Response('{"error":{"message":"You have no credits remaining. Add credits to continue using the API.","type":"insufficient_quota","code":"insufficient_quota"}}', { status: 429 }));
+    vi.stubGlobal('fetch', fetch);
+    const err = await httpJson('https://api.openai.com/v1/chat/completions', { source: 'OpenAI', method: 'POST', retries: 1 }).catch((e) => e);
+    expect(err).toMatchObject({ kind: 'rate_limited', status: 429, message: 'OpenAI: no credits remaining' });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    vi.unstubAllGlobals();
   });
 });
 
