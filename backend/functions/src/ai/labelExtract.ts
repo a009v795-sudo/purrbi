@@ -160,6 +160,7 @@ export interface ValidatedLabel {
   activeIngredients: ActiveIngredient[];
   uncertainFields: string[]; // panels a reading saw but could not read fully
   rejected: string[]; // what was read but not kept, and why
+  notKept?: string[]; // on a read photo: identity both readings gave but that was not kept, as each gave it (for tracing)
   barcodeMatch?: boolean; // both readings show the scanned barcode (ties the photo to this product)
   model: string;
   version?: string; // LABEL_EXTRACTION_VERSION; readings without it predate the grounded reader
@@ -725,7 +726,11 @@ export function combineReadings(a: Reading, b: Reading, scanGtin14: string, purp
     const trace = rejected.some((r) => r.startsWith('readings: ')) ? [] : [`readings: ${describeReading(a)} / ${describeReading(b)}`];
     return { ...base, rejected: [...rejected, ...trace], reason };
   }
-  return { ...out, status: 'processed', reason: '' };
+  // A name, brand or type both readings gave but not kept on a read photo: traced as each gave it, so a front read
+  // without its name can be explained (not in `rejected`, which says what to retake).
+  const pairOf = (field: string, x: string | null, y: string | null, kept: string | null) => (x && y && !kept ? [`${field}: "${x.slice(0, 50)}" / "${y.slice(0, 50)}"`] : []);
+  const notKept = [...pairOf('name', a.productName, b.productName, out.productName), ...pairOf('brand', a.brand, b.brand, out.brand), ...pairOf('type', a.productTypeClaim, b.productTypeClaim, out.productTypeClaim)];
+  return { ...out, status: 'processed', reason: '', ...(notKept.length ? { notKept } : {}) };
 }
 
 export async function extractLabel(opts: {

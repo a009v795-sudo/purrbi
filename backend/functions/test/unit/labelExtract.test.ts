@@ -109,6 +109,9 @@ describe('grounded label reading', () => {
     // "&", "and" and "with" printed either way are the same name.
     const tuna: RawPanel = { kind: 'front', legibility: 'clear', heading: null, text: 'TUNA & SALMON FEAST\nCAT FOOD' };
     expect(pair([tuna], 'Tuna & Salmon Feast', 'Tuna and Salmon Feast', { brand: null, species_claim: 'cat', product_type_claim: null }).productName).toBe('Tuna & Salmon Feast');
+    // A name both readings gave but not kept is traced as each gave it (not in `rejected`, which says what to retake).
+    expect(pair([WP_FRONT], 'SALMON', 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE')).toMatchObject({ rejected: [], notKept: ['name: "SALMON" / "GRAIN FREE SALMON PÂTÉ LOAF RECIPE"'] });
+    expect(pair([WP_FRONT], 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE', 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE').notKept).toBeUndefined();
     // Names that are not the same name are not kept, but the front's agreed, printed brand and species still are.
     expect(pair([WP_FRONT], 'SALMON', 'GRAIN FREE SALMON PÂTÉ LOAF RECIPE')).toMatchObject({ status: 'processed', productName: null, brand: 'WHOLE PAWS', species: 'cat', productTypeClaim: 'PREMIUM CAT FOOD' });
     // Nothing agreed on a front photo: unreadable, and the owner is asked to retake the front.

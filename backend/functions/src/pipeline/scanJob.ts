@@ -1249,7 +1249,7 @@ async function photoJob(deps: Deps, uid: string, photoId: string): Promise<void>
         const image = await deps.readImage(String(claimed.photo.imageUrl ?? ''), uid);
         const label = await deps.sources.extractLabel({ apiKey: config.openaiApiKey(), model: config.visionModel, imageBase64: image.base64, mimeType: image.mimeType, purpose: purposeText(purpose), panel: purpose, scanGtin14: gtin });
         deps.log.info('label extracted', { traceId, uid, scanId, photoId, status: label.status, panels: label.panels, rejected: label.rejected });
-        job.diagnosticNotes.push(`Label photo (${label.model}): ${label.status}${label.rejected.length ? `; not kept: ${label.rejected.slice(0, 4).join('; ')}` : ''}`);
+        job.diagnosticNotes.push(`Label photo (${label.model}): ${label.status}${label.rejected.length ? `; not kept: ${label.rejected.slice(0, 4).join('; ')}` : ''}${label.notKept?.length ? `; not agreed or not printed: ${label.notKept.join('; ')}` : ''}`);
         if (label.status === 'processed') {
           // How far the reading can be trusted beyond this owner: compared with this barcode's public record.
           const c = corroborateLabel(label, (await readProduct(db, gtin))?.facts);
