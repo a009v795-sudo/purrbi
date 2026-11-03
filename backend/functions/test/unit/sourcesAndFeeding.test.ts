@@ -64,7 +64,7 @@ describe('a treat’s own wording that it is not a complete diet is its feeding 
   it('a footnote that wraps, is plural, or stands beside a statement is never the statement (third review of 3.0.1)', () => {
     expect(parseAdequacyStatement('*Not recognized as an essential nutrient by the')).toMatchObject({ type: 'unclear' });
     expect(parseAdequacyStatement('AAFCO Cat Food Nutrient Profiles.')).toMatchObject({ type: 'unclear' });
-    expect(parseAdequacyStatement('*Not recognized as essential nutrients by the AAFCO Cat Food Nutrient Profiles.')).toMatchObject({ type: 'unclear' });
+    expect(parseAdequacyStatement('*Not recognized as essential nutrients by the AAFCO Cat Food Nutrient Profiles.')).toBeNull();
     expect(parseAdequacyStatement('*Not recognized as an essential nutrient by the AAFCO Cat Food Nutrient Profiles. This product is intended for intermittent or supplemental feeding only.')).toMatchObject({ type: 'intermittent' });
     expect(parseAdequacyStatement('Complete and balanced nutrition for adult cats. *Not recognized as an essential nutrient by the AAFCO Cat Food Nutrient Profiles.')).toMatchObject({ type: 'complete', species: 'cat', lifeStages: ['adult_maintenance'] });
     // A claim about the profiles is still a statement.
@@ -77,8 +77,21 @@ describe('a treat’s own wording that it is not a complete diet is its feeding 
     const raw = { legible: true, barcode_digits: null, product_name: null, brand: null, species_claim: 'cat', product_type_claim: 'treat', panels } as RawLabelExtraction;
     expect(parseReading(raw, 'model-a').adequacy).toMatchObject({ text: C_FEEDING, type: 'intermittent' });
   });
+  it('a footnote ends at its own words, and a panel holding only a footnote is no statement (review of efb5e21)', () => {
+    const aafco = 'TEST FIXTURE is formulated to meet the nutritional levels established by the AAFCO Cat Food Nutrient Profiles for adult maintenance.';
+    for (const between of ['\n', '; ', ' '])
+      expect(parseAdequacyStatement(`*Not recognized as an essential nutrient by the AAFCO Cat Food Nutrient Profiles${between}${aafco}`), JSON.stringify(between)).toMatchObject({ type: 'complete', species: 'cat', lifeStages: ['adult_maintenance'], method: 'formulation' });
+    expect(parseAdequacyStatement('*Not recognized as an essential nutrient by the AAFCO Dog Food Nutrient Profiles\nAnimal feeding tests using AAFCO procedures substantiate that TEST FIXTURE provides complete and balanced nutrition for adult maintenance.')).toMatchObject({ type: 'complete', method: 'feeding_trial' });
+    const panels: RawPanel[] = [
+      { kind: 'guaranteed_analysis', legibility: 'clear', heading: null, text: 'Crude Protein (min) 30%\nCrude Fat (min) 12%\nCrude Fiber (max) 3%\nMoisture (max) 10%\nOmega-3 Fatty Acids* (min) 0.5%' },
+      { kind: 'adequacy_statement', legibility: 'clear', heading: null, text: '*Not recognized as an essential nutrient by the AAFCO Cat Food Nutrient Profiles.' },
+      { kind: 'adequacy_statement', legibility: 'clear', heading: null, text: aafco },
+    ];
+    const raw = { legible: true, barcode_digits: null, product_name: null, brand: null, species_claim: 'cat', product_type_claim: null, panels } as RawLabelExtraction;
+    expect(parseReading(raw, 'model-a').adequacy).toMatchObject({ text: aafco, type: 'complete' });
+  });
   it('an analysis footnote that names the AAFCO profiles is not a statement (review of 3.0.1)', () => {
-    expect(parseAdequacyStatement('*Not recognized as an essential nutrient by the AAFCO Cat Food Nutrient Profiles.')).toMatchObject({ type: 'unclear' });
+    expect(parseAdequacyStatement('*Not recognized as an essential nutrient by the AAFCO Cat Food Nutrient Profiles.')).toBeNull(); // nothing but a footnote
     const panels: RawPanel[] = [
       { kind: 'guaranteed_analysis', legibility: 'clear', heading: 'GUARANTEED ANALYSIS', text: 'Crude Protein (min) 42%\nOmega-3 Fatty Acids* (min) 0.5%\n*Not recognized as an essential nutrient by the AAFCO Cat Food Nutrient Profiles.' },
       { kind: 'feeding_directions', legibility: 'clear', heading: 'FEEDING GUIDELINES', text: C_FEEDING },

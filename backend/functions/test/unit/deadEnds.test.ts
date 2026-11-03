@@ -122,6 +122,16 @@ describe('an analysis value wrapped onto the next printed line', () => {
     // One value under two nutrients is not read.
     expect(rows('Acides gras oméga-3,\ndont DHA\n0,2 %').filter((r) => r.startsWith('dha'))).toEqual([]);
   });
+  // Review of efb5e21: an energy item in a list, a basis heading, and a heading line that names nothing.
+  it('an energy item in a list, a "per 100 g" heading or an "As fed" line never changes what is read', () => {
+    expect(rows('Guaranteed Analysis: 30% Crude Protein (min), 18% Crude Fat (min), 4% Crude Fiber (max), 10% Moisture (max). Calorie content (calculated): 3,650 kcal/kg ME.')).toEqual([]);
+    expect(rows('Analytical constituents: Metabolisable energy 3,900 kcal/kg, Protein 30%, Fat content\n15%, Crude ash 7%, Crude fibres 2%, Moisture 8%')).toEqual(['crude_protein:30%:not_stated', 'crude_fat:15%:not_stated', 'ash:7%:not_stated', 'crude_fiber:2%:not_stated', 'moisture:8%:not_stated']);
+    expect(rows('Guaranteed Analysis: Crude Protein (min) 30%, Calories 3500 kcal/kg, Crude Fat (min)\n18%, Crude Fiber (max) 4%, Moisture (max) 10%')).toEqual(['crude_protein:30%:min', 'crude_fat:18%:min', 'crude_fiber:4%:max', 'moisture:10%:max']);
+    expect(rows('Constituants analytiques : Protéines brutes 10 %, Calories 3500 kcal/kg, Cellulose\nbrute (Max.) 1,5 %')).toEqual(['crude_protein:10%:not_stated', 'crude_fiber:1.5%:max']);
+    expect(rows('Analytical constituents per 100g\nProtein\n10%\nFat content\n5%\nCrude ash\n2%\nMoisture\n80%')).toEqual(['crude_protein:10%:not_stated', 'crude_fat:5%:not_stated', 'ash:2%:not_stated', 'moisture:80%:not_stated']);
+    expect(rows('Analytische Bestandteile je 100 g:\nRohprotein\n10 %, Fettgehalt 5 %, Rohasche 2 %, Feuchtigkeit 80 %')).toEqual(['crude_protein:10%:not_stated', 'crude_fat:5%:not_stated', 'ash:2%:not_stated', 'moisture:80%:not_stated']);
+    expect(rows('GUARANTEED ANALYSIS\nAs fed\n36%\nCrude Protein\n16%\nCrude Fat\n3%\nCrude Fiber\n10%\nMoisture')).toEqual([]);
+  });
   it('values printed above names stay unread when a name wraps, or the first value shares its line', () => {
     expect(rows('Guaranteed Analysis\n36%\nCrude\nProtein (min)\n16%\nCrude Fat (min)\n3%\nCrude Fiber (max)\n10%\nMoisture (max)')).toEqual([]);
     expect(rows('Guaranteed Analysis\n36%\nCrude Protein (min)\n16%\nCrude Fat (min)\n3%\nCrude\nFiber (max)\n10%\nMoisture (max)\n0.1%\nTaurine (min)')).toEqual([]);

@@ -29,8 +29,11 @@ it('never reads a wrong value, and never loses a row the reader before 2.5.1 rea
     const lang = rnd() < 0.8 ? EN : FR;
     const picked = lang.filter((_, i) => i < 4 || rnd() < 0.4);
     const style = Math.floor(rnd() * 3);
-    const layout = pick(['inline', 'perline', 'alternating', 'stacked', 'valuesAbove', 'perlineWrapped']);
-    const head = pick(['GUARANTEED ANALYSIS: ', 'Guaranteed Analysis\n', lang === FR ? 'Constituants analytiques : ' : 'Analysis: ']);
+    const layout = pick(['inline', 'perline', 'alternating', 'stacked', 'valuesAbove', 'perlineWrapped', 'inlineEnergy', 'valuesFirst']);
+    // Headings as labels print them: a basis ("per 100 g", "As fed") or a typical-values line under the heading too
+    // (third review of efb5e21).
+    const head = pick(['GUARANTEED ANALYSIS: ', 'Guaranteed Analysis\n', lang === FR ? 'Constituants analytiques : ' : 'Analysis: ', lang === FR ? 'Constituants analytiques pour 100 g\n' : 'Analytical constituents per 100g\n', 'Guaranteed Analysis\nAs fed\n']);
+    const energy = pick(['Metabolisable energy 3,900 kcal/kg', 'Calories 3500 kcal/kg', 'Calorie content (calculated): 1,181 kcal/kg']);
     const valueText = (r: Row) => (lang === FR ? `${String(r[2]).replace('.', ',')} %` : `${r[2]}%`);
     let text = '';
     if (layout === 'inline') text = wrap(head + picked.map((r) => `${r[0]}${q(r, style)} ${valueText(r)}`).join(pick([', ', ' • ', '; '])), 10 + Math.floor(rnd() * 60));
@@ -38,7 +41,15 @@ it('never reads a wrong value, and never loses a row the reader before 2.5.1 rea
     else if (layout === 'perlineWrapped') text = head + picked.map((r) => wrap(`${r[0]}${q(r, style)} ${valueText(r)}`, 8 + Math.floor(rnd() * 20))).join('\n');
     else if (layout === 'alternating') text = head + picked.map((r) => `${r[0]}${q(r, style)}\n${valueText(r)}`).join('\n');
     else if (layout === 'stacked') text = head + picked.map((r) => `${r[0]}${q(r, style)}`).join('\n') + '\n' + picked.map(valueText).join('\n');
-    else text = head + picked.map((r) => `${valueText(r)}\n${r[0]}${q(r, style)}`).join('\n');
+    else if (layout === 'inlineEnergy') {
+      // An energy item inside a row list, at any place, the list wrapped at any width.
+      const items = picked.map((r) => `${r[0]}${q(r, style)} ${valueText(r)}`);
+      items.splice(Math.floor(rnd() * (items.length + 1)), 0, energy);
+      text = wrap(head + items.join(pick([', ', ' • ', '; '])), 14 + Math.floor(rnd() * 60));
+    } else if (layout === 'valuesFirst') {
+      // Values printed before their names, an energy statement on the same line: never read (corpus R05).
+      text = head + picked.map((r) => `${valueText(r)} ${r[0]}${q(r, style)}`).join(', ') + `. ${energy}.`;
+    } else text = head + picked.map((r) => `${valueText(r)}\n${r[0]}${q(r, style)}`).join('\n');
     const truth = new Map(picked.map((r) => [r[1] === 'other' ? `other|${r[0].toLowerCase()}` : r[1], r]));
     const key = (e: { nutrient: string; label: string }) => (e.nutrient === 'other' ? `other|${e.label.toLowerCase()}` : e.nutrient);
     const right = (e: { nutrient: string; label: string; value: number; qualifier: string }) => {

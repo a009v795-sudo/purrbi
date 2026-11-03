@@ -60,6 +60,8 @@ const NUMBER = '[1-9]\\d{0,2}(?:([.,])\\d{3})(?:\\1\\d{3})*(?![.,]?\\d)|\\d+(?:[
 // Where a row ends: a value, its unit and a printed min/max.
 const ROW_END = new RegExp(`(?<![\\d.,])(?<value>${NUMBER})\\s*(?<unit>${UNITS}|${OTHER_UNITS})(?![\\p{L}\\d/])(?:\\s*(?<qualifier>${QUALIFIER_AFTER}))?`, 'giu');
 const LEADING_UNIT = new RegExp(`^(?:${UNITS})(?![\\p{L}\\d])`, 'iu');
+/** A unit an analysis row is read in (not a basis such as "100 g", or an energy value). */
+const ROW_UNIT = new RegExp(`^(?:${UNITS})$`, 'iu');
 // A value without a unit at the end of a line, read only under a "(%)" heading.
 const UNITLESS_END = new RegExp(`^(?<name>.*?)(?<![\\d.,])(?<value>\\d+(?:[.,]\\d+)?)\\s*(?<qualifier>${QUALIFIER_AFTER})?$`, 'iu');
 // A qualifier on its own ("min", "(max.)", "Minimum:") or opening a part ("min, Crude Fiber"): the row before's.
@@ -229,25 +231,27 @@ function sectionRows(text: string, percentHeader: boolean): GuaranteedAnalysisEn
   let dangling = false; // the line above is a value alone at the start of the section, or under another value alone
   let above: 'start' | 'name' | 'row' | 'value' = 'start'; // what the line above was
   for (const line of lines) {
-    // An energy statement is not a row; a dry-matter list ends what is read (as below).
-    if (/kcal|kilocal|\bkj\b/iu.test(line)) {
-      carryForCheck = '';
-      fromRest = false;
+    const { parts, rest } = partsOf(line);
+    // An energy statement with no other value is not a row, as below (a line with other rows is checked whole); a
+    // dry-matter list ends what is read.
+    if (/kcal|kilocal|\bkj\b/iu.test(line) && !parts.some((p) => p.unit && !/kcal|kj/iu.test(p.unit))) {
+      carryForCheck = /\p{L}/u.test(rest) ? rest : '';
+      fromRest = !!carryForCheck;
       dangling = false;
-      above = 'row';
       continue;
     }
-    const { parts, rest } = partsOf(line);
     if (!parts.length) {
       if (DRY_MATTER.test(line) && !AS_FED.test(line) && !nutrientKeysIn(line.replace(DRY_MATTER, ' ')).length) break;
       if (!QUALIFIER_ALONE.test(line)) {
         // A value alone with a name printed under it ("36%" / "Crude Protein"): values printed above their names, so
         // which value is whose is unclear and nothing in the section is read (review of 2.5.1).
-        if (dangling && (nutrientKeysIn(line).length > 0 || realWord(line))) return [];
+        const named = nutrientKeysIn(line).length > 0 || realWord(line);
+        if (dangling && named) return [];
         carryForCheck = line;
         fromRest = false;
         dangling = false;
-        above = 'name';
+        // A line that names nothing ("As fed", "Typical values") leaves the section's start where it was.
+        if (named) above = 'name';
       }
       continue;
     }
@@ -260,22 +264,29 @@ function sectionRows(text: string, percentHeader: boolean): GuaranteedAnalysisEn
       nutrientKeysIn(`${carryForCheck} ${first}`).length > 0 || unclosed(carryForCheck) || (fromRest && realWord(carryForCheck));
     const goesOn = /\p{L}/u.test(rest) || parts.slice(1).some((p) => /\p{L}/u.test(p.name));
     if (!ownName && !carried && goesOn) return [];
-    const alone = !ownName && !carried && !goesOn;
+    // A value alone in a row's unit ("36%"), not a basis ("per 100 g") or an energy value.
+    const alone = !ownName && !carried && !goesOn && parts.every((p) => !!p.unit && ROW_UNIT.test(p.unit));
     dangling = alone && (above === 'start' || above === 'value');
-    above = alone ? 'value' : 'row';
+    if (alone) above = 'value';
+    else if (parts.some((p) => !!p.unit && ROW_UNIT.test(p.unit))) above = 'row';
     carryForCheck = /\p{L}/u.test(rest) ? rest : '';
     fromRest = true;
   }
 
   for (const line of lines) {
     if (/kcal|kilocal|\bkj\b/iu.test(line) && !partsOf(line).parts.some((p) => p.unit && !/kcal|kj/iu.test(p.unit))) {
-      carry = '';
+      // An energy statement is read as calorie content, not as an analysis row. In a row list it is one of the list's
+      // items: the name the line ends with after it ("…, Calories 3500 kcal/kg, Cellulose" / "brute 1,5 %") is carried
+      // on, as after any row (review of efb5e21).
+      const energy = partsOf(line);
+      const tail = trail(lead(energy.rest));
+      carry = tail && /\p{L}/u.test(tail) && !UNSURE.test(tail) && !/^\([^()]*\)?$/.test(tail) ? tail.split(' ').slice(-8).join(' ') : '';
+      carryFromRow = !!carry;
       poisoned = false;
-      carryFromRow = false;
-      openList = false;
-      rowAbove = false;
+      openList = !tail && /[,;•·]/u.test(energy.rest);
+      rowAbove = energy.parts.some((p) => /\p{L}/u.test(p.name.replace(/\([^)]*\)/g, '')));
       carryQualifier = '';
-      continue; // an energy statement is read as calorie content, not as an analysis row
+      continue;
     }
     const { parts, rest } = partsOf(line);
     // A dry-matter list (its own heading line, or a line that starts by saying so): not the guarantees.

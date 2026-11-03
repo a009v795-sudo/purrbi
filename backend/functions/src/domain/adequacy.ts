@@ -24,8 +24,10 @@ const TREAT_NOT_COMPLETE =
 const SUBSTANTIATED = /\b(formulated to meet|nutritional levels established|animal feeding tests|substantiat\w*)\b/;
 // An analysis footnote names the AAFCO profiles without being a statement ("*Not recognized as an essential nutrient by
 // the AAFCO Cat Food Nutrient Profiles.", also plural): it is taken out before the text is read, so a statement beside
-// it is still read (reviews of 3.0.1).
-const NOT_ESSENTIAL_FOOTNOTE = /[*†‡]*\s*\bnot (?:currently )?(?:recogni[sz]ed|considered) (?:as )?(?:an )?essential nutrients?\b[^.]*\.?/g;
+// it is still read (reviews of 3.0.1). It ends at its own words, with or without a full stop: a statement printed after
+// it is never taken with it.
+const NOT_ESSENTIAL_FOOTNOTE =
+  /[*†‡]*\s*\bnot (?:currently )?(?:recogni[sz]ed|considered) (?:as )?(?:an )?essential nutrients?(?:\s+(?:by|in|according to)\s+(?:the\s+)?(?:aafco|fediaf|association of american feed control officials)(?:\s*\(aafco\))?(?:\s+(?:cat|dog)\s+food)?(?:\s+nutrient\s+profiles?)?)?(?:\s+for\s+(?:cats|dogs|adult \w+|growth|all life stages))?\s*[.;,]?/g;
 // A negated claim says the product is not complete: "not formulated to meet …", "does not meet …".
 const NEGATED = /\b(not (formulated|intended|designed) to meet|(does|do) not meet|not complete and balanced|not nutritionally complete)\b/;
 const COMPLETE =
@@ -64,6 +66,8 @@ export function parseAdequacyStatement(raw: string | null | undefined): Adequacy
   if (!raw || !raw.trim()) return null;
   const text = raw.replace(/\s+/g, ' ').trim();
   const t = norm(text).replace(NOT_ESSENTIAL_FOOTNOTE, ' ').replace(/\s+/g, ' ').trim();
+  // Nothing but a footnote: no statement (review of efb5e21).
+  if (!/\p{L}{3}/u.test(t)) return null;
 
   let type: AdequacyStatement['type'] = 'unclear';
   if (INTERMITTENT.test(t) || EU_COMPLEMENTARY.test(t) || NEGATED.test(t)) type = 'intermittent';

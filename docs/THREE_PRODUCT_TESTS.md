@@ -837,7 +837,63 @@ Database lookups, saved records and owners' saved readings still work, as the C 
 | 099482480882 | `FwdNlTMYDuxpF7MyW1qv` / `34d92055-8d7` | needs_photos (front): "not yet confirmed for cats or dogs". Open Food Facts files it as "food"; reading its front image failed ("fetch failed"), retried after 6 h. |
 | 099482080754 | `TqnfeOJBGKKiXQGOIijm` / `0160fe40-b59` | needs_photos (front, ingredients). The barcode database is limiting requests until 2026-11-03 10:19 UTC, and no page found shows the barcode. Kept apart from 099482480882: no name or ingredients were borrowed. |
 
+**Still open (at the time):**
+- **A's score** needed the AAFCO statement from a photo read by reader 2.5.0, which needed OpenAI credits (added later
+  that evening; see below).
+- **Physical device:** the camera, a denied permission and a cancelled scan were not run.
+- **FlutterFlow Issues panel:** four warnings were not visible in the screenshots.
+
+## No dead ends: label reader 2.5.1 and score 3.0.1 (2026-11-02 evening to 2026-11-03, backend `efb5e21`)
+
+**What A on `accept` showed** after the credits were added (scan `HVzkexPkTcXU0PcnFR8j`, trace `36da991d-34a`): "complete",
+unscored, and no photo asked for. A's can prints "…, Moisture (Max.)" at the end of one line and "78%, Taurine (Min.) 0.05%" at
+the start of the next. One reading lost the moisture row, an analysis in use was never replaced, and the scorer withheld the
+score for moisture while nothing was asked for.
+
+**Repair and review.** Four rounds. Every confirmed finding is fixed with a test:
+
+| Round | Change | Review | Confirmed |
+|---|---|---|---|
+| 1 (`7b71957`, not deployed) | join a wrapped value before reading; a fuller analysis replaces a thinner one; ask for moisture | 3 lenses + verifiers | 11, among them: a photo or page could replace a database analysis in the shared record and drop its rows; a scored dry food was asked for moisture; the join misassigned values in stacked layouts |
+| 2 (`9fba021`) | merge reverted to fill-only; moisture added for the owner's own result only; requests only for a withheld score | 3 lenses + verifiers | 9, among them: a moisture card that could loop forever; a min/max lost through the EU rule; a scored food told a photo was "needed to score"; two rounds of photos for a treat |
+| 3 (`9fba021`) | (focused check) | 3 lenses + verifiers; the first two attempts stopped on the account's Claude usage limit, the third ran | 6: a fibre fraction over two lines read as crude fibre; values printed above names shifted a row; "1% vs 1%"; a digit-off photo asked for again; the AAFCO footnote wrapped or beside a statement |
+| 4 (`efb5e21`, deployed) | the join is replaced by one rule inside the reader: a run-on row list only | differential test (below); a final review (2 lenses) reported 4 findings, then a container restart stopped it before its verifiers finished | 4, each reproduced by hand: an energy item on a line made the values-before-names check skip the line (values read one row off, or a section dropped); a "per 100 g" heading counted as a value printed above its name (section dropped); the footnote removal ran past a footnote without a full stop into the statement; a footnote-only panel was kept as an "unclear" statement (older) |
+| 5 (this commit) | the four fixed; the differential generator now prints energy items in lists, "per 100 g" and "As fed" headings, and values-first lists beside an energy statement | differential test: 12,000 layouts in CI and 90,000 more locally (3 seeds) | — |
+
+After three review rounds on the same cause (joining lines before the reader knew the section and the name), the pre-pass
+join was removed rather than patched again. **Differential test** (`test/unit/analysisDifferential.test.ts`, kept in CI): on
+generated layouts (run-on lists at any width, one row per line, rows wrapped one by one, alternating, stacked, values above
+names; English and French; with and without min/max) the reader is compared with the reader before 2.5.1 (`9b0b2fe`). On
+30,000 layouts: **no wrong value and no row lost** that the old reader read right; about 6,000 correct rows gained; the old
+reader's 8,696 wrong values (values printed above names, narrow wraps) are gone. After round 5 the generator also prints the
+layouts the last review found; 90,000 more layouts on three seeds again give no wrong value and no row lost. After four review
+rounds on the reader, it is not iterated further: the differential test in CI guards it.
+
+**Independent check of A and C** (two label readers and two score checkers, against the owner's photos):
+- A: every value matches the can (5 analysis rows, calories, 17 ingredients, the AAFCO statement, dry matter). 93/100 reproduces.
+- C: every value matches the bag. Two scoring points did not follow the method: "vegetable glycerine", a humectant, counted as a
+  source ingredient that does not name its plant, and "Not intended as a meal replacement." was not read as the feeding
+  statement. Fixed as score 3.0.1 (`9fba021`, `efb5e21`).
+
+**Deploy.** `efb5e21`, run 41552655057: functions active (updated 00:27 UTC), Firestore and Storage rules equal to the
+repository, 5 of 5 indexes READY, no problems. CI green on `main` and the branch.
+
+**Live (release web build of `43020cb`, typed entry, backend `efb5e21`):**
+
+| Test | Account / scan / trace | Result |
+|---|---|---|
+| A, barcode only | `accept` / `NDc94WSdWryUjf6D6Dub` / `20aaa5bc-a4d` | **Complete, 93/100 Strong**, complete food for cats, 5 of 5 parts. Evidence: "Another reading of your label photo, with the same protein, fat and fiber, adds: moisture 78%, taurine 0.05%." The shared record for A holds none of the owner's rows. |
+| C, barcode only | `accept` / `u59X4HrWU4UP1p9Tbnb5` | **Complete, 100/100 Strong** (was 91), treat for cats. Named sources 40/40 (glycerine and rosemary extract left out), calories 30/30, analysis 15/15; feeding statement "not found yet": the saved reading predates 3.0.1, so a new photo of the back would add it. |
+| A, new account, front + can-side photos | `fresh251` / `pdO1EXGIu8HHMBeQlg6z` / `f6a613d8-5eb` | Needs a photo. gpt-4.1-mini's reading has all 5 analysis rows, **moisture 78% from the wrapped line included** (reader 2.5.1). gpt-5-mini marked the analysis panel not clear and gave 3 rows, so moisture and taurine were not confirmed (only rows both readings agree on are kept). Card: "Guaranteed analysis, with moisture: The guaranteed analysis Purrbi has (from your label photo) gives no moisture guarantee. If the panel prints one, a sharper photo of it is needed to compare protein and fat as dry matter, and to score it." |
+| A, same account, can-side photo again on that card | `fresh251` / `krAXT9oYyxYJiPzTuNcz` / `6fb7a6ef-b4d` | The same: gpt-5-mini again read the panel as not clear. Not a dead end (the card stays, with that wording); the owner's sharper photo on `accept` was read alike by both models. |
+
+The new account's pet onboarding could not be completed by the test driver (the Name field took no typed text in the driver);
+the app's own "Skip for now" was used, so that account has no pet (fit: no pet selected). The app itself was not changed.
+
 **Still open:**
-- **A's score** needs the AAFCO statement from a photo read by reader 2.5.0, which needs OpenAI credits.
+- **The final review of round 5** was not run (round 4's was stopped by a container restart; earlier attempts stopped on the
+  account's Claude usage limit). Round 5 is covered by the unit, emulator and differential tests only.
+- **A from that one photo:** the second model cannot read the wrapped part of that panel. Asking both models to agree is the
+  reader's safety rule and is not loosened; the app asks for a sharper photo.
 - **Physical device:** the camera, a denied permission and a cancelled scan were not run.
 - **FlutterFlow Issues panel:** four warnings were not visible in the screenshots.

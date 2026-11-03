@@ -292,7 +292,12 @@ function wrappedStatement(lines: string[]): AdequacyStatement | null {
 }
 
 function adequacyIn(panels: RawPanel[], before: string): AdequacyStatement | null {
-  for (const p of panels) if (p.kind === 'adequacy_statement' && clear(p) && !UNSURE.test(textOf(p))) return parseAdequacyStatement(textOf(p));
+  // A clear adequacy panel is the statement as printed (also when unclear), unless it holds nothing but a footnote.
+  for (const p of panels) {
+    if (p.kind !== 'adequacy_statement' || !clear(p) || UNSURE.test(textOf(p))) continue;
+    const a = parseAdequacyStatement(textOf(p));
+    if (a) return a;
+  }
   // EU labels print it as a line above the composition, often on the same printed line ("Aliment complet pour
   // chat adulte. Composition : …"); fronts may print "complete and balanced". Like an analysis row, a line a
   // partly legible panel shows in full counts; the composition after it is not part of the statement. A line that
