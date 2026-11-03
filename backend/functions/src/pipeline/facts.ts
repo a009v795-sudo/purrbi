@@ -21,9 +21,12 @@ export function hasUsableMoisture(ga: GuaranteedAnalysisEntry[] | undefined): bo
  * feeding statement that names no species, life stage or standard gives way to one that does.
  */
 const CORE_ROWS = ['crude_protein', 'crude_fat', 'crude_fiber'] as const;
-/** A reading's row `x` gives the row in use `r`: the same value and unit, and its min/max unless `r` states none. */
+/**
+ * A reading's row `x` gives the row in use `r`: the same value and unit, and no other min/max (a reading that lost a
+ * "(Max.)" still gives the same row: the rows in use keep their own min/max, as nothing replaces them; review of 2.5.1).
+ */
 const sameRow = (r: GuaranteedAnalysisEntry, x: GuaranteedAnalysisEntry | undefined) =>
-  !!x && x.unit === r.unit && (x.qualifier === r.qualifier || r.qualifier === 'not_stated') && Math.abs(x.value - r.value) < 1e-9;
+  !!x && x.unit === r.unit && (x.qualifier === r.qualifier || r.qualifier === 'not_stated' || x.qualifier === 'not_stated') && Math.abs(x.value - r.value) < 1e-9;
 const rowKey = (e: GuaranteedAnalysisEntry) => (e.nutrient === 'other' ? `other|${e.label.toLowerCase()}` : e.nutrient);
 
 /**
@@ -51,7 +54,10 @@ export function coreDifferences(inUse: GuaranteedAnalysisEntry[] | undefined, re
     if (!a && !b) return [];
     if (a && sameRow(a, b)) return [];
     const name = k.replace('crude_', 'crude ');
-    return [`${name} ${b ? `${b.value}${b.unit}` : 'not read'} vs ${a ? `${a.value}${a.unit}` : 'none'}`];
+    // The same value read with the other min/max is said with both (never "1% vs 1%").
+    const sameValue = !!a && !!b && a.unit === b.unit && Math.abs(a.value - b.value) < 1e-9;
+    const shown = (e: GuaranteedAnalysisEntry) => `${e.value}${e.unit}${sameValue ? ` ${e.qualifier}` : ''}`;
+    return [`${name} ${b ? shown(b) : 'not read'} vs ${a ? shown(a) : 'none'}`];
   });
 }
 

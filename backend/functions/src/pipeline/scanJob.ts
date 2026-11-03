@@ -893,9 +893,15 @@ export async function runAssessment(deps: Deps, job: JobInfo, o: AssessOptions):
   // - it was read without one: the card says so, and asks for a sharper photo only if the panel prints one.
   let moistureReadWithout = false;
   if (requests.some(isMoistureRequest)) {
-    const read = ownReadings.filter((e) => e.label.version === LABEL_EXTRACTION_VERSION && hasCoreGuaranteedAnalysis(e.label.guaranteedAnalysis));
-    const withMoisture = read.find((e) => hasUsableMoisture(e.label.guaranteedAnalysis));
-    if (withMoisture) {
+    // The current reader's readings of the owner's analysis, a photo matched to the barcode whose analysis reads
+    // differently from the saved one included (its analysis is never used; review of 2.5.1).
+    const read = current.filter((e) => e.stage !== 'disputed' && e.label.version === LABEL_EXTRACTION_VERSION && hasCoreGuaranteedAnalysis(e.label.guaranteedAnalysis));
+    const conflicted = read.find((e) => e.conflicts?.length);
+    const withMoisture = read.find((e) => !e.conflicts?.length && hasUsableMoisture(e.label.guaranteedAnalysis));
+    if (conflicted) {
+      requests = requests.filter((r) => !isMoistureRequest(r));
+      job.evidenceNotes.push('The moisture guarantee isn’t asked for again: your label photo’s analysis reads differently from the saved one, and another photo of the same panel would read the same. The score waits for a moisture guarantee that goes with the saved analysis.');
+    } else if (withMoisture) {
       requests = requests.filter((r) => !isMoistureRequest(r));
       job.evidenceNotes.push(
         `Your label photo gives a moisture guarantee (${findNutrient(withMoisture.label.guaranteedAnalysis, 'moisture')!.value}%), but its protein, fat or fiber differ from the analysis Purrbi has (${coreDifferences(facts.guaranteedAnalysis?.value, withMoisture.label.guaranteedAnalysis).join('; ')}), so its moisture isn’t used with that analysis. The score waits for a moisture guarantee that goes with it.`,

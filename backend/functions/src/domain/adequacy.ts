@@ -23,12 +23,17 @@ const TREAT_NOT_COMPLETE =
   /\bnot (?:intended|meant|designed) (?:as|to be (?:fed|used) as|to replace) (?:an? |the )?(?:(?:meal|diet) replacement|(?:(?:complete|sole|main|whole)(?:,? (?:and|&) balanced|, balanced)?) (?:diet|food|meal|source of nutrition))\b|\bnot (?:intended|meant|designed) to replace (?:an? |the |your pet'?s? )?(?:regular )?meals?\b|\bnot an? (?:meal|diet) replacement\b/;
 const SUBSTANTIATED = /\b(formulated to meet|nutritional levels established|animal feeding tests|substantiat\w*)\b/;
 // An analysis footnote names the AAFCO profiles without being a statement ("*Not recognized as an essential nutrient by
-// the AAFCO Cat Food Nutrient Profiles."; review of 3.0.1).
-const NOT_ESSENTIAL_FOOTNOTE = /\bnot (?:recogni[sz]ed|considered) (?:as )?an essential nutrient\b/;
+// the AAFCO Cat Food Nutrient Profiles.", also plural): it is taken out before the text is read, so a statement beside
+// it is still read (reviews of 3.0.1).
+const NOT_ESSENTIAL_FOOTNOTE = /[*†‡]*\s*\bnot (?:currently )?(?:recogni[sz]ed|considered) (?:as )?(?:an )?essential nutrients?\b[^.]*\.?/g;
 // A negated claim says the product is not complete: "not formulated to meet …", "does not meet …".
 const NEGATED = /\b(not (formulated|intended|designed) to meet|(does|do) not meet|not complete and balanced|not nutritionally complete)\b/;
 const COMPLETE =
-  /\b(complete and balanced|formulated to meet the nutritional levels|nutrient profiles?|nutritional levels established|animal feeding tests|feeding (trials?|protocols)|complete (pet |dry |wet )?(food|feed)|complete feedingstuff)\b/;
+  /\b(complete and balanced|formulated to meet the nutritional levels|nutritional levels established|animal feeding tests|feeding (trials?|protocols)|complete (pet |dry |wet )?(food|feed)|complete feedingstuff)\b/;
+// A mention of the nutrient profiles is a statement only with a claim about them ("formulated to meet", "meets"): the
+// second line of a wrapped footnote ("AAFCO Cat Food Nutrient Profiles.") is not one (review of 3.0.1).
+const PROFILES = /\bnutrient profiles?\b/;
+const PROFILES_CLAIM = /\b(meets?|formulated (to meet|for)|complete and balanced|substantiat\w*|animal feeding tests|according to|established by)\b/;
 // Life-stage words in the same languages.
 const ALL_STAGES = /\b(all life stages|tous les stades de (la )?vie|toutes les etapes de (la )?vie|alle lebens(phasen|abschnitte|stadien)|todas las etapas de (la )?vida|tutte le fasi (della )?vita|alle levensfasen|todas as fases da vida)\b/;
 const GROWTH = /\b(growth|growing|pupp(y|ies)|kittens?|junior|croissance|chatons?|chiots?|wachstum|welpen?|katzchen|crecimiento|cachorros?|gatitos?|crescita|cuccioli|gattini|groei|crescimento)\b/;
@@ -58,13 +63,12 @@ export function detectSpecies(t: string): ProductSpecies {
 export function parseAdequacyStatement(raw: string | null | undefined): AdequacyStatement | null {
   if (!raw || !raw.trim()) return null;
   const text = raw.replace(/\s+/g, ' ').trim();
-  const t = norm(text);
+  const t = norm(text).replace(NOT_ESSENTIAL_FOOTNOTE, ' ').replace(/\s+/g, ' ').trim();
 
   let type: AdequacyStatement['type'] = 'unclear';
-  if (NOT_ESSENTIAL_FOOTNOTE.test(t) && !SUBSTANTIATED.test(t)) type = 'unclear';
-  else if (INTERMITTENT.test(t) || EU_COMPLEMENTARY.test(t) || NEGATED.test(t)) type = 'intermittent';
+  if (INTERMITTENT.test(t) || EU_COMPLEMENTARY.test(t) || NEGATED.test(t)) type = 'intermittent';
   else if (TREAT_NOT_COMPLETE.test(t) && !SUBSTANTIATED.test(t)) type = 'intermittent';
-  else if (COMPLETE.test(t) || EU_COMPLETE.test(t)) type = 'complete';
+  else if (COMPLETE.test(t) || EU_COMPLETE.test(t) || (PROFILES.test(t) && PROFILES_CLAIM.test(t))) type = 'complete';
   // Marketing copy ("complete and balanced nutrition for everyday feeding") is not an adequacy statement:
   // a real one names the species or the life stage, or the standard it was substantiated against. An EU
   // label's feed-type declaration ("Alimento completo para cães") is the regulated statement itself.

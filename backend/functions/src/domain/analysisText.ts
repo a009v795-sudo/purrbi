@@ -134,6 +134,14 @@ function sectionRows(text: string, percentHeader: boolean): GuaranteedAnalysisEn
   let percent = percentHeader;
   let carry = ''; // a name printed on the line above its value
   let poisoned = false; // the carried name had an unreadable part
+  // The carried name ends a row list that runs on over several printed lines: the text after a value on the line above,
+  // or a name line right after a row line or a line that ended open after its value ("…6%," / "Moisture (Max.)"), also
+  // when that name itself wraps but still names one nutrient from its start (2.5.1, test A's can). A name line under a
+  // value alone, under a heading or under another name line is not (values above names, a column, a stack).
+  let carryFromRow = false;
+  let openList = false; // the line above ended with a list separator after its last value
+  let rowAbove = false; // the line above is a row line (a value with its own name), not a value alone
+  let carryQualifier = ''; // a min/max printed on a line of its own after the carried name, before its value
   let pending = -1; // an "other" row followed by words on its line: kept only if those words name the next value
   const settle = (used: boolean) => {
     if (pending >= 0 && !used) out.splice(pending, 1);
@@ -145,12 +153,16 @@ function sectionRows(text: string, percentHeader: boolean): GuaranteedAnalysisEn
     const q = qualifierOf(word);
     if (last && q && last.qualifier === 'not_stated') last.qualifier = q;
   };
-  const take = (rawName: string, value: string | null, unitText: string | null, qualifierText: string, inline: boolean) => {
+  const take = (rawName: string, value: string | null, unitText: string | null, qualifierText: string, inline: boolean, lineGoesOn = false) => {
     let name = rawName;
     const before = carry;
     const wasPoisoned = poisoned;
+    const fromRow = carryFromRow;
+    const beforeQualifier = carryQualifier;
     carry = '';
     poisoned = false;
+    carryFromRow = false;
+    carryQualifier = '';
     // "min, Crude Fiber 1.0% max": the "min" is the row before's.
     const q = QUALIFIER_LEAD.exec(name);
     if (q) {
@@ -166,10 +178,19 @@ function sectionRows(text: string, percentHeader: boolean): GuaranteedAnalysisEn
     const joined = trail(lead(`${before} ${name}`));
     // Whether the name above goes on into this one: this name names nothing by itself, or the two together
     // name the same nutrient from their start ("Crude" + "Protein (min)"). A name above that ends with its
-    // qualifier is complete ("Protéines brutes (min.)" above "Crude Fat (min.) 18 %").
+    // qualifier is complete ("Protéines brutes (min.)" above "Crude Fat (min.) 18 %"), except as the last name of a
+    // row list that runs on, whose value starts the next line ("…, Moisture (Max.)" / "78%, Taurine (Min.) 0.05%"):
+    // a value with no name of its own, at the start of a line that is the list's next line or goes on to other rows,
+    // under a name of one nutrient (2.5.1, reviews of 2.5.1). Names and values printed apart in any other layout
+    // (stacked, alternating, values above names, a name over two lines) are never joined this way.
+    const wrapped = (fromRow || lineGoesOn) && !trail(lead(rawName)) && !!before && !wasPoisoned && nutrientKeysIn(before).length === 1;
+    // A name continued from the line above that, whole, names no nutrient while its last part does ("Total Dietary" /
+    // "Fiber (max) 20%", "acidi" / "grassi essenziali 4 %"): the words above change what it is (a fibre fraction, fatty
+    // acids), so it is read whole, as on one line (corpus R14, R17; review of 2.5.1).
+    const reframed = !!before && !QUALIFIER_END.test(before) && own.length === 1 && nutrientKeysIn(joined).length === 0 && realWord(joined);
     const continues =
-      !!before && !QUALIFIER_END.test(before) &&
-      (own.length === 0 || (nutrientKeysIn(joined).length === 1 && nutrientKeysIn(joined)[0] === own[0] && startsWithNutrientName(joined)) || unclosed(before));
+      !!before && (!QUALIFIER_END.test(before) || wrapped) &&
+      (own.length === 0 || (nutrientKeysIn(joined).length === 1 && nutrientKeysIn(joined)[0] === own[0] && startsWithNutrientName(joined)) || unclosed(before) || reframed);
     const pendingBefore = pending;
     pending = -1;
     if (pendingBefore >= 0 && !continues) out.splice(pendingBefore, 1);
@@ -195,7 +216,7 @@ function sectionRows(text: string, percentHeader: boolean): GuaranteedAnalysisEn
     const v = readValue(value, unit);
     if (v === null) return;
     // The min/max printed right after the value is the row's own; otherwise the one printed in its name.
-    const qualifier = qualifierOf(qualifierText) ?? qualifierOf(label) ?? 'not_stated';
+    const qualifier = qualifierOf(qualifierText) ?? qualifierOf(label) ?? (continues ? qualifierOf(beforeQualifier) : null) ?? 'not_stated';
     const shown = label.replace(/\(\s*(?:min|max|m[ií]n|m[aá]x)\.?\s*\)/giu, ' ').replace(/\s+/g, ' ').trim();
     out.push({ nutrient: keys[0] ?? 'other', label: shown, qualifier, value: v, unit });
     return out.length - 1;
@@ -205,12 +226,28 @@ function sectionRows(text: string, percentHeader: boolean): GuaranteedAnalysisEn
   // which value is whose is unclear, so nothing in the section is read.
   let carryForCheck = '';
   let fromRest = false; // the text above is the end of a value line (a name wrapped onto this line)
+  let dangling = false; // the line above is a value alone at the start of the section, or under another value alone
+  let above: 'start' | 'name' | 'row' | 'value' = 'start'; // what the line above was
   for (const line of lines) {
+    // An energy statement is not a row; a dry-matter list ends what is read (as below).
+    if (/kcal|kilocal|\bkj\b/iu.test(line)) {
+      carryForCheck = '';
+      fromRest = false;
+      dangling = false;
+      above = 'row';
+      continue;
+    }
     const { parts, rest } = partsOf(line);
     if (!parts.length) {
+      if (DRY_MATTER.test(line) && !AS_FED.test(line) && !nutrientKeysIn(line.replace(DRY_MATTER, ' ')).length) break;
       if (!QUALIFIER_ALONE.test(line)) {
+        // A value alone with a name printed under it ("36%" / "Crude Protein"): values printed above their names, so
+        // which value is whose is unclear and nothing in the section is read (review of 2.5.1).
+        if (dangling && (nutrientKeysIn(line).length > 0 || realWord(line))) return [];
         carryForCheck = line;
         fromRest = false;
+        dangling = false;
+        above = 'name';
       }
       continue;
     }
@@ -223,6 +260,9 @@ function sectionRows(text: string, percentHeader: boolean): GuaranteedAnalysisEn
       nutrientKeysIn(`${carryForCheck} ${first}`).length > 0 || unclosed(carryForCheck) || (fromRest && realWord(carryForCheck));
     const goesOn = /\p{L}/u.test(rest) || parts.slice(1).some((p) => /\p{L}/u.test(p.name));
     if (!ownName && !carried && goesOn) return [];
+    const alone = !ownName && !carried && !goesOn;
+    dangling = alone && (above === 'start' || above === 'value');
+    above = alone ? 'value' : 'row';
     carryForCheck = /\p{L}/u.test(rest) ? rest : '';
     fromRest = true;
   }
@@ -231,6 +271,10 @@ function sectionRows(text: string, percentHeader: boolean): GuaranteedAnalysisEn
     if (/kcal|kilocal|\bkj\b/iu.test(line) && !partsOf(line).parts.some((p) => p.unit && !/kcal|kj/iu.test(p.unit))) {
       carry = '';
       poisoned = false;
+      carryFromRow = false;
+      openList = false;
+      rowAbove = false;
+      carryQualifier = '';
       continue; // an energy statement is read as calorie content, not as an analysis row
     }
     const { parts, rest } = partsOf(line);
@@ -239,7 +283,9 @@ function sectionRows(text: string, percentHeader: boolean): GuaranteedAnalysisEn
     if (DRY_MATTER.test(opening) && !AS_FED.test(opening) && !nutrientKeysIn(opening.replace(DRY_MATTER, ' ')).length) break;
     if (!parts.length) {
       if (QUALIFIER_ALONE.test(line)) {
-        qualifyLast(line);
+        // Between a name and its value ("Taurine" / "(Min.)" / "0.05%") it is that name's; after a row, the row's.
+        if (carry) carryQualifier = line;
+        else qualifyLast(line);
         continue;
       }
       // No value with a unit: a name continued below, a sub-heading, or (under "(%)") a unit-less row.
@@ -252,12 +298,20 @@ function sectionRows(text: string, percentHeader: boolean): GuaranteedAnalysisEn
       if (UNSURE.test(line)) {
         carry = '';
         poisoned = true;
+        carryFromRow = false;
+        carryQualifier = '';
       } else if (SUBHEADING.test(line) && !NAME_DIGIT_END.test(line)) {
         carry = '';
         poisoned = false;
+        carryFromRow = false;
+        carryQualifier = '';
       } else {
-        carry = trail(lead(`${carry} ${line}`)).split(' ').slice(-8).join(' ');
+        const combined = trail(lead(`${carry} ${line}`));
+        carryFromRow = (!carry && (openList || rowAbove)) || (carryFromRow && nutrientKeysIn(combined).length === 1 && startsWithNutrientName(combined));
+        carry = combined.split(' ').slice(-8).join(' ');
       }
+      openList = false;
+      rowAbove = false;
       continue;
     }
     // A later value with no name of its own ("Calcium 1.0% / 1.5%", "30% 28%"), or the end of a range ("1.0% to 1.5%"), makes the line ambiguous.
@@ -265,31 +319,47 @@ function sectionRows(text: string, percentHeader: boolean): GuaranteedAnalysisEn
       settle(false);
       carry = '';
       poisoned = false;
+      carryFromRow = false;
+      openList = false;
+      rowAbove = false;
+      carryQualifier = '';
       continue;
     }
+    // The line goes on to other rows after its first value: a row list's line, not a value printed alone.
+    const lineGoesOn = parts.slice(1).some((p) => /\p{L}/u.test(p.name.replace(/\([^)]*\)/g, ''))) || /\p{L}/u.test(rest);
     let last: number | undefined;
     parts.forEach((p, i) => {
       if (UNSURE.test(p.name) || UNSURE.test(p.value ?? '')) {
         settle(false);
         carry = '';
         poisoned = true;
+        carryFromRow = false;
+        carryQualifier = '';
         last = undefined;
         return;
       }
       if (i > 0) {
         carry = '';
         poisoned = false;
+        carryFromRow = false;
+        carryQualifier = '';
       }
-      last = take(p.name, p.value, p.unit, p.qualifier, parts.length > 1);
+      last = take(p.name, p.value, p.unit, p.qualifier, parts.length > 1, i === 0 && lineGoesOn);
     });
     const tail = trail(lead(rest));
+    openList = !tail && /[,;•·]/u.test(rest);
+    rowAbove = parts.some((p) => /\p{L}/u.test(p.name.replace(/\([^)]*\)/g, '')));
     if (UNSURE.test(tail)) {
       carry = '';
       poisoned = true;
+      carryFromRow = false;
+      carryQualifier = '';
     } else if (QUALIFIER_ALONE.test(tail)) {
       qualifyLast(tail);
     } else if (tail && !/^\([^()]*\)?$/.test(tail)) {
       carry = tail.split(' ').slice(-8).join(' ');
+      carryFromRow = true;
+      carryQualifier = '';
       if (last !== undefined && out[last]?.nutrient === 'other') pending = last;
     }
   }
@@ -297,62 +367,12 @@ function sectionRows(text: string, percentHeader: boolean): GuaranteedAnalysisEn
   return out;
 }
 
-// A row whose value wraps onto the next printed line ("…, Moisture (Max.)" / "78%, Taurine (Min.) 0.05%") is one row: a
-// line that ends with a name of one nutrient, with no number in it, after its last value (whatever separates the rows:
-// a comma, a bullet, a space) is joined to a next line that starts with a value (2.5.1; test A's can, where one reading
-// lost the moisture guarantee this way). Never when the lines around show names and values printed apart, where which
-// value is whose is unclear (reviews of 2.5.1):
-// - a value line that is a value alone (no name on it) with another value first on the next line (values stacked
-//   below their names), an energy statement aside; a value line that goes on to other rows is a row line that wrapped;
-// - when the name above is a line of its own (no value on it): the line before it is another such name, one nutrient or
-//   ending with its printed min/max and listing nothing (names stacked above their values), or a value alone (each value
-//   printed above its name);
-// - either line ambiguous on its own ("1.2%, (max) 1.7%", "1.0% - 1.5%"): joined, the rows of the other would be lost.
-const WRAPPED_VALUE = /^\s*\d+(?:[.,]\d+)?\s*(?:%|mg\b|g\b|iu\b|ui\b|kcal\b|ppm\b)/i;
-/** A line of values with no names ("10%", "6 % min", "78 %; 0.05 %"). */
-const valuesOnly = (line: string | undefined) => {
-  if (line === undefined) return false;
-  const { parts, rest } = partsOf(clean(line));
-  return parts.length > 0 && !/\p{L}/u.test(rest) && parts.every((p) => !/\p{L}/u.test(p.name));
-};
-/** A line that starts with a number, whatever its unit ("200 IU/lb", "100,000,000 CFU/lb"); an energy statement is not one. */
-const numberFirst = (line: string | undefined) => line !== undefined && /^\s*[\d.,]*\d/.test(line) && !/kcal|kilocal|\bkj\b/i.test(line);
-/** A name on a line of its own, one of several stacked above their values: one nutrient, or ending with its printed min/max, listing nothing. */
-const stackedName = (line: string | undefined) => {
-  if (line === undefined || /[,;]/.test(line) || partsOf(clean(line)).parts.length) return false;
-  return nutrientKeysIn(line).length === 1 || QUALIFIER_END.test(trail(clean(line)));
-};
-/** The sectionRows rule: a later value with no name of its own, or the end of a range, makes a line ambiguous. */
-const ambiguousLine = (line: string) => partsOf(clean(line)).parts.slice(1).some((p) => !/\p{L}/u.test(p.name.replace(/\([^)]*\)/g, '')) || RANGE.test(p.name));
-export function joinWrappedValues(text: string): string {
-  const lines = text.split('\n');
-  const out: string[] = [];
-  lines.forEach((line, i) => {
-    const prev = out[out.length - 1];
-    if (prev !== undefined && WRAPPED_VALUE.test(line)) {
-      const above = partsOf(clean(prev));
-      const name = lead(above.rest).trim(); // the name the line above ends with, after its last value
-      const before = out.slice(0, -1).reverse().find((l) => l.trim());
-      const after = lines.slice(i + 1).find((l) => l.trim());
-      const ownLine = !above.parts.length;
-      const apart =
-        (valuesOnly(line) && numberFirst(after)) || (ownLine && (stackedName(before) || valuesOnly(before))) || ambiguousLine(line) || ambiguousLine(prev);
-      if (name && !/\d/.test(name) && nutrientKeysIn(name).length === 1 && !apart) {
-        out[out.length - 1] = `${prev.trimEnd()} ${line.trim()}`;
-        return;
-      }
-    }
-    out.push(line);
-  });
-  return out.join('\n');
-}
-
 /**
  * Analysis rows from a panel's or page's text. `inAnalysis`: whether the text starts inside the analysis
  * (the analysis panel itself) or only after an analysis heading (any other panel, a web page).
  */
 export function analysisRows(text: string, percentHeader: boolean, inAnalysis = true): GuaranteedAnalysisEntry[] {
-  const body = joinWrappedValues(text.slice(0, 8000));
+  const body = text.slice(0, 8000);
   const out: GuaranteedAnalysisEntry[] = [];
   let mode: 'rows' | 'skip' = inAnalysis ? 'rows' : 'skip';
   let percent = percentHeader;

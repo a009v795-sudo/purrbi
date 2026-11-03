@@ -3,7 +3,7 @@
 // reading's thinner analysis blocked the fuller one, and the scorer withheld the score for moisture while nothing was
 // asked for: "complete" and "unscored" with no way forward (account accept, trace 36da991d-34a).
 import { describe, expect, it } from 'vitest';
-import { analysisRows, joinWrappedValues } from '../../src/domain/analysisText';
+import { analysisRows } from '../../src/domain/analysisText';
 import { classifyScope } from '../../src/domain/scope';
 import { assessGeneral } from '../../src/domain/score';
 import type { GuaranteedAnalysisEntry, ProductFacts } from '../../src/domain/types';
@@ -25,10 +25,9 @@ describe('an analysis value wrapped onto the next printed line', () => {
     expect(rows('Crude Protein (Min.) 10%\nCrude Fat (Min.) 6%\nCrude Fiber (Max.) 1%\nMoisture (Max.)\n78%')).toEqual(['crude_protein:10%:min', 'crude_fat:6%:min', 'crude_fiber:1%:max', 'moisture:78%:max']);
   });
   it('joins nothing else: a line that already ends with a value, a heading, or a value that is not a guarantee', () => {
-    expect(joinWrappedValues('Crude Protein (min) 30%\n28% of the recipe is chicken')).toBe('Crude Protein (min) 30%\n28% of the recipe is chicken');
-    expect(joinWrappedValues('GUARANTEED ANALYSIS\n30% protein')).toBe('GUARANTEED ANALYSIS\n30% protein');
-    expect(joinWrappedValues('Made with chicken\n100% natural')).toBe('Made with chicken\n100% natural');
-    expect(joinWrappedValues('Calories\n3,500 kcal/kg')).toBe('Calories\n3,500 kcal/kg'); // not a value this parser reads as a row ("3,500")
+    expect(rows('Crude Protein (min) 30%\n28% of the recipe is chicken')).toEqual([]); // a value before its words: the section is ambiguous, as before 2.5.1
+    expect(rows('Made with chicken\n100% natural')).toEqual([]);
+    expect(rows('Crude Protein (Min.) 30%, Moisture (Max.)\n3,500 kcal/kg')).toEqual(['crude_protein:30%:min']); // an energy statement
   });
   // Review of 2.5.1: each layout below gave one row's value to another nutrient, or lost rows already read, on the first
   // 2.5.1 draft. Each now reads what the reader read before 2.5.1.
@@ -86,7 +85,7 @@ describe('an analysis value wrapped onto the next printed line', () => {
       const picked = ROWS.filter((_, i) => i < 4 || rnd() < 0.5);
       const sep = [', ', ', ', ' • ', '; '][Math.floor(rnd() * 4)];
       const words = `GUARANTEED ANALYSIS: ${picked.map(([name, , v]) => `${name} ${v}%`).join(sep)}`.split(' ');
-      const width = 18 + Math.floor(rnd() * 50);
+      const width = 12 + Math.floor(rnd() * 56);
       const lines: string[] = [''];
       for (const w of words) lines[lines.length - 1] && lines[lines.length - 1].length + 1 + w.length > width ? lines.push(w) : (lines[lines.length - 1] = lines[lines.length - 1] ? `${lines[lines.length - 1]} ${w}` : w);
       const got = analysisRows(lines.join('\n'), false);
@@ -100,11 +99,33 @@ describe('an analysis value wrapped onto the next printed line', () => {
     expect(wrong).toBe(0);
     expect(lost).toBe(0);
   });
-  it('still reads one name over one value, also after a heading, and a row list wrapped twice', () => {
+  it('joins only a row list that runs on: names and values on lines of their own read as before 2.5.1', () => {
     const ALL = ['crude_protein:10%:min', 'crude_fat:6%:min', 'crude_fiber:1%:max', 'moisture:78%:max'];
-    expect(rows('Crude Protein (min)\n10%\nCrude Fat (min)\n6%\nCrude Fiber (max)\n1%\nMoisture (max)\n78%')).toEqual(ALL);
-    expect(rows('Guaranteed Analysis\nCrude Protein (min)\n10%\nCrude Fat (min)\n6%\nCrude Fiber (max)\n1%\nMoisture (max)\n78%')).toEqual(ALL);
     expect(rows('Crude Protein (Min.) 10%, Crude Fat (Min.)\n6%, Crude Fiber (Max.) 1%, Moisture (Max.)\n78%, Taurine (Min.) 0.05%')).toEqual([...ALL, 'taurine:0.05%:min']);
+    // A name ending with its min/max on a line of its own, its value alone below: which value is whose is unclear (a
+    // stack, a column, or values above names look the same line by line), so it is not read, as before 2.5.1.
+    expect(rows('Crude Protein (min)\n10%\nCrude Fat (min)\n6%\nCrude Fiber (max)\n1%\nMoisture (max)\n78%')).toEqual([]);
+    expect(rows('Guaranteed Analysis\nCrude Protein (min)\n10%\nCrude Fat (min)\n6%')).toEqual([]);
+    // Unless the value line goes on to other rows: then it is the list's next line.
+    expect(rows('Crude Protein (min)\n10%, Crude Fat (min) 6%')).toEqual(['crude_protein:10%:min', 'crude_fat:6%:min']);
+  });
+  // Third review of 2.5.1: a name printed over two lines, and values printed above names whose names wrap.
+  it('a name over two lines is read whole or not at all, as before 2.5.1: a fibre fraction is never crude fibre', () => {
+    expect(rows('Crude Protein (min) 30.0%\nCrude Fat (min) 9.0%\nCrude Fiber (max) 11.0%\nTotal Dietary\nFiber (max)\n20.0%\nMoisture (max) 10.0%')).toEqual(['crude_protein:30%:min', 'crude_fat:9%:min', 'crude_fiber:11%:max', 'moisture:10%:max']);
+    expect(rows('Guaranteed Analysis\nCrude Protein\n30.0%\nCrude Fat\n9.0%\nCrude Fiber\n11.0%\nTotal Dietary\nFiber\n20.0%\nMoisture\n10.0%')).toContain('crude_fiber:11%:not_stated');
+    expect(rows('Total Dietary\nFiber (max)\n20.0%')).toEqual([]);
+    expect(rows('Guaranteed Analysis\nCrude Protein\n30.0%\nCrude Fat\n9.0%\nInsoluble\nFiber (max)\n8.0%\nMoisture\n10.0%').filter((r) => r.startsWith('crude_fiber'))).toEqual([]);
+    // An Italian list that wraps inside "acidi grassi essenziali": the fat row stays.
+    const it = rows('Componenti analitici: proteina grezza 30 %, materia grassa grezza 15 %, ceneri grezze 7 %, fibra grezza 2 %, umidità 8 %, acidi\ngrassi essenziali\n4 %.');
+    expect(it).toContain('crude_fat:15%:not_stated');
+    expect(it.filter((r) => r.startsWith('crude_fat'))).toHaveLength(1);
+    // One value under two nutrients is not read.
+    expect(rows('Acides gras oméga-3,\ndont DHA\n0,2 %').filter((r) => r.startsWith('dha'))).toEqual([]);
+  });
+  it('values printed above names stay unread when a name wraps, or the first value shares its line', () => {
+    expect(rows('Guaranteed Analysis\n36%\nCrude\nProtein (min)\n16%\nCrude Fat (min)\n3%\nCrude Fiber (max)\n10%\nMoisture (max)')).toEqual([]);
+    expect(rows('Guaranteed Analysis\n36%\nCrude Protein (min)\n16%\nCrude Fat (min)\n3%\nCrude\nFiber (max)\n10%\nMoisture (max)\n0.1%\nTaurine (min)')).toEqual([]);
+    expect(rows('Guaranteed Analysis: 36%\nCrude Protein (min)\n16%\nCrude Fat (min)\n3%\nCrude Fiber (max)\n10%\nMoisture (max)')).toEqual([]);
   });
 });
 
@@ -126,9 +147,13 @@ describe('moisture from the owner’s own reading of the same label (this owner�
     const otherFat = ga([['crude_protein', 10], ['crude_fat', 5.5], ['crude_fiber', 1], ['moisture', 78]]);
     expect(added(inUse, [otherFat])).toBeNull();
     expect(coreDifferences(inUse, otherFat)).toEqual(['crude fat 5.5% vs 6%']);
-    // A min/max the analysis in use states must be the reading's too (a reading that lost "(Max.)" is not the same row).
+    // A reading that lost a "(Max.)" still gives the same row (the rows in use keep theirs); the other min/max does not
+    // (third review of 2.5.1), and its note shows both rather than "1% vs 1%".
     const noMax = full.map((r) => (r.nutrient === 'crude_fiber' ? { ...r, qualifier: 'not_stated' as const } : r));
-    expect(added(inUse, [noMax])).toBeNull();
+    expect(added(inUse, [noMax])).toEqual(['moisture:78:max', 'taurine:0.05:min']);
+    const otherQualifier = full.map((r) => (r.nutrient === 'crude_fiber' ? { ...r, qualifier: 'min' as const } : r));
+    expect(added(inUse, [otherQualifier])).toBeNull();
+    expect(coreDifferences(inUse, otherQualifier)).toEqual(['crude fiber 1% min vs 1% max']);
     // A min/max the analysis in use does not state may be the reading's.
     expect(added(inUse.map((r) => ({ ...r, qualifier: 'not_stated' as const })), [full])).toEqual(['moisture:78:max', 'taurine:0.05:min']);
     expect(added(inUse, [ga([['crude_protein', 10], ['crude_fat', 6], ['crude_fiber', 1], ['moisture', 99]])])).toBeNull(); // implausible

@@ -61,6 +61,22 @@ describe('a treat’s own wording that it is not a complete diet is its feeding 
     expect(parseAdequacyStatement(`${aafco} Not intended as the sole diet for kittens.`)).toMatchObject({ type: 'complete', method: 'formulation' });
     expect(parseAdequacyStatement('Animal feeding tests using AAFCO procedures substantiate that TEST FIXTURE provides complete and balanced nutrition for adult maintenance. Not intended to be fed as the sole diet to puppies.')).toMatchObject({ type: 'complete', method: 'feeding_trial' });
   });
+  it('a footnote that wraps, is plural, or stands beside a statement is never the statement (third review of 3.0.1)', () => {
+    expect(parseAdequacyStatement('*Not recognized as an essential nutrient by the')).toMatchObject({ type: 'unclear' });
+    expect(parseAdequacyStatement('AAFCO Cat Food Nutrient Profiles.')).toMatchObject({ type: 'unclear' });
+    expect(parseAdequacyStatement('*Not recognized as essential nutrients by the AAFCO Cat Food Nutrient Profiles.')).toMatchObject({ type: 'unclear' });
+    expect(parseAdequacyStatement('*Not recognized as an essential nutrient by the AAFCO Cat Food Nutrient Profiles. This product is intended for intermittent or supplemental feeding only.')).toMatchObject({ type: 'intermittent' });
+    expect(parseAdequacyStatement('Complete and balanced nutrition for adult cats. *Not recognized as an essential nutrient by the AAFCO Cat Food Nutrient Profiles.')).toMatchObject({ type: 'complete', species: 'cat', lifeStages: ['adult_maintenance'] });
+    // A claim about the profiles is still a statement.
+    expect(parseAdequacyStatement('Meets AAFCO Cat Food Nutrient Profiles for adult maintenance.')).toMatchObject({ type: 'complete', lifeStages: ['adult_maintenance'] });
+    // Test C with its footnote wrapped: the feeding line is the statement, so it is a treat.
+    const panels: RawPanel[] = [
+      { kind: 'guaranteed_analysis', legibility: 'clear', heading: 'GUARANTEED ANALYSIS', text: 'GUARANTEED ANALYSIS\nCrude Protein (min) 42%\nCrude Fat (min) 12%\nCrude Fiber (max) 3%\nMoisture (max) 26%\nOmega-3 Fatty Acids* (min) 0.5%\n*Not recognized as an essential nutrient by the\nAAFCO Cat Food Nutrient Profiles.' },
+      { kind: 'feeding_directions', legibility: 'clear', heading: 'FEEDING GUIDELINES', text: `FEEDING GUIDELINES:\n${C_FEEDING}` },
+    ];
+    const raw = { legible: true, barcode_digits: null, product_name: null, brand: null, species_claim: 'cat', product_type_claim: 'treat', panels } as RawLabelExtraction;
+    expect(parseReading(raw, 'model-a').adequacy).toMatchObject({ text: C_FEEDING, type: 'intermittent' });
+  });
   it('an analysis footnote that names the AAFCO profiles is not a statement (review of 3.0.1)', () => {
     expect(parseAdequacyStatement('*Not recognized as an essential nutrient by the AAFCO Cat Food Nutrient Profiles.')).toMatchObject({ type: 'unclear' });
     const panels: RawPanel[] = [

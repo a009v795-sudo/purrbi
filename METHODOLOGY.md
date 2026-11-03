@@ -63,8 +63,9 @@ unscored with nothing to add (test A, account `accept`, trace `36da991d-34a`):
   images fill only what is missing, so an analysis in use is never replaced by another source's. Only the owner's own reading of the label
   adds it, for their result (section 9). Once the current label reader has read the owner's photo of the analysis:
   - read without a moisture guarantee, the card says so and asks for a sharper photo only if the panel prints one;
-  - read with one whose protein, fat or fiber differ from the analysis in use, the moisture is not asked for again (another photo of the
-    same panel prints the same values), and the result says why ("… differ from the analysis Purrbi has (crude fat 6% vs 5.6%) …").
+  - read with one whose protein, fat or fiber differ from the analysis in use, or by a photo matched to the barcode whose analysis reads
+    differently from the saved one, the moisture is not asked for again (another photo of the same panel prints the same values), and the
+    result says why ("… differ from the analysis Purrbi has (crude fat 6% vs 5.6%) …").
 - Anything else the score needs that no request covers (a treat with protein, fat and fiber but no calorie or feeding statement) asks for the
   panel that prints it. Research and the database's label images look for it too, so its card says what they found, or why they did not run.
 - A treat's or topper's need for its calorie content or feeding statement rewords the nutrition request it shares a panel with, also when
@@ -107,7 +108,7 @@ Guaranteed minimums and maximums are never presented as exact analytical values.
 |---|---|---|
 | Main ingredients named by source | 40 | 40 × the share of the first five source ingredients that name their animal or plant |
 | Calorie content statement | 30 | Listed 30 (portion control: treats under about 10% of daily calories) |
-| Feeding statement | 15 | Clear 15; unclear 8. A treat's own wording that it is not a complete diet ("Not intended as a meal replacement", "not intended as a sole diet", "not meant to replace a complete and balanced diet") is a clear intermittent-feeding statement, unless the text makes a substantiated claim ("formulated to meet", "animal feeding tests"), whose caveat ("Not intended as the sole diet for kittens") never makes a complete food complementary (3.0.1, test C). An analysis footnote ("*Not recognized as an essential nutrient by the AAFCO … Nutrient Profiles") is not a statement |
+| Feeding statement | 15 | Clear 15; unclear 8. A treat's own wording that it is not a complete diet ("Not intended as a meal replacement", "not intended as a sole diet", "not meant to replace a complete and balanced diet") is a clear intermittent-feeding statement, unless the text makes a substantiated claim ("formulated to meet", "animal feeding tests"), whose caveat ("Not intended as the sole diet for kittens") never makes a complete food complementary (3.0.1, test C). An analysis footnote ("*Not recognized as an essential nutrient by the AAFCO … Nutrient Profiles", also plural or wrapped) is taken out before the text is read, so it is never a statement and a statement beside it still is; a mention of the nutrient profiles is a statement only with a claim about them ("formulated to meet", "meets") |
 | Guaranteed analysis (protein, fat, fiber) | 15 | Listed 15 |
 
 "Source ingredients" leave out processing liquids (water, broth), vitamins and minerals, and technological additives: thickeners and
@@ -337,8 +338,8 @@ Nothing is marked as reviewed by a person unless it was.
     (the mark may be "not").
   - (Test A's can, 2026-11-02: one reading gave no statement and the other the whole one, so the photo was not scored.)
 - For one owner's result only (2.5.1), an analysis without a usable moisture guarantee is completed from the owner's own reading of the
-  label when that reading gives a usable moisture guarantee and exactly the protein, fat and fiber in use (the same value and unit, and the
-  same min/max where the analysis in use states one): the rows the moisture is used with. The reading adds its moisture guarantee and every
+  label when that reading gives a usable moisture guarantee and exactly the protein, fat and fiber in use (the same value and unit, and no
+  other min/max: a reading that lost a "(Max.)" still gives the same row): the rows the moisture is used with. The reading adds its moisture guarantee and every
   row the analysis in use lacks; the rows in use stay as they are, and the added rows say "(your label photo)" when the analysis in use
   comes from elsewhere. The added rows are re-derived on their own, so an EU name among them never clears the min/max of the rows in use.
   The note names what was added. A reading that differs on protein, fat or fiber adds nothing. Disputed or conflicted readings never
@@ -410,15 +411,17 @@ Nothing is marked as reviewed by a person unless it was.
   - rows printed one per line or inline as on EU packs ("Protéine : 37,0 %, Matières grasses : 13,0 %, …"); a name printed above its value, a name wrapped inside its brackets, or a unit printed on the next line is joined to it — but not a complete name above (one that ends with its min/max, as in a bilingual table) or a group heading ("Water-soluble vitamins");
   - each row needs a name of its own that names one nutrient (or, for another row, a real word), with no other number in it and balanced brackets, and a printed unit (or a "(%)" heading); a fibre fraction ("total dietary fibre") is not the crude fibre guarantee, and fatty acids ("acidi grassi") are not fat;
   - a min/max printed after the value is the row's own; one wrapped onto the next line ("6.0%\nmin, Crude Fiber") goes to the row before;
-  - a value wrapped onto the next line after its row's name ("…, Moisture (Max.)" / "78%, Taurine (Min.) 0.05%") is that row's, whatever
-    separates the rows (a comma, a bullet, a space) and however often the list wraps (2.5.1: test A's can, where a faithful transcription
-    lost the moisture guarantee). Never where the lines around show names and values printed apart, which value is whose being unclear:
-    a value alone on its line with another value first on the next (values stacked below their names; an energy statement aside); a name
-    on a line of its own under another such name (one nutrient, or ending with its printed min/max, listing nothing: names stacked above
-    their values) or under a value alone (values printed above their names); or either line ambiguous on its own ("1.2%, (max) 1.7%"),
-    which would make the other's rows ambiguous too. An ingredient list above lists several things, so it is not a stacked name. A count
-    grouped twice in thousands ("80,000,000 CFU/lb") is not read (nothing wrong is read: the row is left out);
-  - nothing ambiguous is read: a printed line where a value has no name of its own ("1.0% / 1.5%", "30% 28%") or which gives a range is skipped; a section where values are printed before their names ("Minimum: 30% Crude Protein, …") is not read at all; nor are values printed inline without units, a space that may be a thousands separator ("36 900 UI/kg"), one value under two nutrients ("oméga 3 et 6"), anything an unreadable mark touches, and a nutrient given two different values (two recipes, as fed and dry matter); "15,000 IU/kg" is fifteen thousand.
+  - a row list that runs on over several printed lines keeps its rows when a value starts the next line after the list's last
+    name ("…, Moisture (Max.)" / "78%, Taurine (Min.) 0.05%"), whatever separates the rows (a comma, a bullet, a space) and however
+    often the list wraps, also when that name is on a line of its own right after a row line (2.5.1: test A's can, where a faithful
+    transcription lost the moisture guarantee). A name that ends with its min/max on a line of its own, with its value alone on the
+    next line, is read only there: elsewhere a column, a stack of names or values printed above their names look the same line by
+    line, so it is not read, as before 2.5.1. A min/max on a line of its own between a name and its value is that name's. A name over
+    two lines that, whole, names no nutrient ("Total Dietary" / "Fiber (max) 20%") is read whole, as on one line: a fibre fraction is
+    never crude fibre. Each reading is checked on generated layouts against the reader before 2.5.1: no wrong value, and no row lost
+    that it read right. A count grouped twice in thousands ("80,000,000 CFU/lb") is not read (nothing wrong is read: the row is left
+    out);
+  - nothing ambiguous is read: a printed line where a value has no name of its own ("1.0% / 1.5%", "30% 28%") or which gives a range is skipped; a section where values are printed before their names ("Minimum: 30% Crude Protein, …", or a value alone at its start with a name printed under it: "36%" / "Crude Protein" / "16%" …) is not read at all; nor are values printed inline without units, a space that may be a thousands separator ("36 900 UI/kg"), one value under two nutrients ("oméga 3 et 6"), anything an unreadable mark touches, and a nutrient given two different values (two recipes, as fed and dry matter); "15,000 IU/kg" is fifteen thousand.
 - Readings made by `label-extract-2.3.0` stay in use: their name was agreed under the earlier rule (the same name for 80%
   of its words) and their brand and species without the check that they are printed. A name, brand or type an earlier
   reader kept with an unreadable mark in it is not used.

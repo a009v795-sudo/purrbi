@@ -1106,6 +1106,40 @@ describe('label photo stages: submitted → extracted → corroborated → verif
     expect(rows.filter((r) => !/your label photo/.test(r.label)).map((r) => r.qualifier)).toEqual(['min', 'min', 'max', 'not_stated']); // protein, fat, fiber, ash as in use
     expect(rows.some((r) => /^Moisture \/ Humidité \(your label photo\)$/.test(r.label))).toBe(true);
   });
+  it('a photo that only lost a "(Max.)" still adds its moisture, and is never said to differ by "1% vs 1%" (third review of 2.5.1)', async () => {
+    wetDbQualified = true; // the database rows state min, min and max
+    labelPatch = { guaranteedAnalysis: [
+      { nutrient: 'crude_protein', label: 'Crude Protein', qualifier: 'min', value: 10, unit: '%' },
+      { nutrient: 'crude_fat', label: 'Crude Fat', qualifier: 'min', value: 6, unit: '%' },
+      { nutrient: 'crude_fiber', label: 'Crude Fiber', qualifier: 'not_stated', value: 1, unit: '%' },
+      { nutrient: 'moisture', label: 'Moisture', qualifier: 'max', value: 78, unit: '%' },
+    ] as ValidatedLabel['guaranteedAnalysis'] };
+    const ref = await newScan('u1', BC.wetDb, 'cat1');
+    await processScan(deps(), 'u1', ref.id);
+    await processPhoto(deps(), 'u1', (await photoFor('u1', ref.id)).id);
+    const s = await read(ref);
+    expect(s.scoreAvailable).toBe(true);
+    expect((s.nutrition as { label: string; qualifier: string }[]).find((r) => /fiber/i.test(r.label))!.qualifier).toBe('max'); // the row in use keeps its max
+    expect(s.evidenceNotes.join(' ')).not.toMatch(/1% vs 1%/);
+  });
+  it('a photo matched to the barcode whose analysis reads a digit differently is not asked for again for its moisture (third review of 2.5.1)', async () => {
+    wetDbFat = 5; // the photo reads 6%: one digit apart, so the photo is verified with that conflict
+    labelPatch = { barcodeMatch: true, guaranteedAnalysis: [
+      { nutrient: 'crude_protein', label: 'Crude Protein', qualifier: 'min', value: 10, unit: '%' },
+      { nutrient: 'crude_fat', label: 'Crude Fat', qualifier: 'min', value: 6, unit: '%' },
+      { nutrient: 'crude_fiber', label: 'Crude Fiber', qualifier: 'max', value: 1, unit: '%' },
+      { nutrient: 'moisture', label: 'Moisture', qualifier: 'max', value: 78, unit: '%' },
+    ] as ValidatedLabel['guaranteedAnalysis'] };
+    const ref = await newScan('u1', BC.wetDb, 'cat1');
+    await processScan(deps(), 'u1', ref.id);
+    const photo = await photoFor('u1', ref.id);
+    await processPhoto(deps(), 'u1', photo.id);
+    expect(await read(photo)).toMatchObject({ stage: 'verified' });
+    const s = await read(ref);
+    expect(s.scoreAvailable).toBe(false);
+    expect(s.photoRequests.some((r: { title: string }) => r.title === 'Guaranteed analysis, with moisture')).toBe(false);
+    expect(s.evidenceNotes.join(' ')).toMatch(/The moisture guarantee isn’t asked for again: your label photo’s analysis reads differently from the saved one/);
+  });
   it('a moisture guarantee that cannot go with the analysis in use is not asked for again, and the result says why (second review of 2.5.1)', async () => {
     wetDbFat = 5.6; // the photo reads fat 6%: close enough to corroborate, not the same analysis
     wetPhoto();
