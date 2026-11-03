@@ -887,6 +887,15 @@ repository, 5 of 5 indexes READY, no problems. CI green on `main` and the branch
 | A, new account, front + can-side photos | `fresh251` / `pdO1EXGIu8HHMBeQlg6z` / `f6a613d8-5eb` | Needs a photo. gpt-4.1-mini's reading has all 5 analysis rows, **moisture 78% from the wrapped line included** (reader 2.5.1). gpt-5-mini marked the analysis panel not clear and gave 3 rows, so moisture and taurine were not confirmed (only rows both readings agree on are kept). Card: "Guaranteed analysis, with moisture: The guaranteed analysis Purrbi has (from your label photo) gives no moisture guarantee. If the panel prints one, a sharper photo of it is needed to compare protein and fat as dry matter, and to score it." |
 | A, same account, can-side photo again on that card | `fresh251` / `krAXT9oYyxYJiPzTuNcz` / `6fb7a6ef-b4d` | The same: gpt-5-mini again read the panel as not clear. Not a dead end (the card stays, with that wording); the owner's sharper photo on `accept` was read alike by both models. |
 
+**After round 5** (`1c2f6cf`, deploy run 41556869900: functions active, updated 01:03 UTC; rules equal to the repository; 5 of 5
+indexes READY; no problems), barcode only, account `accept`:
+
+| Barcode | Scan / trace | Result |
+|---|---|---|
+| A 099482481087 | `7EqD8AGz6lc6iWXWJeDU` / `6520359a-39a` | Complete, 93/100 Strong |
+| B 076344886570 | `TD7pKV9N9Cu3tBs1iNM1` / `a7dcc3c2-126` | Complete, 75/100 Good (unchanged) |
+| C 099482517243 | `sSXLDHIxkyCozjq0YtnY` / `ae50341a-548` | Complete, 100/100 Strong |
+
 The new account's pet onboarding could not be completed by the test driver (the Name field took no typed text in the driver);
 the app's own "Skip for now" was used, so that account has no pet (fit: no pet selected). The app itself was not changed.
 
